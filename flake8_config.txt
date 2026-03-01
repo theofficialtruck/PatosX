@@ -1,0 +1,3 @@
+[flake8]
+ignore = E501, E402, F401, F841, F821, W293, W503, E302, E704, E226, E101, W191, E722, F541, E701, E116, E401, F811, E305, E131, W292, E261, E303, E126
+exclude = .venv,__pycache__,build,dist
