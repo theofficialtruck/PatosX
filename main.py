@@ -4751,17 +4751,13 @@ class ShopDropdown(discord.ui.View):
 
         selected_item_id = self.dropdown.values[0]
         
-        if "-" in selected_item_id:
-            item_name = selected_item_id.split("-", 1)[1]
-        else:
-            item_name = selected_item_id
-        
         selected_item = next((item for item in self.items if item["_id"] == selected_item_id), None)
 
         if not selected_item:
             await interaction.response.send_message("❌ Item not found!", ephemeral=True)
             return
 
+        item_name = selected_item.get("name") or selected_item.get("_id", "Unnamed Item")
         price = selected_item.get("price", 0)
         description = selected_item.get("description", "No description available.")
 
@@ -4808,18 +4804,52 @@ class ShopDropdown(discord.ui.View):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
+            role_id = selected_item.get("role_id")
+            role = None
+            if role_id:
+                try:
+                    role = interaction.guild.get_role(int(role_id))
+                except (TypeError, ValueError):
+                    role = None
+
+                if not role:
+                    await interaction.response.send_message(
+                        "❌ This item's linked role is invalid or was deleted. Ask staff to update it.",
+                        ephemeral=True
+                    )
+                    return
+
+                if role in interaction.user.roles:
+                    await interaction.response.send_message(
+                        f"✅ You already have the role for **{item_name}**.",
+                        ephemeral=True
+                    )
+                    return
+
             user_data = await get_user(None, guild_id, interaction.user.id)
             inventory = user_data.get("inventory", [])
-            
-            inventory.append(item_name)
-            
-            await economy_col.update_one(
-                {"_id": f"{guild_id}-{user_id}"},
-                {"$set": {"inventory": inventory}},
-                upsert=True
-            )
+
+            if role is None:
+                inventory.append(selected_item.get("name_lower", item_name.lower()))
+                await economy_col.update_one(
+                    {"_id": f"{guild_id}-{user_id}"},
+                    {"$set": {"inventory": inventory}},
+                    upsert=True
+                )
 
             await subtract_balance(interaction.user.id, guild_id, price)
+
+            if role is not None:
+                try:
+                    await interaction.user.add_roles(role, reason=f"Purchased shop role item: {item_name}")
+                except (discord.Forbidden, discord.HTTPException) as role_error:
+                    # Refund if role assignment fails after deduction.
+                    await add_balance(interaction.user.id, guild_id, price)
+                    await interaction.response.send_message(
+                        f"❌ Purchase failed while assigning role: `{role_error}`. You were refunded.",
+                        ephemeral=True
+                    )
+                    return
 
             new_balance = self.balance - price
 
@@ -4829,7 +4859,7 @@ class ShopDropdown(discord.ui.View):
                            f"Price: 🪙 {price:,}\n"
                            f"Old Balance: 🪙 {self.balance:,}\n"
                            f"New Balance: 🪙 {new_balance:,}\n\n"
-                           f"Use `.inventory` to view your items!",
+                           f"{'Role granted successfully!' if role is not None else 'Use `.inventory` to view your items!'}",
                 color=discord.Color.green()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -5205,17 +5235,29 @@ async def buy(ctx, item: str = None):
 
     role_id = store_item.get("role_id")
     if role_id:
-        role = ctx.guild.get_role(role_id)
-        if role and role not in ctx.author.roles:
-            if wallet < price:
-                return await ctx.send(f"❌ You don’t have enough coins. **{store_item['name']}** costs {price} coins.")
+        try:
+            role = ctx.guild.get_role(int(role_id))
+        except (TypeError, ValueError):
+            role = None
 
-            wallet -= price
-            await economy_col.update_one({"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"wallet": wallet}})
-            await ctx.author.add_roles(role)
-            return await ctx.send(f"✅ You bought **{store_item['name']}** for {price} coins!")
-        else:
+        if not role:
+            return await ctx.send("❌ This item's linked role is invalid or was deleted. Ask staff to update it.")
+
+        if role in ctx.author.roles:
             return await ctx.send(f"✅ You already have the role for **{store_item['name']}**.")
+
+        if wallet < price:
+            return await ctx.send(f"❌ You don’t have enough coins. **{store_item['name']}** costs {price} coins.")
+
+        wallet -= price
+        await economy_col.update_one({"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"wallet": wallet}})
+        try:
+            await ctx.author.add_roles(role, reason=f"Purchased shop role item: {store_item['name']}")
+        except (discord.Forbidden, discord.HTTPException) as role_error:
+            await economy_col.update_one({"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"wallet": wallet + price}})
+            return await ctx.send(f"❌ Couldn't assign the role (`{role_error}`). You were refunded.")
+
+        return await ctx.send(f"✅ You bought **{store_item['name']}** for {price} coins and got {role.mention}!")
 
     if wallet < price:
         return await ctx.send(f"❌ You don’t have enough coins. **{store_item['name']}** costs {price} coins.")
