@@ -4751,13 +4751,17 @@ class ShopDropdown(discord.ui.View):
 
         selected_item_id = self.dropdown.values[0]
         
+        if "-" in selected_item_id:
+            item_name = selected_item_id.split("-", 1)[1]
+        else:
+            item_name = selected_item_id
+        
         selected_item = next((item for item in self.items if item["_id"] == selected_item_id), None)
 
         if not selected_item:
             await interaction.response.send_message("❌ Item not found!", ephemeral=True)
             return
 
-        item_name = selected_item.get("name") or selected_item.get("_id", "Unnamed Item")
         price = selected_item.get("price", 0)
         description = selected_item.get("description", "No description available.")
 
@@ -4804,52 +4808,18 @@ class ShopDropdown(discord.ui.View):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
                 return
             
-            role_id = selected_item.get("role_id")
-            role = None
-            if role_id:
-                try:
-                    role = interaction.guild.get_role(int(role_id))
-                except (TypeError, ValueError):
-                    role = None
-
-                if not role:
-                    await interaction.response.send_message(
-                        "❌ This item's linked role is invalid or was deleted. Ask staff to update it.",
-                        ephemeral=True
-                    )
-                    return
-
-                if role in interaction.user.roles:
-                    await interaction.response.send_message(
-                        f"✅ You already have the role for **{item_name}**.",
-                        ephemeral=True
-                    )
-                    return
-
             user_data = await get_user(None, guild_id, interaction.user.id)
             inventory = user_data.get("inventory", [])
-
-            if role is None:
-                inventory.append(selected_item.get("name_lower", item_name.lower()))
-                await economy_col.update_one(
-                    {"_id": f"{guild_id}-{user_id}"},
-                    {"$set": {"inventory": inventory}},
-                    upsert=True
-                )
+            
+            inventory.append(item_name)
+            
+            await economy_col.update_one(
+                {"_id": f"{guild_id}-{user_id}"},
+                {"$set": {"inventory": inventory}},
+                upsert=True
+            )
 
             await subtract_balance(interaction.user.id, guild_id, price)
-
-            if role is not None:
-                try:
-                    await interaction.user.add_roles(role, reason=f"Purchased shop role item: {item_name}")
-                except (discord.Forbidden, discord.HTTPException) as role_error:
-                    # Refund if role assignment fails after deduction.
-                    await add_balance(interaction.user.id, guild_id, price)
-                    await interaction.response.send_message(
-                        f"❌ Purchase failed while assigning role: `{role_error}`. You were refunded.",
-                        ephemeral=True
-                    )
-                    return
 
             new_balance = self.balance - price
 
@@ -4859,7 +4829,7 @@ class ShopDropdown(discord.ui.View):
                            f"Price: 🪙 {price:,}\n"
                            f"Old Balance: 🪙 {self.balance:,}\n"
                            f"New Balance: 🪙 {new_balance:,}\n\n"
-                           f"{'Role granted successfully!' if role is not None else 'Use `.inventory` to view your items!'}",
+                           f"Use `.inventory` to view your items!",
                 color=discord.Color.green()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -5235,29 +5205,17 @@ async def buy(ctx, item: str = None):
 
     role_id = store_item.get("role_id")
     if role_id:
-        try:
-            role = ctx.guild.get_role(int(role_id))
-        except (TypeError, ValueError):
-            role = None
+        role = ctx.guild.get_role(role_id)
+        if role and role not in ctx.author.roles:
+            if wallet < price:
+                return await ctx.send(f"❌ You don’t have enough coins. **{store_item['name']}** costs {price} coins.")
 
-        if not role:
-            return await ctx.send("❌ This item's linked role is invalid or was deleted. Ask staff to update it.")
-
-        if role in ctx.author.roles:
+            wallet -= price
+            await economy_col.update_one({"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"wallet": wallet}})
+            await ctx.author.add_roles(role)
+            return await ctx.send(f"✅ You bought **{store_item['name']}** for {price} coins!")
+        else:
             return await ctx.send(f"✅ You already have the role for **{store_item['name']}**.")
-
-        if wallet < price:
-            return await ctx.send(f"❌ You don’t have enough coins. **{store_item['name']}** costs {price} coins.")
-
-        wallet -= price
-        await economy_col.update_one({"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"wallet": wallet}})
-        try:
-            await ctx.author.add_roles(role, reason=f"Purchased shop role item: {store_item['name']}")
-        except (discord.Forbidden, discord.HTTPException) as role_error:
-            await economy_col.update_one({"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"wallet": wallet + price}})
-            return await ctx.send(f"❌ Couldn't assign the role (`{role_error}`). You were refunded.")
-
-        return await ctx.send(f"✅ You bought **{store_item['name']}** for {price} coins and got {role.mention}!")
 
     if wallet < price:
         return await ctx.send(f"❌ You don’t have enough coins. **{store_item['name']}** costs {price} coins.")
@@ -8399,18 +8357,6 @@ class PollView(discord.ui.View):
 
         self.add_item(RemoveVoteButton(poll_id=poll_id))
 
-
-async def safe_ephemeral_reply(interaction: discord.Interaction, content: str):
-    """Send an ephemeral response whether or not the interaction was already acknowledged."""
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(content, ephemeral=True)
-        else:
-            await interaction.response.send_message(content, ephemeral=True)
-    except discord.NotFound:
-        # Interaction token expired; nothing else to do.
-        pass
-
 async def on_submit(self, interaction: discord.Interaction):
     try:
         post_channel = interaction.client.get_channel(int(self.channel.value))
@@ -8451,16 +8397,9 @@ class PollButton(discord.ui.Button):
         self.poll_id = poll_id
 
     async def callback(self, interaction: discord.Interaction):
-        try:
-            await interaction.response.defer(ephemeral=True)
-        except discord.NotFound:
-            return
-        except discord.InteractionResponded:
-            pass
-
         poll = await polls_col.find_one({"poll_id": self.poll_id})
         if not poll:
-            return await safe_ephemeral_reply(interaction, "⚠️ Poll not found.")
+            return await interaction.response.send_message("⚠️ Poll not found.", ephemeral=True)
 
         poll["votes"][str(interaction.user.id)] = str(self.option)
         await polls_col.update_one({"poll_id": self.poll_id}, {"$set": {"votes": poll["votes"]}})
@@ -8471,13 +8410,10 @@ class PollButton(discord.ui.Button):
 
         embed = build_poll_embed(poll["question"], poll["options"], counts, closed=False, duration=poll["duration_raw"])
         channel = interaction.client.get_channel(int(poll["channel_id"]))
-        if not channel:
-            return await safe_ephemeral_reply(interaction, "⚠️ Poll channel no longer exists.")
-
         message = await channel.fetch_message(int(poll["message_id"]))
         await message.edit(embed=embed, view=self.view)
 
-        await safe_ephemeral_reply(interaction, f"✅ You voted for **{self.label}**")
+        await interaction.response.send_message(f"✅ You voted for **{self.label}**", ephemeral=True)
 
 class RemoveVoteButton(discord.ui.Button):
     def __init__(self, poll_id):
@@ -8485,16 +8421,9 @@ class RemoveVoteButton(discord.ui.Button):
         self.poll_id = poll_id
 
     async def callback(self, interaction: discord.Interaction):
-        try:
-            await interaction.response.defer(ephemeral=True)
-        except discord.NotFound:
-            return
-        except discord.InteractionResponded:
-            pass
-
         poll = await polls_col.find_one({"poll_id": self.poll_id})
         if not poll:
-            return await safe_ephemeral_reply(interaction, "⚠️ Poll not found.")
+            return await interaction.response.send_message("⚠️ Poll not found.", ephemeral=True)
 
         if str(interaction.user.id) in poll["votes"]:
             del poll["votes"][str(interaction.user.id)]
@@ -8506,15 +8435,12 @@ class RemoveVoteButton(discord.ui.Button):
 
             embed = build_poll_embed(poll["question"], poll["options"], counts, closed=False, duration=poll["duration_raw"])
             channel = interaction.client.get_channel(int(poll["channel_id"]))
-            if not channel:
-                return await safe_ephemeral_reply(interaction, "⚠️ Poll channel no longer exists.")
-
             message = await channel.fetch_message(int(poll["message_id"]))
             await message.edit(embed=embed, view=self.view)
 
-            await safe_ephemeral_reply(interaction, "🗑️ Your vote was removed.")
+            await interaction.response.send_message("🗑️ Your vote was removed.", ephemeral=True)
         else:
-            await safe_ephemeral_reply(interaction, "⚠️ You haven't voted yet.")
+            await interaction.response.send_message("⚠️ You haven’t voted yet.", ephemeral=True)
 
 class PollModal(discord.ui.Modal, title="Create a Poll"):
     question = discord.ui.TextInput(label="Question?", required=True)
@@ -10719,81 +10645,49 @@ async def testboost(ctx, member: discord.Member = None):
     except Exception as e:
         await ctx.send(f"⚠️ Failed to send test boost message: `{e}`")
 
-async def send_boost_thank_you(guild: discord.Guild, member: discord.Member, premium_since):
-    if not premium_since:
-        return
-
-    guild_id = str(guild.id)
-    config = await config_col.find_one({"guild": guild_id})
-    if not config:
-        config = await config_col.find_one({"guild_id": guild_id})
-    if not config:
-        config = await guild_config_col.find_one({"guild_id": guild_id})
-    if not config:
-        return
-
-    boost_key = f"{guild.id}-{member.id}"
-    boost_record = await boost_col.find_one({"_id": boost_key})
-    premium_marker = premium_since.isoformat()
-    if boost_record and boost_record.get("last_thanked") == premium_marker:
-        return
-
-    channel_id = config.get("boost_channel")
-    try:
-        channel_id = int(channel_id)
-    except (TypeError, ValueError):
-        channel_id = None
-
-    if not channel_id:
-        return
-
-    boost_ch = guild.get_channel(channel_id)
-    if not boost_ch:
-        return
-
-    boost_msg_template = config.get("boost_message") or (
-        "{mention} just boosted **{server}**! We're now at {boostcount} boosts!"
-    )
-    boost_msg = (
-        boost_msg_template
-        .replace("{username}", member.name)
-        .replace("{mention}", member.mention)
-        .replace("{server}", guild.name)
-        .replace("{boostcount}", str(guild.premium_subscription_count or 0))
-    )
-
-    boost_embed = discord.Embed(
-        title="🚀 Boost Alert!",
-        description=boost_msg,
-        color=discord.Color.fuchsia(),
-        timestamp=datetime.now(timezone.utc)
-    )
-    boost_embed.set_thumbnail(url=member.display_avatar.url)
-
-    sent_message = await boost_ch.send(embed=boost_embed)
-
-    emoji = config.get("boost_react_emoji")
-    if emoji:
-        try:
-            await sent_message.add_reaction(emoji)
-        except discord.HTTPException:
-            pass
-
-    await boost_col.update_one(
-        {"_id": boost_key},
-        {"$set": {"last_thanked": premium_marker}},
-        upsert=True
-    )
-
-
 @bot.event
 async def on_member_update(before, after):
-    # Boost state is reliable on premium_since transition, not on guild boost count deltas.
-    if before.premium_since == after.premium_since or after.premium_since is None:
+    guild_id = str(after.guild.id)
+    config = await config_col.find_one({"guild_id": guild_id})
+    if not config:
         return
 
+    boost_channel_id = config.get("boost_channel")
+    if not boost_channel_id:
+        return
+
+    channel = after.guild.get_channel(boost_channel_id)
+    if not channel:
+        return
+
+    boost_message = config.get("boost_message")
+    if not boost_message:
+        return
+
+    before_boosts = before.guild.premium_subscription_count or 0
+    after_boosts = after.guild.premium_subscription_count or 0
+    
+    if after_boosts <= before_boosts:
+        return
+
+    msg_content = (
+        boost_message
+        .replace("{username}", after.name)
+        .replace("{mention}", after.mention)
+        .replace("{server}", after.guild.name)
+        .replace("{boostcount}", str(after_boosts))
+    )
+
     try:
-        await send_boost_thank_you(after.guild, after, after.premium_since)
+        sent_message = await channel.send(msg_content)
+
+        emoji = config.get("boost_react_emoji")
+        if emoji:
+            try:
+                await sent_message.add_reaction(emoji)
+            except discord.HTTPException:
+                await channel.send("⚠️ Could not react with the configured emoji (maybe deleted or invalid).")
+
     except Exception as e:
         print(f"⚠️ Error sending boost message in {after.guild.name}: {e}")
 
@@ -10868,7 +10762,29 @@ async def on_member_join(member):
                 print("Custom emoji 'duckwave2' not found in guild.")
 
         if member.premium_since:
-            await send_boost_thank_you(guild, member, member.premium_since)
+            boost_key = f"{guild.id}-{member.id}"
+            boost_record = await boost_col.find_one({"_id": boost_key})
+            
+            if not boost_record or boost_record.get("last_thanked") != member.premium_since.isoformat():
+                boost_ch = guild.get_channel(doc.get("boost_channel"))
+                if boost_ch:
+                    boost_msg = doc.get("boost_message") or (
+                        f"{member.mention} just boosted the pond! 🌟\nThank you for your support!"
+                    )
+                    boost_embed = discord.Embed(
+                        title="🚀 Boost Alert!",
+                        description=boost_msg,
+                        color=discord.Color.fuchsia(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    boost_embed.set_thumbnail(url=member.display_avatar.url)
+                    await boost_ch.send(embed=boost_embed)
+                
+                await boost_col.update_one(
+                    {"_id": boost_key},
+                    {"$set": {"last_thanked": member.premium_since.isoformat()}},
+                    upsert=True
+                )
 
         doc = await mutes_col.find_one({"guild_id": member.guild.id, "user_id": member.id})
         if doc:
