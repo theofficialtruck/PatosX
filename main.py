@@ -4685,7 +4685,89 @@ async def withdraw(ctx, amount: str):
         await ctx.send("⚠️ Something went wrong while processing your withdrawal. Contact thetruck.")
         print(f"[ERROR] withdraw command: {type(e).__name__} - {e}")
         traceback.print_exc()
-    
+
+async def process_shop_purchase(member, guild, store_item: dict, user_data: dict):
+    item_name = store_item.get("name") or store_item.get("name_lower") or "Unknown Item"
+
+    try:
+        price = int(store_item.get("price", 0))
+    except (TypeError, ValueError):
+        return {"ok": False, "message": "❌ Invalid item price! Ask staff to fix this shop item."}
+
+    if price <= 0:
+        return {"ok": False, "message": "❌ Invalid item price! Ask staff to fix this shop item."}
+
+    wallet = int(user_data.get("wallet", 0) or 0)
+    inventory = list(user_data.get("inventory", []))
+    user_key = f"{guild.id}-{member.id}"
+    role_id = store_item.get("role_id")
+
+    if role_id is not None:
+        try:
+            role = guild.get_role(int(role_id))
+        except (TypeError, ValueError):
+            role = None
+
+        if not role:
+            return {"ok": False, "message": "❌ This item's linked role is invalid or was deleted. Ask staff to update it."}
+
+        if role in getattr(member, "roles", []):
+            return {"ok": False, "message": f"✅ You already have the role for **{item_name}**."}
+
+        if wallet < price:
+            return {"ok": False, "message": f"❌ You don’t have enough coins. **{item_name}** costs {price} coins."}
+
+        new_wallet = wallet - price
+        await economy_col.update_one({"_id": user_key}, {"$set": {"wallet": new_wallet}})
+
+        try:
+            await member.add_roles(role, reason=f"Purchased shop role item: {item_name}")
+        except (discord.Forbidden, discord.HTTPException) as role_error:
+            await economy_col.update_one({"_id": user_key}, {"$set": {"wallet": wallet}})
+            return {"ok": False, "message": f"❌ Couldn't assign the role (`{role_error}`). You were refunded."}
+
+        return {
+            "ok": True,
+            "message": f"✅ You bought **{item_name}** for {price} coins and got {role.mention}!",
+            "item_name": item_name,
+            "price": price,
+            "old_wallet": wallet,
+            "new_wallet": new_wallet,
+            "purchase_type": "role",
+            "role_mention": role.mention,
+        }
+
+    if wallet < price:
+        return {"ok": False, "message": f"❌ You don’t have enough coins. **{item_name}** costs {price} coins."}
+
+    new_wallet = wallet - price
+    item_id = str(store_item.get("_id", ""))
+    is_pet_duck = store_item.get("name_lower") == "pet_duck" or item_id == "pet_duck" or item_id.endswith("-pet_duck")
+
+    if is_pet_duck:
+        inventory.append({"_id": "pet_duck", "uses_left": 3})
+        success_message = "🦆 You bought a Pet Duck! It has 3 uses. You can stack multiple ducks."
+        purchase_type = "pet_duck"
+    else:
+        inventory.append(store_item.get("name_lower", item_name.lower()))
+        success_message = f"✅ You bought **{item_name}** for {price} coins!"
+        purchase_type = "inventory"
+
+    await economy_col.update_one(
+        {"_id": user_key},
+        {"$set": {"wallet": new_wallet, "inventory": inventory}}
+    )
+
+    return {
+        "ok": True,
+        "message": success_message,
+        "item_name": item_name,
+        "price": price,
+        "old_wallet": wallet,
+        "new_wallet": new_wallet,
+        "purchase_type": purchase_type,
+    }
+
 class ShopView(discord.ui.View):
     def __init__(self, user_id, guild_id, items, user_balance):
         super().__init__(timeout=180)
@@ -4724,7 +4806,7 @@ class ShopView(discord.ui.View):
         view = ShopDropdown(self.user_id, self.guild_id, self.items, self.balance, options)
         embed = discord.Embed(
             title="🛒 Select Item to Buy",
-            description=f"Your balance: 🪙 {self.balance:,}\n\nChoose an item from the dropdown below:",
+            description=f"Your wallet: 🪙 {self.balance:,}\n\nChoose an item from the dropdown below:",
             color=discord.Color.blue()
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -4750,86 +4832,32 @@ class ShopDropdown(discord.ui.View):
             return
 
         selected_item_id = self.dropdown.values[0]
-        
-        if "-" in selected_item_id:
-            item_name = selected_item_id.split("-", 1)[1]
-        else:
-            item_name = selected_item_id
-        
         selected_item = next((item for item in self.items if item["_id"] == selected_item_id), None)
 
         if not selected_item:
             await interaction.response.send_message("❌ Item not found!", ephemeral=True)
             return
 
-        price = selected_item.get("price", 0)
-        description = selected_item.get("description", "No description available.")
-
         try:
-            price = int(price) if isinstance(price, str) else price
-            if not isinstance(price, (int, float)) or price <= 0:
-                await interaction.response.send_message("❌ Invalid item price!", ephemeral=True)
-                return
-        except (ValueError, TypeError):
-            await interaction.response.send_message("❌ Invalid item price format!", ephemeral=True)
-            return
-
-        if self.balance < price:
-            embed = discord.Embed(
-                title="❌ Purchase Failed",
-                description=f"You can't afford **{item_name}**!\n\n"
-                           f"Item Price: 🪙 {price:,}\n"
-                           f"Your Balance: 🪙 {self.balance:,}\n"
-                           f"Needed: 🪙 {price - self.balance:,}",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        try:
-            user_id = str(interaction.user.id)
             guild_id = str(interaction.guild.id)
-            
-            # Fresh balance check to prevent race conditions
-            current_user_data = await get_user(None, guild_id, interaction.user.id)
-            current_wallet = current_user_data.get("wallet", 0)
-            current_bank = current_user_data.get("bank", 0)
-            current_total = current_wallet + current_bank
-            
-            if current_total < price:
-                embed = discord.Embed(
-                    title="❌ Purchase Failed",
-                    description=f"You can't afford **{item_name}**!\n\n"
-                               f"Item Price: 🪙 {price:,}\n"
-                               f"Your Current Balance: 🪙 {current_total:,}\n"
-                               f"Needed: 🪙 {price - current_total:,}",
-                    color=discord.Color.red()
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
-            
             user_data = await get_user(None, guild_id, interaction.user.id)
-            inventory = user_data.get("inventory", [])
-            
-            inventory.append(item_name)
-            
-            await economy_col.update_one(
-                {"_id": f"{guild_id}-{user_id}"},
-                {"$set": {"inventory": inventory}},
-                upsert=True
-            )
+            result = await process_shop_purchase(interaction.user, interaction.guild, selected_item, user_data)
 
-            await subtract_balance(interaction.user.id, guild_id, price)
+            if not result["ok"]:
+                await interaction.response.send_message(result["message"], ephemeral=True)
+                return
 
-            new_balance = self.balance - price
+            self.balance = result["new_wallet"]
 
             embed = discord.Embed(
                 title="✅ Purchase Successful!",
-                description=f"You bought **{item_name}**!\n\n"
-                           f"Price: 🪙 {price:,}\n"
-                           f"Old Balance: 🪙 {self.balance:,}\n"
-                           f"New Balance: 🪙 {new_balance:,}\n\n"
-                           f"Use `.inventory` to view your items!",
+                description=(
+                    f"You bought **{result['item_name']}**!\n\n"
+                    f"Price: 🪙 {result['price']:,}\n"
+                    f"Old Wallet: 🪙 {result['old_wallet']:,}\n"
+                    f"New Wallet: 🪙 {result['new_wallet']:,}"
+                    + (f"\nRole Granted: {result['role_mention']}" if result["purchase_type"] == "role" else "\n\nUse `.inventory` to view your items!")
+                ),
                 color=discord.Color.green()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -4979,7 +5007,7 @@ async def shop(ctx):
 
         embed = discord.Embed(
             title="🛍️ Shop",
-            description=f"💰 Wallet: 🪙 {wallet_balance:,}\n🏦 Bank: 🪙 {bank_balance:,}\n💳 **Total: 🪙 {total_balance:,}**\n\nClick the button below to purchase items!",
+            description=f"💰 Wallet: 🪙 {wallet_balance:,}\n🏦 Bank: 🪙 {bank_balance:,}\n💳 **Total: 🪙 {total_balance:,}**\n\nClick the button below to purchase items! Purchases use wallet coins only.",
             color=discord.Color.green()
         )
 
@@ -5008,7 +5036,7 @@ async def shop(ctx):
         else:
             embed.description += "\n\n❌ The shop is empty. Ask a staff member to refill it."
 
-        view = ShopView(ctx.author.id, guild_id, items_list, total_balance) if items_list else None
+        view = ShopView(ctx.author.id, guild_id, items_list, wallet_balance) if items_list else None
         
         await ctx.send(embed=embed, view=view)
 
@@ -5196,41 +5224,8 @@ async def buy(ctx, item: str = None):
         return await ctx.send(f"❌ Item **{item}** not found in the shop.")
 
     data = await get_user(ctx, ctx.guild.id, ctx.author.id)
-    wallet = data.get("wallet", 0)
-    inventory = data.get("inventory", [])
-    price = store_item["price"]
-
-    role_id = store_item.get("role_id")
-    if role_id:
-        role = ctx.guild.get_role(role_id)
-        if role and role not in ctx.author.roles:
-            if wallet < price:
-                return await ctx.send(f"❌ You don’t have enough coins. **{store_item['name']}** costs {price} coins.")
-
-            wallet -= price
-            await economy_col.update_one({"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"wallet": wallet}})
-            await ctx.author.add_roles(role)
-            return await ctx.send(f"✅ You bought **{store_item['name']}** for {price} coins!")
-        else:
-            return await ctx.send(f"✅ You already have the role for **{store_item['name']}**.")
-
-    if wallet < price:
-        return await ctx.send(f"❌ You don’t have enough coins. **{store_item['name']}** costs {price} coins.")
-
-    wallet -= price
-
-    if store_item["_id"] == "pet_duck":
-        duck_item = {"_id": "pet_duck", "uses_left": 3}
-        inventory.append(duck_item)
-        await ctx.send(f"🦆 You bought a Pet Duck! It has 3 uses. You can stack multiple ducks.")
-    else:
-        inventory.append(store_item["name_lower"])
-        await ctx.send(f"✅ You bought **{store_item['name']}** for {price} coins!")
-
-    await economy_col.update_one(
-        {"_id": f"{ctx.guild.id}-{ctx.author.id}"},
-        {"$set": {"wallet": wallet, "inventory": inventory}}
-    )
+    result = await process_shop_purchase(ctx.author, ctx.guild, store_item, data)
+    await ctx.send(result["message"])
     
 @bot.hybrid_command(name="use", description="Use an item from your inventory.")
 @app_commands.describe(item_name="The item to use (e.g., 'fishing rod', 'energy drink', 'laptop'). Use '/inventory' to see your items.")
