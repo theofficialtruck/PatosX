@@ -4629,7 +4629,7 @@ async def deposit(ctx, amount: str):
         else:
             return await ctx.send("❌ Please enter a valid number or `all`.")
 
-        taxed_amount = int(deposit_amount * 0.8)
+        taxed_amount = int(deposit_amount * 0.95)
 
         await economy_col.update_one(
             {"_id": f"{ctx.guild.id}-{ctx.author.id}"},
@@ -4641,7 +4641,7 @@ async def deposit(ctx, amount: str):
 
         await ctx.send(
             f"🏦 You deposited {deposit_amount} coins.\n"
-            f"💸 After 20% tax, you received {taxed_amount} coins in your bank."
+            f"💸 After 5% tax, you received {taxed_amount} coins in your bank."
         )
 
     except Exception as e:
@@ -5045,19 +5045,16 @@ async def prompt_for_role(ctx):
         return role_id
 
 @bot.hybrid_command(name="additem", description="Add a new item to the shop.")
+@app_commands.describe(name="Item name", price="Item price in coins")
 @staffperm("economy")
 @staff_only()
-async def additem(ctx, *, name_and_price: str):
-    parts = name_and_price.split()
-    if len(parts) < 2:
-        return await ctx.send("❌ Usage: `.additem <name> <price>`\nExample: `.additem Super Sword 5000`")
+async def additem(ctx, name: str, price: int):
+    name = name.strip()
+    if not name:
+        return await ctx.send("❌ Usage: `.additem \"item name\" <price>` or `/additem <name> <price>`")
+    if price <= 0:
+        return await ctx.send("❌ Price must be greater than 0.")
 
-    try:
-        price = int(parts[-1])
-    except ValueError:
-        return await ctx.send("❌ Price must be a number.")
-
-    name = " ".join(parts[:-1]).strip()
     name_lower = name.lower()
 
     await ctx.send(f"📝 Enter the description for **{name}**:")
@@ -11269,7 +11266,7 @@ class StaffSections(discord.ui.View):
     @discord.ui.button(label="💰 Economy", style=discord.ButtonStyle.secondary)
     async def economy(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="💰 Economy Commands", color=discord.Color.green())
-        embed.add_field(name=f"{self.prefix}additem <item> <price> <desc>", value="Add a new item to the shop.", inline=False)
+        embed.add_field(name=f"{self.prefix}additem \"<name>\" <price>", value="Add a new item to the shop. `/additem` uses separate name and price boxes.", inline=False)
         embed.add_field(name=f"{self.prefix}edititem <item> <price> <desc>", value="Edit an existing shop item.", inline=False)
         embed.add_field(name=f"{self.prefix}delitem <item>", value="Delete a shop item.", inline=False)
         embed.add_field(name=f"{self.prefix}drop <amount> <message>", value="Drop a random coin reward in chat.", inline=False)
