@@ -9,6 +9,10 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    allow:
+      - dependency-type: "all"
+      - update-type: "all"
+    open-pull-requests-limit: 10
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
