@@ -7452,15 +7452,17 @@ class TicketCategoryButton(discord.ui.Button):
         category_support_members = await get_category_support_members(guild, category_name)
 
         overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            author: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+            guild.default_role: discord.PermissionOverwrite(view_channel=False, embed_links=True, attach_files=True),
+            author: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True)
         }
 
         for member in category_support_members:
             overwrites[member] = discord.PermissionOverwrite(
                 view_channel=True,
                 send_messages=True,
-                read_message_history=True
+                read_message_history=True,
+                embed_links=True,
+                attach_files=True
             )
 
         channel = await guild.create_text_channel(ticket_name, category=category, overwrites=overwrites)
@@ -8130,6 +8132,8 @@ async def ticketadduser(ctx, member: discord.Member):
         overwrite.view_channel = True
         overwrite.send_messages = True
         overwrite.read_message_history = True
+        overwrite.embed_links = True
+        overwrite.attach_files = True
         await channel.set_permissions(member, overwrite=overwrite)
 
         await ctx.send(f"✅ {member.mention} has been added to this ticket.")
@@ -8186,6 +8190,8 @@ async def ticketsync(ctx, scope: str = None):
                     ow.view_channel = True
                     ow.send_messages = True
                     ow.read_message_history = True
+                    ow.embed_links = True
+                    ow.attach_files = True
                     await channel.set_permissions(m, overwrite=ow)
                 updated += 1
             return await ctx.send(f"✅ Synced staff access for `{updated}` open tickets.")
@@ -8212,6 +8218,8 @@ async def ticketsync(ctx, scope: str = None):
             ow.view_channel = True
             ow.send_messages = True
             ow.read_message_history = True
+            ow.embed_links = True
+            ow.attach_files = True
             await channel.set_permissions(m, overwrite=ow)
         await ctx.send("✅ Staff access synced for this ticket.")
     except discord.Forbidden:
