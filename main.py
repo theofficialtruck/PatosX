@@ -2347,6 +2347,15 @@ async def on_ready():
     periodic_cleanup.start()
     check_expired_drops.start()
 
+    # DuckParadise Booster Check Loop
+    if not check_boosters_loop.is_running():
+        check_boosters_loop.start()
+        print("🔄 Started booster check loop")
+
+    if not check_reminders.is_running():
+        check_reminders.start()
+        print("🔄 Started reminders check loop")
+
     if not check_expired_mutes.is_running():
         check_expired_mutes.start()
 
@@ -10645,10 +10654,78 @@ async def testboost(ctx, member: discord.Member = None):
     except Exception as e:
         await ctx.send(f"⚠️ Failed to send test boost message: `{e}`")
 
+@tasks.loop(minutes=30)
+async def check_boosters_loop():
+    for guild in bot.guilds:
+        try:
+            config = await config_col.find_one({"guild": str(guild.id)})
+            if not config:
+                continue
+
+            boost_channel_id = config.get("boost_channel")
+            if not boost_channel_id:
+                continue
+
+            channel = guild.get_channel(boost_channel_id)
+            if not channel:
+                continue
+
+            boost_message = config.get("boost_message")
+            if not boost_message:
+                continue
+
+            for member in guild.members:
+                if not member.premium_since:
+                    continue
+
+                boost_key = f"{guild.id}-{member.id}"
+                boost_record = await boost_col.find_one({"_id": boost_key})
+
+                if not boost_record or boost_record.get("last_thanked") != member.premium_since.isoformat():
+                    msg_content = (
+                        boost_message
+                        .replace("{username}", member.name)
+                        .replace("{mention}", member.mention)
+                        .replace("{server}", guild.name)
+                        .replace("{boostcount}", str(guild.premium_subscription_count or 0))
+                    )
+
+                    embed = discord.Embed(
+                        description=msg_content,
+                        color=discord.Color.fuchsia(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    embed.set_author(name="Boost Alert!", icon_url=member.display_avatar.url)
+                    embed.set_thumbnail(url=member.display_avatar.url)
+
+                    try:
+                        sent_message = await channel.send(embed=embed)
+                        emoji = config.get("boost_react_emoji")
+                        if emoji:
+                            try:
+                                await sent_message.add_reaction(emoji)
+                            except:
+                                pass
+
+                        await boost_col.update_one(
+                            {"_id": boost_key},
+                            {"$set": {"last_thanked": member.premium_since.isoformat()}},
+                            upsert=True
+                        )
+                    except Exception as e:
+                        print(f"⚠️ Error sending periodic boost message in {guild.name} for {member}: {e}")
+
+        except Exception as e:
+            print(f"⚠️ Error in check_boosters_loop for guild {guild.id}: {e}")
+
+@check_boosters_loop.before_loop
+async def before_check_boosters():
+    await bot.wait_until_ready()
+
 @bot.event
 async def on_member_update(before, after):
     guild_id = str(after.guild.id)
-    config = await config_col.find_one({"guild_id": guild_id})
+    config = await config_col.find_one({"guild": guild_id})
     if not config:
         return
 
@@ -10664,11 +10741,19 @@ async def on_member_update(before, after):
     if not boost_message:
         return
 
-    before_boosts = before.guild.premium_subscription_count or 0
-    after_boosts = after.guild.premium_subscription_count or 0
-    
-    if after_boosts <= before_boosts:
+    # Check for boost status change
+    if not after.premium_since or (before.premium_since and before.premium_since == after.premium_since):
         return
+
+    # User just boosted or increased their boost count
+    boost_key = f"{after.guild.id}-{after.id}"
+    boost_record = await boost_col.find_one({"_id": boost_key})
+    
+    # Check if we already thanked them for this specific boost timestamp
+    if boost_record and boost_record.get("last_thanked") == after.premium_since.isoformat():
+        return
+
+    after_boosts = after.guild.premium_subscription_count or 0
 
     msg_content = (
         boost_message
@@ -10678,15 +10763,30 @@ async def on_member_update(before, after):
         .replace("{boostcount}", str(after_boosts))
     )
 
+    embed = discord.Embed(
+        description=msg_content,
+        color=discord.Color.fuchsia(),
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_author(name="Boost Alert!", icon_url=after.display_avatar.url)
+    embed.set_thumbnail(url=after.display_avatar.url)
+
     try:
-        sent_message = await channel.send(msg_content)
+        sent_message = await channel.send(embed=embed)
 
         emoji = config.get("boost_react_emoji")
         if emoji:
             try:
                 await sent_message.add_reaction(emoji)
             except discord.HTTPException:
-                await channel.send("⚠️ Could not react with the configured emoji (maybe deleted or invalid).")
+                pass # Silent fail if emoji is invalid
+
+        # Update last thanked timestamp
+        await boost_col.update_one(
+            {"_id": boost_key},
+            {"$set": {"last_thanked": after.premium_since.isoformat()}},
+            upsert=True
+        )
 
     except Exception as e:
         print(f"⚠️ Error sending boost message in {after.guild.name}: {e}")
@@ -10771,14 +10871,30 @@ async def on_member_join(member):
                     boost_msg = doc.get("boost_message") or (
                         f"{member.mention} just boosted the pond! 🌟\nThank you for your support!"
                     )
+                    
+                    text = (
+                        boost_msg
+                        .replace("{username}", member.name)
+                        .replace("{mention}", member.mention)
+                        .replace("{server}", guild.name)
+                        .replace("{boostcount}", str(guild.premium_subscription_count or 0))
+                    )
+
                     boost_embed = discord.Embed(
                         title="🚀 Boost Alert!",
-                        description=boost_msg,
+                        description=text,
                         color=discord.Color.fuchsia(),
                         timestamp=datetime.now(timezone.utc)
                     )
                     boost_embed.set_thumbnail(url=member.display_avatar.url)
-                    await boost_ch.send(embed=boost_embed)
+                    sent_msg = await boost_ch.send(embed=boost_embed)
+
+                    emoji = doc.get("boost_react_emoji")
+                    if emoji:
+                        try:
+                            await sent_msg.add_reaction(emoji)
+                        except:
+                            pass
                 
                 await boost_col.update_one(
                     {"_id": boost_key},
