@@ -99,6 +99,7 @@ mutes_col = db["mutes"]
 duck_conversations_col = db["duck_conversations"]
 staffperms_col = db["staffperms"]
 minigameplayerdata_col = db["minigameplayerdata"]
+xp_col = db["xp"]
 
 fishes = [
     ("🦐 Shrimp", 100),
@@ -594,6 +595,48 @@ async def check_disabled(ctx):
         return False
 
     return True
+
+def xp_earn(min_xp: int, max_xp: int):
+    def decorator(func):
+        import functools
+
+        @functools.wraps(func)
+        async def wrapper(ctx, *args, **kwargs):
+            # Execute the command first
+            result = await func(ctx, *args, **kwargs)
+            
+            # Check if command was successful (didn't raise exception)
+            # and it's in a guild
+            if ctx.guild:
+                xp_gained = random.randint(min_xp, max_xp)
+                user_id = str(ctx.author.id)
+                guild_id = str(ctx.guild.id)
+                key = f"{guild_id}-{user_id}"
+                
+                await xp_col.update_one(
+                    {"_id": key},
+                    {
+                        "$inc": {"xp": xp_gained},
+                        "$set": {"guild": guild_id, "user": user_id}
+                    },
+                    upsert=True
+                )
+                
+                # Try to send the XP message
+                # If it's a hybrid command, ctx might be an Interaction or Context
+                try:
+                    command_name = ctx.command.name if ctx.command else func.__name__
+                    xp_msg = f"{ctx.author.mention}, you earned **{xp_gained} xp** by using `/{command_name}`"
+                    if hasattr(ctx, "interaction") and ctx.interaction and ctx.interaction.response.is_done():
+                        await ctx.interaction.followup.send(xp_msg)
+                    else:
+                        await ctx.send(xp_msg)
+                except Exception as e:
+                    print(f"[XP Decorator Error] Could not send XP message: {e}")
+            
+            return result
+        return wrapper
+    return decorator
 
 async def get_user(ctx, guild_id, user_id):
     key = f"{guild_id}-{user_id}"
@@ -3938,6 +3981,7 @@ class DoorGameButton(discord.ui.View):
 @bot.hybrid_command(name="doorgame", description="Try your luck through multiple doors!")
 @commands.cooldown(1, 5, commands.BucketType.member)
 @blacklist_barrier()
+@xp_earn(12, 24)
 async def doorgame(ctx):
     try:
         await ctx.send("💰 Please type your **bet amount** (e.g. `100`, `1k`, `1.5m`):")
@@ -4230,6 +4274,7 @@ class MinesBombSelect(ui.Select):
 
 @bot.hybrid_command(name="mines", description="Play Mines and test your luck!")
 @blacklist_barrier()
+@xp_earn(12, 24)
 async def mines(ctx):
     await ctx.send("💎 How much would you like to bet? (Type a number or 'all')")
 
@@ -4484,6 +4529,7 @@ class DuckTowersView(discord.ui.View):
 @bot.hybrid_command(name="ducktowers", description="Play a game of Duck Towers!")
 @commands.cooldown(1, 15, commands.BucketType.member)
 @blacklist_barrier()
+@xp_earn(12, 24)
 async def ducktowers(ctx):
     try:
         uid = ctx.author.id
@@ -4522,6 +4568,7 @@ async def ducktowers(ctx):
 @bot.hybrid_command(name="balance", description="Check your balance.", aliases=["bal"])
 @app_commands.describe(member_name="The member whose balance to check (optional - shows your balance if not provided)")
 @blacklist_barrier()
+@xp_earn(4, 8)
 async def balance(ctx, member_name: str = None):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -4604,6 +4651,7 @@ async def balance(ctx, member_name: str = None):
     
 @bot.hybrid_command(name="daily", description="Claim your daily reward.", aliases=["collect"])
 @blacklist_barrier()
+@xp_earn(10, 20)
 async def daily(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -4702,6 +4750,7 @@ async def daily(ctx):
     
 @bot.hybrid_command(name="beg", description="Beg for coins.")
 @blacklist_barrier()
+@xp_earn(8, 16)
 async def beg(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -4770,6 +4819,7 @@ async def beg(ctx):
 @bot.hybrid_command(name="deposit", description="Deposit to bank.", aliases=["dep"])
 @app_commands.describe(amount="Amount to deposit (supports k, m, b suffixes or 'all')")
 @blacklist_barrier()
+@xp_earn(5, 10)
 async def deposit(ctx, amount: str):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -4813,6 +4863,7 @@ async def deposit(ctx, amount: str):
 @bot.hybrid_command(name="withdraw", description="Withdraw from bank.", aliases=["with"])
 @app_commands.describe(amount="Amount to withdraw (supports k, m, b suffixes or 'all')")
 @blacklist_barrier()
+@xp_earn(5, 10)
 async def withdraw(ctx, amount: str):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -5133,6 +5184,7 @@ async def maintenance(ctx, action: str = None):
 
 @bot.hybrid_command(name="shop", description="View the shop.", aliases=["store"])
 @blacklist_barrier()
+@xp_earn(3, 7)
 async def shop(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -5373,6 +5425,7 @@ async def delitem(ctx, *, name: str):
 @bot.hybrid_command(name="buy", description="Buy an item from the shop.", aliases=["purchase"])
 @app_commands.describe(item="The item to buy (e.g., 'fishing rod', 'rifle', 'laptop'). Use '/shop' to see available items.")
 @blacklist_barrier()
+@xp_earn(8, 16)
 async def buy(ctx, item: str = None):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -5391,6 +5444,7 @@ async def buy(ctx, item: str = None):
 @bot.hybrid_command(name="use", description="Use an item from your inventory.")
 @app_commands.describe(item_name="The item to use (e.g., 'fishing rod', 'energy drink', 'laptop'). Use '/inventory' to see your items.")
 @blacklist_barrier()
+@xp_earn(7, 14)
 async def use(ctx, item_name: str):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -5417,6 +5471,7 @@ async def use(ctx, item_name: str):
 
 @bot.hybrid_command(name="inventory", description="View your items.", aliases=["inv"])
 @blacklist_barrier()
+@xp_earn(3, 7)
 async def inventory(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -5481,6 +5536,7 @@ async def inventory(ctx):
 @bot.hybrid_command(name="give", description="Give coins to another user.", aliases=["pay"])
 @app_commands.describe(member_name="The user to give coins to (name or mention)", amount="Amount to give (number or 'all')")
 @blacklist_barrier()
+@xp_earn(6, 12)
 async def give(ctx, member_name: str, amount: str):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -5536,54 +5592,94 @@ async def give(ctx, member_name: str, amount: str):
     else:
         await ctx.send(f"🤝 You gave **{amount}** coins to {member.mention}!")
     
+class LeaderboardView(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+
+    @discord.ui.button(label="Money", style=discord.ButtonStyle.primary)
+    async def money_lb(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.ctx.author.id:
+            return await interaction.response.send_message("❌ You can't use this button!", ephemeral=True)
+        
+        embed = await self.get_money_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="XP", style=discord.ButtonStyle.secondary)
+    async def xp_lb(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.ctx.author.id:
+            return await interaction.response.send_message("❌ You can't use this button!", ephemeral=True)
+        
+        embed = await self.get_xp_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def get_money_embed(self):
+        cursor = economy_col.find({"guild": str(self.ctx.guild.id)})
+        users = []
+        async for doc in cursor:
+            total = doc.get("wallet", 0) + doc.get("bank", 0)
+            if "user" in doc:
+                users.append((int(doc["user"]), total))
+
+        users.sort(key=lambda x: x[1], reverse=True)
+
+        embed = discord.Embed(
+            title="🏆 Leaderboard - Richest Users",
+            color=discord.Color.teal()
+        )
+
+        for i, (uid, total) in enumerate(users[:10], start=1):
+            member = self.ctx.guild.get_member(uid)
+            name = member.display_name if member else f"Unknown User ({uid})"
+            embed.add_field(name=f"#{i} {name}", value=f"🪙 {total} coins", inline=False)
+
+        rank = next((i + 1 for i, (uid, _) in enumerate(users) if uid == self.ctx.author.id), None)
+        user_total = next((total for uid, total in users if uid == self.ctx.author.id), 0)
+        if rank:
+            embed.set_footer(text=f"Your Rank: #{rank} • 🪙 {user_total} coins")
+        return embed
+
+    async def get_xp_embed(self):
+        cursor = xp_col.find({"guild": str(self.ctx.guild.id)})
+        users = []
+        async for doc in cursor:
+            xp = doc.get("xp", 0)
+            if "user" in doc:
+                users.append((int(doc["user"]), xp))
+
+        users.sort(key=lambda x: x[1], reverse=True)
+
+        embed = discord.Embed(
+            title="🏆 Leaderboard - Most XP",
+            color=discord.Color.gold()
+        )
+
+        for i, (uid, xp) in enumerate(users[:10], start=1):
+            member = self.ctx.guild.get_member(uid)
+            name = member.display_name if member else f"Unknown User ({uid})"
+            embed.add_field(name=f"#{i} {name}", value=f"⭐ {xp} XP", inline=False)
+
+        rank = next((i + 1 for i, (uid, _) in enumerate(users) if uid == self.ctx.author.id), None)
+        user_xp = next((xp for uid, xp in users if uid == self.ctx.author.id), 0)
+        if rank:
+            embed.set_footer(text=f"Your Rank: #{rank} • ⭐ {user_xp} XP")
+        return embed
+
 @bot.hybrid_command(name="leaderboard", description="View the top users.", aliases=["lb"])
 @blacklist_barrier()
+@xp_earn(3, 7)
 async def leaderboard(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
 
-    cursor = economy_col.find({"guild": str(ctx.guild.id)})
-    users = []
-    async for doc in cursor:
-        total = doc.get("wallet", 0) + doc.get("bank", 0)
-        uid = int(doc["user"])
-
-        member = ctx.guild.get_member(uid)
-        if member:
-            users.append((uid, total))
-
-    users.sort(key=lambda x: x[1], reverse=True)
-
-    embed = discord.Embed(
-        title="🏆 Leaderboard - Richest Users",
-        color=discord.Color.teal()
-    )
-
-    for i, (uid, total) in enumerate(users[:10], start=1):
-        member = ctx.guild.get_member(uid)
-        if member:
-            name = member.display_name
-        else:
-            name = f"Unknown User ({uid})"
-
-        embed.add_field(
-            name=f"#{i} {name}",
-            value=f"🪙 {total} coins",
-            inline=False
-        )
-
-    user_id = ctx.author.id
-    rank = next((i + 1 for i, (uid, _) in enumerate(users) if uid == user_id), None)
-    user_total = next((total for uid, total in users if uid == user_id), 0)
-
-    if rank:
-        embed.set_footer(text=f"Your Rank: #{rank} • 🪙 {user_total} coins")
-
-    await ctx.send(embed=embed)
+    view = LeaderboardView(ctx)
+    embed = await view.get_money_embed()
+    await ctx.send(embed=embed, view=view)
 
 @bot.hybrid_command(name="coinflip", description="Coin flip for coins.", aliases=["cf"])
 @app_commands.describe(amount="Amount to bet (number or 'all')")
 @blacklist_barrier()
+@xp_earn(10, 20)
 async def coinflip(ctx, amount: str):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -5633,6 +5729,7 @@ async def coinflip_error(ctx, error):
 
 @bot.hybrid_command(name="duckroll", description="Guess if the ducks are higher or lower than 50!")
 @blacklist_barrier()
+@xp_earn(10, 20)
 async def duckroll(ctx, guess: str):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -5676,6 +5773,7 @@ async def duckroll(ctx, guess: str):
 
 @bot.hybrid_command(name="lottery", description="Join the lottery.")
 @blacklist_barrier()
+@xp_earn(10, 20)
 async def lottery(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -5778,6 +5876,7 @@ class JobPicker(ui.View):
 
 @bot.hybrid_command(name="choosejob", description="Choose your dream job")
 @blacklist_barrier()
+@xp_earn(5, 10)
 async def choosejob(ctx):
     view = JobPicker(ctx)
     await ctx.send(
@@ -5787,6 +5886,7 @@ async def choosejob(ctx):
 
 @bot.hybrid_command(name="work", description="Work to earn coins.")
 @blacklist_barrier()
+@xp_earn(20, 35)
 async def work(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -5922,6 +6022,7 @@ async def work_error(ctx, error):
 
 @bot.command()
 @staff_only()
+@xp_earn(3, 6)
 async def reseteconomy(ctx):
     await ctx.defer()
     try:
@@ -5942,6 +6043,7 @@ async def reseteconomy(ctx):
 
 @bot.hybrid_command(name="jobstatus", description="Check your next promotion.")
 @blacklist_barrier()
+@xp_earn(4, 8)
 async def jobstatus(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -6070,6 +6172,7 @@ async def jobstatus(ctx):
 @bot.hybrid_command(name="fish", description="Go fishing to earn coins.")
 @commands.cooldown(1, 10800, commands.BucketType.member)
 @blacklist_barrier()
+@xp_earn(14, 26)
 async def fish(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -6142,6 +6245,7 @@ async def fish_error(ctx, error):
 @bot.hybrid_command(name="rob", description="Attempt to rob another user.", aliases=["steal"])
 @app_commands.describe(member="The user to rob (mention or name)")
 @blacklist_barrier()
+@xp_earn(14, 28)
 async def rob(ctx, member: discord.Member):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -6213,6 +6317,7 @@ async def rob_error(ctx, error):
 
 @bot.hybrid_command(name="crime", description="Attempt a risky crime to earn coins.")
 @blacklist_barrier()
+@xp_earn(14, 28)
 async def crime(ctx, *, choice: str):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -6304,6 +6409,7 @@ async def crime_error(ctx, error):
 
 @bot.hybrid_command(name="passive", description="Toggle passive mode. Staff can manage others.")
 @blacklist_barrier()
+@xp_earn(4, 8)
 async def passive(ctx, member: discord.Member = None):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -6386,6 +6492,7 @@ class ConfirmSellAll(View):
 @bot.hybrid_command(name="sell", description="Sell items, investments, or everything at once.")
 @app_commands.describe(item="What to sell: item name (e.g., 'rabbit', 'fish'), 'all' to sell everything, or 'inv' to sell inventory")
 @blacklist_barrier()
+@xp_earn(9, 18)
 async def sell(ctx, *, item: str = None):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -6606,6 +6713,7 @@ async def calculate_investment_value(inv: dict) -> int:
 @bot.hybrid_command(name="invest", description="Invest in fake companies for profit.")
 @app_commands.describe(company="Company to invest in (e.g., 'Techify', 'MineCorp', 'Oceanic')", amount="Amount to invest (number or 'all')")
 @blacklist_barrier()
+@xp_earn(16, 30)
 async def invest(ctx, company: str = None, amount: str = None):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -6735,6 +6843,7 @@ async def invest(ctx, company: str = None, amount: str = None):
 
 @bot.hybrid_command(name="investstatus", description="Check your investments.")
 @blacklist_barrier()
+@xp_earn(4, 8)
 async def investstatus(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -6774,6 +6883,7 @@ async def investstatus(ctx):
 @bot.hybrid_command(name="hunt", description="Go hunting for animals.")
 @commands.cooldown(1, 3600, commands.BucketType.member)
 @blacklist_barrier()
+@xp_earn(12, 24)
 async def hunt(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -6835,6 +6945,7 @@ async def hunt_error(ctx, error):
 @bot.hybrid_command(name="mine", description="Go mining for ores.")
 @commands.cooldown(1, 3600, commands.BucketType.member)
 @blacklist_barrier()
+@xp_earn(12, 24)
 async def mine(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -9192,8 +9303,9 @@ async def roleremove(ctx: commands.Context, role: discord.Role):
 @bot.hybrid_command(name="addmoney", description="Add money to a user (economy admin only).")
 @app_commands.describe(amount="Amount to add (supports k, m, b suffixes)", user="User to give money to")
 @staffperm("economy")
+@xp_earn(4, 8)
 async def addmoney(ctx, amount: str, user: discord.Member):
-    authorized_ids = [1059882387590365314, 903123014420406302, 447235867485143057, ctx.guild.owner_id]
+    authorized_ids = [1059882387590365314, 903123014420406302, 447235867485143057, 723609072297050193, ctx.guild.owner_id]
     if ctx.author.id not in authorized_ids:
         return await ctx.send("❌ You are not authorized to use this command.")
 
@@ -9252,6 +9364,7 @@ async def addmoney_error(ctx, error):
 @bot.hybrid_command(name="removemoney", description="Remove money from a user (economy admin only).")
 @app_commands.describe(amount="Amount to remove (supports k, m, b suffixes)", user="User to take money from")
 @staffperm("economy")
+@xp_earn(4, 8)
 async def removemoney(ctx, amount: str, user: discord.Member):
     authorized_ids = [1059882387590365314, 903123014420406302, 447235867485143057, ctx.guild.owner_id]
     if ctx.author.id not in authorized_ids:
@@ -9304,6 +9417,7 @@ async def removemoney(ctx, amount: str, user: discord.Member):
 
 @bot.hybrid_command(name="drop", description="Create a money drop (staff spawns money, members pay).")
 @app_commands.describe(amount="Amount to drop", message="Optional message to include")
+@xp_earn(8, 16)
 async def drop(ctx, amount: str, *, message: str = None):
     if not ctx.guild:
         return await ctx.send("❌ This command can only be used in a server.")
