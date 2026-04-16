@@ -67,5 +67,33 @@ async def test_mute_command_with_duration():
     assert str(member.id) in main.actions_data[str(ctx.guild.id)]
     assert main.actions_data[str(ctx.guild.id)][str(member.id)][-1]["type"] == "unmute"
 
+
+def test_detect_discord_service_unavailable_from_wrapped_error():
+    wrapped = main.commands.CommandInvokeError(
+        RuntimeError(
+            "DiscordServerError: 503 Service Unavailable (error code: 0): "
+            "upstream connect error"
+        )
+    )
+    assert main.is_discord_service_unavailable_error(wrapped) is True
+
+
+def test_do_not_treat_generic_invoke_error_as_service_unavailable():
+    wrapped = main.commands.CommandInvokeError(RuntimeError("some unrelated failure"))
+    assert main.is_discord_service_unavailable_error(wrapped) is False
+
+
+@pytest.mark.asyncio
+async def test_coinflip_error_hides_wrapped_503_details():
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    wrapped = main.commands.CommandInvokeError(
+        RuntimeError("503 Service Unavailable: upstream connect error")
+    )
+
+    await main.coinflip_error(ctx, wrapped)
+
+    ctx.send.assert_awaited_once_with(main.DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
+
 if __name__ == '__main__':
     pytest.main([__file__])
