@@ -226,6 +226,47 @@ async def on_guild_join(guild):
 
 bot_locks = {}
 
+DISCORD_SERVICE_UNAVAILABLE_MESSAGE = (
+    "⚠️ Discord is having trouble right now. Please try again in a moment."
+)
+
+
+def unwrap_command_error(error: Exception) -> Exception:
+    """Unwrap CommandInvokeError layers to the root exception when possible."""
+    invoke_error_types = (commands.CommandInvokeError,)
+    app_invoke_error = getattr(app_commands, "CommandInvokeError", None)
+    if app_invoke_error is not None:
+        invoke_error_types = invoke_error_types + (app_invoke_error,)
+
+    current = error
+    seen = set()
+    while current and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, invoke_error_types):
+            nested = getattr(current, "original", None)
+            if nested is not None:
+                current = nested
+                continue
+        nested = getattr(current, "__cause__", None)
+        if nested is not None:
+            current = nested
+            continue
+        break
+    return current
+
+
+def is_discord_service_unavailable_error(error: Exception) -> bool:
+    root = unwrap_command_error(error)
+    if isinstance(root, discord.DiscordServerError):
+        return True
+
+    status = getattr(root, "status", None)
+    if status == 503:
+        return True
+
+    text = str(root).lower()
+    return "503 service unavailable" in text or "upstream connect error" in text
+
 @bot.check
 async def global_lock_check(ctx):
     if ctx.command.name == "override":
@@ -544,10 +585,16 @@ async def on_app_command_error(interaction: discord.Interaction, error):
             description="You don't have permission to use this command.",
             color=discord.Color.red()
         )
+    elif is_discord_service_unavailable_error(error):
+        embed = discord.Embed(
+            title="⚠️ Temporary Discord Issue",
+            description=DISCORD_SERVICE_UNAVAILABLE_MESSAGE,
+            color=discord.Color.orange()
+        )
     else:
         embed = discord.Embed(
             title="❌ Command Error",
-            description=f"An error occurred:\n```{error}```",
+            description="An unexpected error occurred. Please try again later.",
             color=discord.Color.red()
         )
 
@@ -596,6 +643,20 @@ async def check_disabled(ctx):
 
     return True
 
+STAFF_HELP_COMMANDS = {
+    "kick", "ban", "unban", "mute", "unmute", "warn", "clearwarns", "purge", "slowmode",
+    "blacklist", "whitelist", "ticketsetup", "ticketdeletepanel", "ticketlist",
+    "ticketforceclose", "transcriptsearch", "transcriptlist", "ticketaddbutton",
+    "ticketeditbutton", "ticketpanel", "ticketclose", "transcript", "ticketadduser",
+    "ticketremoveuser", "stickynote", "unstickynote", "additem", "edititem", "delitem",
+    "drop", "addmoney", "removemoney", "vanityroles", "promoters", "resetpromoters",
+    "roleadd", "roleremove", "configure", "viewconfig", "editconfig", "resetconfig",
+    "setprefix", "invitechannel", "invites", "removeinvites", "giveaway", "reroll",
+    "disable", "enable", "listdisabled", "stop", "testwelcome", "testboost",
+    "reactionrole", "onetime", "restore", "disableonetime", "performance",
+}
+
+
 def xp_earn(min_xp: int, max_xp: int):
     def decorator(func):
         import functools
@@ -608,6 +669,10 @@ def xp_earn(min_xp: int, max_xp: int):
             # Check if command was successful (didn't raise exception)
             # and it's in a guild
             if ctx.guild:
+                command_name = (ctx.command.name if ctx.command else func.__name__).lower()
+                if command_name in STAFF_HELP_COMMANDS:
+                    return result
+
                 xp_gained = random.randint(min_xp, max_xp)
                 user_id = str(ctx.author.id)
                 guild_id = str(ctx.guild.id)
@@ -625,7 +690,6 @@ def xp_earn(min_xp: int, max_xp: int):
                 # Try to send the XP message
                 # If it's a hybrid command, ctx might be an Interaction or Context
                 try:
-                    command_name = ctx.command.name if ctx.command else func.__name__
                     xp_msg = f"{ctx.author.mention}, you earned **{xp_gained} xp** by using `/{command_name}`"
                     if hasattr(ctx, "interaction") and ctx.interaction and ctx.interaction.response.is_done():
                         await ctx.interaction.followup.send(xp_msg)
@@ -3027,7 +3091,8 @@ async def staff(ctx, member: discord.Member):
     if not staff_role:
         return await ctx.send("⚠️ The saved staff role no longer exists on this server.")
 
-    if ctx.author != ctx.guild.owner and ctx.author.id != 1059882387590365314:
+    authorized_ids = [1059882387590365314,903123014420406302]
+    if ctx.author != ctx.guild.owner and ctx.author.id not in authorized_ids:
         return await ctx.send("❌ Only the server owner and thetruck (for debugging purposes) can assign the staff role.")
 
     try:
@@ -5724,8 +5789,10 @@ async def coinflip(ctx, amount: str):
 async def coinflip_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("❌ You must specify an amount (number or `all`).")
+    elif is_discord_service_unavailable_error(error):
+        await ctx.send(DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
     else:
-        await ctx.send(f"⚠️ Error, contact thetruck: {type(error).__name__}: {error}")
+        await ctx.send("⚠️ Error, contact thetruck.")
 
 @bot.hybrid_command(name="duckroll", description="Guess if the ducks are higher or lower than 50!")
 @blacklist_barrier()
@@ -9673,8 +9740,10 @@ async def say_error(ctx, error):
     try:
         if isinstance(error, commands.CheckFailure):
             return await ctx.send("❌ Only staff members can use this command.")
+        if is_discord_service_unavailable_error(error):
+            return await ctx.send(DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
         if isinstance(error, commands.CommandInvokeError):
-            return await ctx.send(f"⚠️ Error running say: {type(error.__cause__).__name__ if hasattr(error, '__cause__') and error.__cause__ else type(error).__name__}")
+            return await ctx.send("⚠️ Error running say. Please try again shortly.")
         await ctx.send(f"⚠️ Error: {type(error).__name__}")
     except Exception:
         pass
@@ -10715,10 +10784,12 @@ async def modview_error(ctx: commands.Context, error: commands.CommandError):
         await ctx.send("❌ Invalid member provided. Please mention a valid user.", ephemeral=True)
     elif isinstance(error, commands.MemberNotFound):
         await ctx.send("❌ Could not find that member in this server.", ephemeral=True)
+    elif is_discord_service_unavailable_error(error):
+        await ctx.send(DISCORD_SERVICE_UNAVAILABLE_MESSAGE, ephemeral=True)
     elif isinstance(error, commands.CommandInvokeError):
-        await ctx.send(f"⚠️ An unexpected error occurred: `{error.original}`", ephemeral=True)
+        await ctx.send("⚠️ An unexpected error occurred. Please try again later.", ephemeral=True)
     else:
-        await ctx.send(f"⚠️ An error occurred: `{error}`", ephemeral=True)
+        await ctx.send("⚠️ An error occurred. Please try again later.", ephemeral=True)
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):

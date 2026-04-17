@@ -83,3 +83,4 @@ bot/warnings.json
 bot/actions.json
 .idea/
 .venv/
+.tests/
