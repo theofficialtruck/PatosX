@@ -95,5 +95,28 @@ async def test_coinflip_error_hides_wrapped_503_details():
 
     ctx.send.assert_awaited_once_with(main.DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
 
+
+@pytest.mark.asyncio
+async def test_coinflip_zero_bet_does_not_award_xp(monkeypatch):
+    ctx = MagicMock()
+    ctx.guild.id = 123
+    ctx.author.id = 456
+    ctx.author.mention = "@Tester"
+    ctx.command = MagicMock()
+    ctx.command.name = "coinflip"
+    ctx.send = AsyncMock()
+
+    mock_xp_col = MagicMock()
+    mock_xp_col.update_one = AsyncMock()
+
+    monkeypatch.setattr(main, "xp_col", mock_xp_col)
+    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"wallet": 100}))
+
+    await main.coinflip(ctx, "0")
+
+    ctx.send.assert_awaited_once_with("❌ Invalid amount to coin flip.")
+    mock_xp_col.update_one.assert_not_awaited()
+
 if __name__ == '__main__':
     pytest.main([__file__])

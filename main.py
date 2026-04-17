@@ -672,6 +672,9 @@ def xp_earn(min_xp: int, max_xp: int):
                 command_name = (ctx.command.name if ctx.command else func.__name__).lower()
                 if command_name in STAFF_HELP_COMMANDS:
                     return result
+                if getattr(ctx, "_skip_xp_award", False):
+                    setattr(ctx, "_skip_xp_award", False)
+                    return result
 
                 xp_gained = random.randint(min_xp, max_xp)
                 user_id = str(ctx.author.id)
@@ -5747,6 +5750,7 @@ async def leaderboard(ctx):
 @xp_earn(10, 20)
 async def coinflip(ctx, amount: str):
     if not await check_channel(ctx, "economy_channel", "Economy"):
+        ctx._skip_xp_award = True
         return
 
     data = await get_user(ctx, ctx.guild.id, ctx.author.id)
@@ -5758,11 +5762,14 @@ async def coinflip(ctx, amount: str):
         try:
             amount = int(amount)
         except ValueError:
+            ctx._skip_xp_award = True
             return await ctx.send("❌ Please enter a valid number or `all`.")
 
     if amount <= 0:
+        ctx._skip_xp_award = True
         return await ctx.send("❌ Invalid amount to coin flip.")
     if amount > wallet:
+        ctx._skip_xp_award = True
         return await ctx.send("❌ You can't afford that!")
 
     luck_buff = data.get("luck_buff", False)
