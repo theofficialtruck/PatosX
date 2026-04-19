@@ -9419,6 +9419,8 @@ async def addmoney(ctx, amount: str, user: discord.Member):
 @addmoney.error
 async def addmoney_error(ctx, error):
     try:
+        if isinstance(error, commands.CheckFailure):
+            return
         prefix = await get_prefix(bot, ctx.message)
         if isinstance(error, commands.BadArgument):
             return await ctx.send(
