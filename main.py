@@ -1130,12 +1130,13 @@ async def configure(ctx):
 @configure.error
 async def configure_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have permission to use this command.", delete_after=7)
+        await send_hybrid_error(ctx, content="❌ You don't have permission to use this command.", delete_after=7)
     elif isinstance(error, commands.CheckFailure):
-        await ctx.send("❌ Only staff members can use this command.", delete_after=7)
+        await send_hybrid_error(ctx, content="❌ Only staff members can use this command.", delete_after=7)
     else:
-        await ctx.send(
-            f"⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`",
+        await send_hybrid_error(
+            ctx,
+            content=f"⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`",
             delete_after=10
         )
 
@@ -1304,13 +1305,13 @@ async def editconfig(ctx, args: str = None):
 @editconfig.error
 async def editconfig_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have permission to use this command.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ You don't have permission to use this command.")
     elif isinstance(error, commands.CheckFailure):
-        await ctx.send("❌ Only staff members can use this command.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ Only staff members can use this command.")
     else:
-        await ctx.send(
-            f"⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`",
-            ephemeral=True
+        await send_hybrid_error(
+            ctx,
+            content=f"⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`"
         )
 
 @bot.hybrid_command(name="viewconfig", description="View the current server configuration.")
@@ -1368,13 +1369,13 @@ async def viewconfig(ctx: commands.Context):
 @viewconfig.error
 async def viewconfig_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have permission to use this command.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ You don't have permission to use this command.")
     elif isinstance(error, commands.CheckFailure):
-        await ctx.send("❌ Only staff members can use this command.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ Only staff members can use this command.")
     else:
-        await ctx.send(
-            f"⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`",
-            ephemeral=True
+        await send_hybrid_error(
+            ctx,
+            content=f"⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`"
         )
 
 @bot.command()
@@ -2596,6 +2597,23 @@ async def on_ready():
     bot.views_loaded = True
 
     print(f"Logging in as {bot.user}...")
+
+    run_investment_backfill = os.getenv("RUN_INVESTMENT_DATE_BACKFILL", "true").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if run_investment_backfill:
+        try:
+            backfill_stats = await backfill_investment_dates_from_timestamp()
+            print(
+                "[Investment Date Backfill] "
+                f"scanned={backfill_stats['scanned']} "
+                f"updated={backfill_stats['updated']} "
+                f"invalid_timestamp={backfill_stats['invalid_timestamp']} "
+                f"skipped_conflict={backfill_stats['skipped_conflict']} "
+                f"write_errors={backfill_stats['write_errors']}"
+            )
+        except Exception as e:
+            print(f"[Investment Date Backfill] failed: {type(e).__name__} - {e}")
     
     print("⚠️ Automatic sync disabled - use ?sync manually")
 
@@ -3458,20 +3476,20 @@ async def whitelist(ctx, member: discord.Member):
 @blacklist.error
 async def blacklist_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You need **Manage Roles** permission to use this command.")
+        await send_hybrid_error(ctx, content="❌ You need **Manage Roles** permission to use this command.")
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Invalid user specified.")
+        await send_hybrid_error(ctx, content="❌ Invalid user specified.")
     else:
-        await ctx.send(f"⚠️ An error occurred: {error}")
+        await send_hybrid_error(ctx, content=f"⚠️ An error occurred: {error}")
 
 @whitelist.error
 async def whitelist_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You need **Manage Roles** permission to use this command.")
+        await send_hybrid_error(ctx, content="❌ You need **Manage Roles** permission to use this command.")
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Invalid user specified.")
+        await send_hybrid_error(ctx, content="❌ Invalid user specified.")
     else:
-        await ctx.send(f"⚠️ An error occurred: {error}")
+        await send_hybrid_error(ctx, content=f"⚠️ An error occurred: {error}")
 
 @bot.hybrid_command(name="vanityroles", description="Track users with keyword in status. Staff-only.")
 @app_commands.describe(role="Role to assign", log_channel="Channel to log changes", keyword="Keyword to track in status")
@@ -5795,11 +5813,11 @@ async def coinflip(ctx, amount: str):
 @coinflip.error
 async def coinflip_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ You must specify an amount (number or `all`).")
+        await send_hybrid_error(ctx, content="❌ You must specify an amount (number or `all`).")
     elif is_discord_service_unavailable_error(error):
-        await ctx.send(DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
+        await send_hybrid_error(ctx, content=DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
     else:
-        await ctx.send("⚠️ Error, contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ Error, contact thetruck.")
 
 @bot.hybrid_command(name="duckroll", description="Guess if the ducks are higher or lower than 50!")
 @blacklist_barrier()
@@ -5913,7 +5931,7 @@ async def lottery_error(ctx, error):
         rem = timedelta(seconds=error.retry_after)
         mins = rem.seconds // 60
         secs = rem.seconds % 60
-        return await ctx.send(f"🕒 Try again in {mins}m {secs}s.")
+        return await send_hybrid_error(ctx, content=f"🕒 Try again in {mins}m {secs}s.")
 
 class JobPicker(ui.View):
     def __init__(self, ctx):
@@ -6085,13 +6103,13 @@ async def work_error(ctx, error):
         hours, remainder = divmod(total_seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         if hours > 0:
-            return await ctx.send(f"⏰ You're on cooldown! Try again in {hours}h {minutes}m {seconds}s.")
+            return await send_hybrid_error(ctx, content=f"⏰ You're on cooldown! Try again in {hours}h {minutes}m {seconds}s.")
         elif minutes > 0:
-            return await ctx.send(f"⏰ You're on cooldown! Try again in {minutes}m {seconds}s.")
+            return await send_hybrid_error(ctx, content=f"⏰ You're on cooldown! Try again in {minutes}m {seconds}s.")
         else:
-            return await ctx.send(f"⏰ You're on cooldown! Try again in {seconds}s.")
+            return await send_hybrid_error(ctx, content=f"⏰ You're on cooldown! Try again in {seconds}s.")
     elif isinstance(error, commands.CommandError):
-        await ctx.send("⚠️ Something went wrong while processing your work. Contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ Something went wrong while processing your work. Contact thetruck.")
         print(f"[ERROR] work command: {type(error).__name__} - {error}")
 
 @bot.command()
@@ -6312,9 +6330,9 @@ async def fish_error(ctx, error):
         total_seconds = int(error.retry_after)
         hours, remainder = divmod(total_seconds, 10800)
         minutes, _ = divmod(remainder, 60)
-        return await ctx.send(f"🕒 You can fish again in {hours}h {minutes}m.")
+        return await send_hybrid_error(ctx, content=f"🕒 You can fish again in {hours}h {minutes}m.")
     else:
-        await ctx.send("⚠️ An unexpected error occurred. Contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Contact thetruck.")
 
 @bot.hybrid_command(name="rob", description="Attempt to rob another user.", aliases=["steal"])
 @app_commands.describe(member="The user to rob (mention or name)")
@@ -6383,11 +6401,11 @@ async def rob(ctx, member: discord.Member):
 @rob.error
 async def rob_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ You must mention someone to rob. Example: `.rob @User`")
+        await send_hybrid_error(ctx, content="❌ You must mention someone to rob. Example: `.rob @User`")
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ That’s not a valid user.")
+        await send_hybrid_error(ctx, content="❌ That’s not a valid user.")
     else:
-        await ctx.send(f"⚠️ An unexpected error occurred: `{type(error).__name__} - {error}`")
+        await send_hybrid_error(ctx, content=f"⚠️ An unexpected error occurred: `{type(error).__name__} - {error}`")
 
 @bot.hybrid_command(name="crime", description="Attempt a risky crime to earn coins.")
 @blacklist_barrier()
@@ -6475,11 +6493,11 @@ async def crime_error(ctx, error):
         seconds = int(error.retry_after)
         hours, remainder = divmod(seconds, 3600)
         minutes, _ = divmod(remainder, 60)
-        await ctx.send(f"🕒 You can commit a crime again in {hours}h {minutes}m.")
+        await send_hybrid_error(ctx, content=f"🕒 You can commit a crime again in {hours}h {minutes}m.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ You must specify a crime type. Example: `?crime bank`")
+        await send_hybrid_error(ctx, content="❌ You must specify a crime type. Example: `?crime bank`")
     else:
-        await ctx.send(f"⚠️ An unexpected error occurred: `{type(error).__name__} - {error}`\nPlease contact thetruck.")
+        await send_hybrid_error(ctx, content=f"⚠️ An unexpected error occurred: `{type(error).__name__} - {error}`\nPlease contact thetruck.")
 
 @bot.hybrid_command(name="passive", description="Toggle passive mode. Staff can manage others.")
 @blacklist_barrier()
@@ -6736,18 +6754,84 @@ async def sell(ctx, *, item: str = None):
 
 async def create_investment(user_id: str, company: str, amount: int):
     inv_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
     await investments_col.insert_one({
         "_id": inv_id,
         "user_id": user_id,
         "company": company,
         "amount": amount,
-        "date": datetime.now(timezone.utc).isoformat(),
+        "date": now_iso,
+        "timestamp": now_iso,
         "history": []
     })
 
+
+def get_investment_date(inv: dict) -> datetime:
+    """Resolve investment creation time across legacy/new schemas."""
+    date_raw = inv.get("date") or inv.get("timestamp")
+    if not date_raw:
+        return datetime.now(timezone.utc)
+
+    try:
+        parsed = datetime.fromisoformat(date_raw)
+    except (TypeError, ValueError):
+        return datetime.now(timezone.utc)
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+async def backfill_investment_dates_from_timestamp() -> dict:
+    """Backfill missing investment date from legacy timestamp without deleting data."""
+    stats = {
+        "scanned": 0,
+        "updated": 0,
+        "invalid_timestamp": 0,
+        "skipped_conflict": 0,
+        "write_errors": 0,
+    }
+
+    query = {
+        "date": {"$exists": False},
+        "timestamp": {"$exists": True},
+    }
+
+    async for inv in investments_col.find(query):
+        stats["scanned"] += 1
+        ts_raw = inv.get("timestamp")
+
+        try:
+            parsed = datetime.fromisoformat(ts_raw)
+        except (TypeError, ValueError):
+            stats["invalid_timestamp"] += 1
+            continue
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+
+        try:
+            result = await investments_col.update_one(
+                {
+                    "_id": inv["_id"],
+                    "date": {"$exists": False},
+                },
+                {
+                    "$set": {"date": parsed.isoformat()}
+                }
+            )
+            if result.modified_count:
+                stats["updated"] += 1
+            else:
+                stats["skipped_conflict"] += 1
+        except Exception:
+            stats["write_errors"] += 1
+
+    return stats
+
 async def calculate_investment_value(inv: dict) -> int:
     amount = inv["amount"]
-    date_obj = datetime.fromisoformat(inv["date"])
+    date_obj = get_investment_date(inv)
     now = datetime.now(timezone.utc)
 
     days_passed = (now - date_obj).days
@@ -6823,12 +6907,7 @@ async def invest(ctx, company: str = None, amount: str = None):
             return await ctx.send("❌ You don't have enough coins!")
         
         user_id = f"{ctx.guild.id}-{ctx.author.id}"
-        await investments_col.insert_one({
-            "user_id": user_id,
-            "company": company,
-            "amount": invest_amount,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
+        await create_investment(user_id, company, invest_amount)
         
         await subtract_balance(ctx.author.id, ctx.guild.id, invest_amount)
         await ctx.send(f"📈 Invested {invest_amount} coins in {company}!")
@@ -6939,7 +7018,7 @@ async def investstatus(ctx):
         current_value = await calculate_investment_value(inv)
         inv_id = inv["_id"]
 
-        date_obj = datetime.fromisoformat(inv["date"])
+        date_obj = get_investment_date(inv)
         unix_timestamp = int(date_obj.timestamp())
 
         embed.add_field(
@@ -6953,6 +7032,21 @@ async def investstatus(ctx):
         )
 
     await ctx.send(embed=embed)
+
+
+@bot.hybrid_command(name="investmigrate", description="Backfill missing investment dates from legacy timestamps.")
+@staffperm("economy")
+@staff_only()
+async def investmigrate(ctx):
+    stats = await backfill_investment_dates_from_timestamp()
+    await ctx.send(
+        "✅ Investment date backfill completed.\n"
+        f"Scanned: `{stats['scanned']}`\n"
+        f"Updated: `{stats['updated']}`\n"
+        f"Invalid timestamp: `{stats['invalid_timestamp']}`\n"
+        f"Skipped (conflict/already set): `{stats['skipped_conflict']}`\n"
+        f"Write errors: `{stats['write_errors']}`"
+    )
 
 @bot.hybrid_command(name="hunt", description="Go hunting for animals.")
 @commands.cooldown(1, 3600, commands.BucketType.member)
@@ -7011,9 +7105,9 @@ async def hunt_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         total_seconds = int(error.retry_after)
         minutes = total_seconds // 60
-        return await ctx.send(f"🕒 You can hunt again in {minutes} minutes.")
+        return await send_hybrid_error(ctx, content=f"🕒 You can hunt again in {minutes} minutes.")
     else:
-        await ctx.send("⚠️ An unexpected error occurred while hunting.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred while hunting.")
 
 
 @bot.hybrid_command(name="mine", description="Go mining for ores.")
@@ -7072,9 +7166,9 @@ async def mine_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         total_seconds = int(error.retry_after)
         minutes = total_seconds // 60
-        return await ctx.send(f"🕒 You can mine again in {minutes} minutes.")
+        return await send_hybrid_error(ctx, content=f"🕒 You can mine again in {minutes} minutes.")
     else:
-        await ctx.send("⚠️ An unexpected error occurred while mining.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred while mining.")
 
 class AnswerButton(discord.ui.Button):
     def __init__(self, label: str, value: int, parent_view):
@@ -7288,13 +7382,13 @@ async def duckquiz(ctx):
 async def duckquiz_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
         mins = int(error.retry_after // 60)
-        await ctx.send(f"🕒 Please wait another **{mins} minute(s)** before taking the quiz again.")
+        await send_hybrid_error(ctx, content=f"🕒 Please wait another **{mins} minute(s)** before taking the quiz again.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Missing arguments, type the quiz command without additional input (no parameters required).")
+        await send_hybrid_error(ctx, content="❌ Missing arguments, type the quiz command without additional input (no parameters required).")
     elif isinstance(error, commands.CheckFailure):
-        await ctx.send("❌ You can't use this command right now.")
+        await send_hybrid_error(ctx, content="❌ You can't use this command right now.")
     else:
-        await ctx.send(f"⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`")
+        await send_hybrid_error(ctx, content=f"⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`")
 
 @bot.hybrid_command(name="quackcount", description="Check the server's total quacks and a user's quacks.")
 async def quackcount(ctx, member: discord.Member | None = None):
@@ -7843,6 +7937,17 @@ class TicketCategoryButton(discord.ui.Button):
 def is_prefix(ctx):
     return not hasattr(ctx, "interaction") or ctx.interaction is None
 
+
+async def send_hybrid_error(ctx, *, content=None, embed=None, delete_after=None):
+    """Send errors privately for slash invocations and normally for prefix invocations."""
+    if is_prefix(ctx):
+        return await ctx.send(content=content, embed=embed, delete_after=delete_after)
+
+    if ctx.interaction.response.is_done():
+        return await ctx.interaction.followup.send(content=content, embed=embed, ephemeral=True)
+
+    return await ctx.interaction.response.send_message(content=content, embed=embed, ephemeral=True)
+
 async def ping_ticket_roles(channel: discord.TextChannel, guild_id: str):
     try:
         allowed_members = []
@@ -8151,6 +8256,15 @@ async def ticketlist(ctx):
 
 @bot.hybrid_command(name="ticketclose", description="Request to close the current ticket.")
 async def ticketclose(ctx):
+    async def send_public(*, content=None, embed=None):
+        if is_prefix(ctx):
+            return await ctx.send(content=content, embed=embed)
+
+        if ctx.interaction.response.is_done():
+            return await ctx.interaction.followup.send(content=content, embed=embed, ephemeral=False)
+
+        return await ctx.interaction.response.send_message(content=content, embed=embed, ephemeral=False)
+
     async def local_error_handler(func):
         try:
             return await func()
@@ -8160,7 +8274,7 @@ async def ticketclose(ctx):
                 description=f"An unexpected error occurred:\n```{str(e)}```",
                 color=discord.Color.red()
             )
-            await ctx.send(embed=embed)
+            await send_hybrid_error(ctx, embed=embed)
 
     async def inner():
         channel = ctx.channel
@@ -8168,21 +8282,23 @@ async def ticketclose(ctx):
             {"guild": str(ctx.guild.id), "channel_id": str(channel.id)}
         )
         if not ticket_entry:
-            return await ctx.send("❌ This command can only be used inside a ticket channel.")
+            return await send_hybrid_error(ctx, content="❌ This command can only be used inside a ticket channel.")
 
         opener = channel.guild.get_member(int(ticket_entry.get("owner_id"))) if ticket_entry.get("owner_id") else None
         if not opener:
-            return await ctx.send("⚠️ Could not find the ticket opener.")
+            return await send_hybrid_error(ctx, content="⚠️ Could not find the ticket opener.")
 
         await tickets_col.update_one(
             {"_id": ticket_entry["_id"]},
             {"$set": {"close_pending": True}}
         )
 
-        await ctx.send(
-            f"{opener.mention}, do you confirm closing this ticket? "
-            "Type `confirm` to close or `cancel` to keep it open. "
-            "(This will wait until you reply, no time limit.)"
+        await send_public(
+            content=(
+                f"{opener.mention}, do you confirm closing this ticket? "
+                "Type `confirm` to close or `cancel` to keep it open. "
+                "(This will wait until you reply, no time limit.)"
+            )
         )
 
     await local_error_handler(inner)
@@ -8199,13 +8315,13 @@ async def ticketforceclose(ctx):
                 description=f"An unexpected error occurred:\n```{str(e)}```",
                 color=discord.Color.red()
             )
-            await ctx.send(embed=embed)
+            await send_hybrid_error(ctx, embed=embed)
 
     async def inner():
         channel = ctx.channel
         ticket_entry = await tickets_col.find_one({"guild": str(ctx.guild.id), "channel_id": str(channel.id)})
         if not ticket_entry:
-            return await ctx.send("❌ This command can only be used inside a ticket channel.")
+            return await send_hybrid_error(ctx, content="❌ This command can only be used inside a ticket channel.")
 
         opener = channel.guild.get_member(int(ticket_entry.get("owner_id"))) if ticket_entry.get("owner_id") else None
 
@@ -9204,22 +9320,22 @@ async def end_after_delay(view: GiveawayView, delay: float):
 @giveaway.error
 async def giveaway_error(ctx: commands.Context, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have permission to create giveaways.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ You don't have permission to create giveaways.")
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Invalid input. Please check your command format.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ Invalid input. Please check your command format.")
     else:
         traceback.print_exc()
-        await ctx.send("⚠️ An unexpected error occurred while processing the giveaway.", ephemeral=True)
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred while processing the giveaway.")
 
 @reroll.error
 async def reroll_error(ctx: commands.Context, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have permission to reroll giveaways.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ You don't have permission to reroll giveaways.")
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Invalid message ID.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ Invalid message ID.")
     else:
         traceback.print_exc()
-        await ctx.send("⚠️ An unexpected error occurred while rerolling.", ephemeral=True)
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred while rerolling.")
 
 async def setup(bot):
     bot.add_command(giveaway)
@@ -9423,17 +9539,23 @@ async def addmoney_error(ctx, error):
             return
         prefix = await get_prefix(bot, ctx.message)
         if isinstance(error, commands.BadArgument):
-            return await ctx.send(
-                f"❌ Invalid arguments. Usage: `{prefix}addmoney <amount> @user`\n"
-                f"Example: `{prefix}addmoney 100 @User`"
+            return await send_hybrid_error(
+                ctx,
+                content=(
+                    f"❌ Invalid arguments. Usage: `{prefix}addmoney <amount> @user`\n"
+                    f"Example: `{prefix}addmoney 100 @User`"
+                )
             )
         elif isinstance(error, commands.MissingRequiredArgument):
-            return await ctx.send(
-                f"❌ Missing arguments. Usage: `{prefix}addmoney <amount> @user`\n"
-                f"Example: `{prefix}addmoney 100 @User`"
+            return await send_hybrid_error(
+                ctx,
+                content=(
+                    f"❌ Missing arguments. Usage: `{prefix}addmoney <amount> @user`\n"
+                    f"Example: `{prefix}addmoney 100 @User`"
+                )
             )
         else:
-            return await ctx.send(f"⚠️ Error running addmoney: `{type(error).__name__}: {error}`")
+            return await send_hybrid_error(ctx, content=f"⚠️ Error running addmoney: `{type(error).__name__}: {error}`")
     except Exception:
         pass
 
@@ -9620,28 +9742,40 @@ async def drop(ctx, amount: str, *, message: str = None):
 @drop.error
 async def drop_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(
-            "❌ Missing arguments!\n"
-            "**Usage:** `.drop <amount> [message]`\n"
-            "**Example:** `.drop 5000 Enjoy the coins!`"
+        await send_hybrid_error(
+            ctx,
+            content=(
+                "❌ Missing arguments!\n"
+                "**Usage:** `.drop <amount> [message]`\n"
+                "**Example:** `.drop 5000 Enjoy the coins!`"
+            )
         )
 
     elif isinstance(error, commands.BadArgument):
-        await ctx.send(
-            "❌ Invalid argument.\n"
-            "Use formats like: `100`, `4k`, `2m`, `1.5mil`"
+        await send_hybrid_error(
+            ctx,
+            content=(
+                "❌ Invalid argument.\n"
+                "Use formats like: `100`, `4k`, `2m`, `1.5mil`"
+            )
         )
 
     elif isinstance(error, commands.CommandInvokeError):
-        await ctx.send(
-            "⚠️ Something went wrong while running this command.\n"
-            "Please try again later."
+        await send_hybrid_error(
+            ctx,
+            content=(
+                "⚠️ Something went wrong while running this command.\n"
+                "Please try again later."
+            )
         )
 
     else:
-        await ctx.send(
-            "⚠️ An unexpected error occurred.\n"
-            "Please contact an administrator."
+        await send_hybrid_error(
+            ctx,
+            content=(
+                "⚠️ An unexpected error occurred.\n"
+                "Please contact an administrator."
+            )
         )
 
 @bot.command(name="kick", description="Kick a member. Staff-only.")
@@ -9748,12 +9882,12 @@ async def say(ctx):
 async def say_error(ctx, error):
     try:
         if isinstance(error, commands.CheckFailure):
-            return await ctx.send("❌ Only staff members can use this command.")
+            return await send_hybrid_error(ctx, content="❌ Only staff members can use this command.")
         if is_discord_service_unavailable_error(error):
-            return await ctx.send(DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
+            return await send_hybrid_error(ctx, content=DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
         if isinstance(error, commands.CommandInvokeError):
-            return await ctx.send("⚠️ Error running say. Please try again shortly.")
-        await ctx.send(f"⚠️ Error: {type(error).__name__}")
+            return await send_hybrid_error(ctx, content="⚠️ Error running say. Please try again shortly.")
+        await send_hybrid_error(ctx, content=f"⚠️ Error: {type(error).__name__}")
     except Exception:
         pass
 
@@ -10786,19 +10920,19 @@ async def modview(ctx, member: discord.Member):
 @modview.error
 async def modview_error(ctx: commands.Context, error: commands.CommandError):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have the required permissions to use this command.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ You don't have the required permissions to use this command.")
     elif isinstance(error, commands.CheckFailure):
-        await ctx.send("❌ This command is restricted to staff members only.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ This command is restricted to staff members only.")
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Invalid member provided. Please mention a valid user.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ Invalid member provided. Please mention a valid user.")
     elif isinstance(error, commands.MemberNotFound):
-        await ctx.send("❌ Could not find that member in this server.", ephemeral=True)
+        await send_hybrid_error(ctx, content="❌ Could not find that member in this server.")
     elif is_discord_service_unavailable_error(error):
-        await ctx.send(DISCORD_SERVICE_UNAVAILABLE_MESSAGE, ephemeral=True)
+        await send_hybrid_error(ctx, content=DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
     elif isinstance(error, commands.CommandInvokeError):
-        await ctx.send("⚠️ An unexpected error occurred. Please try again later.", ephemeral=True)
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please try again later.")
     else:
-        await ctx.send("⚠️ An error occurred. Please try again later.", ephemeral=True)
+        await send_hybrid_error(ctx, content="⚠️ An error occurred. Please try again later.")
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
