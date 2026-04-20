@@ -12249,9 +12249,5 @@ if __name__ == "__main__":
         print(f"📌 Registered command: {cmd.name}, guilds: {cmd._guild_ids}")
     print(f"📊 Total commands registered: {len(list(bot.tree.walk_commands()))}")
     
-    @bot.hybrid_command(name="test", description="Test command for debugging")
-    async def test(ctx):
-        await ctx.send("✅ Test command works!")
-    
     print("Starting bot...")
     bot.run(TOKEN)
