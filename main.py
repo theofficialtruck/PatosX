@@ -109,6 +109,12 @@ fishes = [
     ("🐡 Pufferfish", 500)
 ]
 
+dig_rocks = [
+    ("amber shard", 240),
+    ("moonstone fragment", 650),
+    ("fossil core", 1000),
+]
+
 NUM_Q = 10
 PASS_PCT = 80.0
 
@@ -2247,6 +2253,13 @@ async def ensure_shop_items():
             "name_lower": "pickaxe",
             "price": 500,
             "description": "⛏️ Needed to go mining."
+        },
+        {
+            "_id": "shovel",
+            "name": "Shovel",
+            "name_lower": "shovel",
+            "price": 350,
+            "description": "🪏 Needed to dig for cool rocks."
         },
         {
             "_id": "rifle",
@@ -6691,7 +6704,10 @@ async def sell(ctx, *, item: str = None):
             "fish": 150,
             "iron ore": 200,
             "gold ore": 500,
-            "diamond": 1200
+            "diamond": 1200,
+            "amber shard": 240,
+            "moonstone fragment": 650,
+            "fossil core": 1000,
         }
 
         # --- SELL ALL INVENTORY + INVESTMENTS ---
@@ -6702,7 +6718,7 @@ async def sell(ctx, *, item: str = None):
                 description=(
                     "You are about to sell **ALL ores, hunted animals, and investments.**\n\n"
                     "This includes:\n"
-                    "• Rabbits, deer, bears, fish, ores, diamonds\n"
+                    "• Rabbits, deer, bears, fish, ores, diamonds, dig rocks\n"
                     "• All company investments\n\n"
                     "Are you sure you want to continue?"
                 ),
@@ -7234,6 +7250,57 @@ async def mine_error(ctx, error):
         return await send_hybrid_error(ctx, content=f"🕒 You can mine again in {minutes} minutes.")
     else:
         await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred while mining.")
+
+@bot.hybrid_command(name="dig", description="Dig for cool rocks.")
+@commands.cooldown(1, 3600, commands.BucketType.member)
+@blacklist_barrier()
+@xp_earn(12, 24)
+async def dig(ctx):
+    if not await check_channel(ctx, "economy_channel", "Economy"):
+        return
+    try:
+        user_id = f"{ctx.guild.id}-{ctx.author.id}"
+        data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+
+        inventory = data.get("inventory", [])
+
+        has_shovel = False
+        for item in inventory:
+            if isinstance(item, str) and item == "shovel":
+                has_shovel = True
+                break
+            elif isinstance(item, dict) and item.get("_id") == "shovel":
+                has_shovel = True
+                break
+
+        if not has_shovel:
+            ctx.command.reset_cooldown(ctx)
+            return await ctx.send("🪏 You need a shovel to dig!")
+
+        found_rock, value = random.choice(dig_rocks)
+        inventory.append(found_rock)
+
+        await economy_col.update_one(
+            {"_id": user_id},
+            {"$set": {"inventory": inventory}}
+        )
+
+        await ctx.send(f"🪏 You dug up **{found_rock}**! (Sell value: {value} coins)")
+
+    except Exception as e:
+        ctx.command.reset_cooldown(ctx)
+        await ctx.send("⚠️ Something went wrong while digging. Contact thetruck.")
+        print(f"[ERROR] dig command: {type(e).__name__} - {e}")
+        traceback.print_exc()
+
+@dig.error
+async def dig_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        total_seconds = int(error.retry_after)
+        minutes = total_seconds // 60
+        return await send_hybrid_error(ctx, content=f"🕒 You can dig again in {minutes} minutes.")
+    else:
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred while digging.")
 
 class AnswerButton(discord.ui.Button):
     def __init__(self, label: str, value: int, parent_view):
@@ -12150,6 +12217,7 @@ async def help(ctx):
         ("?investstatus", "Check your investments"),
         ("?hunt", "Go hunting for animals"),
         ("?mine", "Go mining for ores"),
+        ("?dig", "Dig for cool rocks"),
         ("?doorgame", "Try your luck through multiple doors!"),
         ("?ducktowers", "Play a game of Duck Towers!"),
         ("?mines", "Play Mines and test your luck!"),

@@ -393,6 +393,44 @@ async def test_xp_earn_awards_xp_on_success(monkeypatch):
     fake_xp_col.update_one.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_dig_requires_shovel_and_resets_cooldown(monkeypatch):
+    guild = SimpleNamespace(id=123)
+    author = SimpleNamespace(id=456)
+    command = SimpleNamespace(reset_cooldown=MagicMock())
+    ctx = SimpleNamespace(guild=guild, author=author, command=command, send=AsyncMock())
+
+    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"inventory": []}))
+    monkeypatch.setattr(main, "economy_col", SimpleNamespace(update_one=AsyncMock()))
+
+    await main.dig.callback(ctx)
+
+    command.reset_cooldown.assert_called_once_with(ctx)
+    ctx.send.assert_awaited_once_with("🪏 You need a shovel to dig!")
+    main.economy_col.update_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dig_adds_rock_to_inventory(monkeypatch):
+    guild = SimpleNamespace(id=123)
+    author = SimpleNamespace(id=456)
+    command = SimpleNamespace(reset_cooldown=MagicMock())
+    ctx = SimpleNamespace(guild=guild, author=author, command=command, send=AsyncMock())
+
+    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"inventory": ["shovel"]}))
+    monkeypatch.setattr(main.random, "choice", MagicMock(return_value=("amber shard", 240)))
+    monkeypatch.setattr(main, "economy_col", SimpleNamespace(update_one=AsyncMock()))
+
+    await main.dig.callback(ctx)
+
+    main.economy_col.update_one.assert_awaited_once()
+    sent_content = ctx.send.await_args.args[0]
+    assert "amber shard" in sent_content
+    command.reset_cooldown.assert_not_called()
+
+
 def test_get_investment_date_handles_invalid_or_missing_values():
     dt_missing = main.get_investment_date({})
     dt_invalid = main.get_investment_date({"date": "not-a-date"})
