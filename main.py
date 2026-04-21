@@ -663,16 +663,53 @@ def xp_earn(min_xp: int, max_xp: int):
 
         @functools.wraps(func)
         async def wrapper(ctx, *args, **kwargs):
-            # Execute the command first
-            result = await func(ctx, *args, **kwargs)
+            original_send = getattr(ctx, "send", None)
+            sent_error_response = False
+
+            def looks_like_failure_message(content: str) -> bool:
+                text = content.strip().lower()
+                if text.startswith(("❌", "⚠️", "⏰", "🕒")):
+                    return True
+                failure_markers = (
+                    " on cooldown",
+                    "try again in",
+                    "you need ",
+                    "don't need",
+                    "you don't have",
+                    "you cannot",
+                    "you can't",
+                    "invalid",
+                    "not found",
+                )
+                return any(marker in text for marker in failure_markers)
+
+            async def tracked_send(*send_args, **send_kwargs):
+                nonlocal sent_error_response
+                content = send_kwargs.get("content")
+                if content is None and send_args:
+                    content = send_args[0]
+
+                if isinstance(content, str):
+                    if looks_like_failure_message(content):
+                        sent_error_response = True
+                        setattr(ctx, "_skip_xp_award", True)
+
+                return await original_send(*send_args, **send_kwargs)
+
+            if callable(original_send):
+                setattr(ctx, "send", tracked_send)
+
+            try:
+                result = await func(ctx, *args, **kwargs)
+            finally:
+                if callable(original_send):
+                    setattr(ctx, "send", original_send)
             
-            # Check if command was successful (didn't raise exception)
-            # and it's in a guild
             if ctx.guild:
                 command_name = (ctx.command.name if ctx.command else func.__name__).lower()
                 if command_name in STAFF_HELP_COMMANDS:
                     return result
-                if getattr(ctx, "_skip_xp_award", False):
+                if sent_error_response or getattr(ctx, "_skip_xp_award", False):
                     setattr(ctx, "_skip_xp_award", False)
                     return result
 
@@ -1675,10 +1712,22 @@ async def load_sticky_messages():
         async for doc in cursor:
             if "message" in doc:
                 channel_key = int(doc["channel"])
-                last_sticky_msg[channel_key] = doc["message"]
+                last_sticky_msg[channel_key] = int(doc["message"])
         print(f"[Sticky Notes] Loaded {len(last_sticky_msg)} sticky message IDs from database")
     except Exception as e:
         print(f"[Sticky Notes] Error loading sticky messages: {e}")
+
+async def find_sticky_note_doc(guild_id: int, channel_id: int):
+    guild_str = str(guild_id)
+    channel_str = str(channel_id)
+    return await sticky_col.find_one({
+        "$or": [
+            {"guild": guild_str, "channel": channel_str},
+            {"guild": guild_id, "channel": channel_id},
+            {"guild": guild_str, "channel": channel_id},
+            {"guild": guild_id, "channel": channel_str},
+        ]
+    })
 
 async def load_onetime_channels():
     try:
@@ -1733,8 +1782,14 @@ async def check_and_repost_stickies():
                     last_sticky_msg[channel_id] = sent.id
                     
                     await sticky_col.update_one(
-                        {"guild": guild_id, "channel": str(channel_id)},
-                        {"$set": {"message": sent.id}}
+                        {"_id": doc["_id"]},
+                        {
+                            "$set": {
+                                "guild": str(guild_id),
+                                "channel": str(channel_id),
+                                "message": sent.id,
+                            }
+                        }
                     )
                     print(f"[Sticky Notes] Reposted sticky note in channel {channel_id}")
                 except Exception as e:
@@ -2370,7 +2425,13 @@ async def load_sticky_notes():
             
             await sticky_col.update_one(
                 {"_id": doc["_id"]},
-                {"$set": {"message": new_msg.id}}
+                {
+                    "$set": {
+                        "guild": str(doc["guild"]),
+                        "channel": str(doc["channel"]),
+                        "message": new_msg.id,
+                    }
+                }
             )
             
             last_sticky_msg[int(doc["channel"])] = new_msg.id
@@ -2383,7 +2444,7 @@ async def load_sticky_notes():
     print(f"✅ Loaded {loaded_count} sticky notes")
 
 async def repost_sticky_note(channel_id, guild_id):
-    doc = await sticky_col.find_one({"guild": str(guild_id), "channel": str(channel_id)})
+    doc = await find_sticky_note_doc(int(guild_id), int(channel_id))
     if not doc:
         return
     
@@ -2400,9 +2461,16 @@ async def repost_sticky_note(channel_id, guild_id):
         new_msg = await channel.send(doc["text"])
         
         await sticky_col.update_one(
-            {"guild": str(guild_id), "channel": str(channel_id)},
-            {"$set": {"message": new_msg.id}}
+            {"_id": doc["_id"]},
+            {
+                "$set": {
+                    "guild": str(guild_id),
+                    "channel": str(channel_id),
+                    "message": new_msg.id,
+                }
+            }
         )
+        last_sticky_msg[int(channel_id)] = new_msg.id
         
     except Exception as e:
         print(f"❌ Failed to repost sticky note: {e}")
@@ -2525,12 +2593,12 @@ async def on_message(message):
         await message.reply(reply)
     
     try:
-        doc = await sticky_col.find_one({"guild": str(message.guild.id), "channel": str(message.channel.id)})
+        doc = await find_sticky_note_doc(message.guild.id, message.channel.id)
         if doc:
-            old_id = last_sticky_msg.get(message.channel.id)
+            old_id = last_sticky_msg.get(message.channel.id) or doc.get("message")
             if old_id:
                 try:
-                    old = await message.channel.fetch_message(old_id)
+                    old = await message.channel.fetch_message(int(old_id))
                     await old.delete()
                 except discord.NotFound:
                     print(f"[sticky note] Previous message {old_id} not found, creating new one")
@@ -2543,8 +2611,14 @@ async def on_message(message):
             last_sticky_msg[message.channel.id] = sent.id
             
             await sticky_col.update_one(
-                {"guild": str(message.guild.id), "channel": str(message.channel.id)},
-                {"$set": {"message": sent.id}}
+                {"_id": doc["_id"]},
+                {
+                    "$set": {
+                        "guild": str(message.guild.id),
+                        "channel": str(message.channel.id),
+                        "message": sent.id,
+                    }
+                }
             )
     except Exception as e:
         print(f"[sticky note error] {e}")
@@ -6889,6 +6963,13 @@ async def invest(ctx, company: str = None, amount: str = None):
         
         data = await get_user(ctx, ctx.guild.id, ctx.author.id)
         wallet = data.get("wallet", 0)
+        user_id = f"{ctx.guild.id}-{ctx.author.id}"
+        user_investments = await investments_col.count_documents({"user_id": user_id})
+
+        if user_investments >= 5:
+            return await ctx.send(
+                "❌ You can only have up to **5 active investments** at a time. Sell some before investing again."
+            )
         
         if amount.lower() == "all":
             invest_amount = wallet
@@ -6906,7 +6987,6 @@ async def invest(ctx, company: str = None, amount: str = None):
         if invest_amount > wallet:
             return await ctx.send("❌ You don't have enough coins!")
         
-        user_id = f"{ctx.guild.id}-{ctx.author.id}"
         await create_investment(user_id, company, invest_amount)
         
         await subtract_balance(ctx.author.id, ctx.guild.id, invest_amount)
@@ -7032,21 +7112,6 @@ async def investstatus(ctx):
         )
 
     await ctx.send(embed=embed)
-
-
-@bot.hybrid_command(name="investmigrate", description="Backfill missing investment dates from legacy timestamps.")
-@staffperm("economy")
-@staff_only()
-async def investmigrate(ctx):
-    stats = await backfill_investment_dates_from_timestamp()
-    await ctx.send(
-        "✅ Investment date backfill completed.\n"
-        f"Scanned: `{stats['scanned']}`\n"
-        f"Updated: `{stats['updated']}`\n"
-        f"Invalid timestamp: `{stats['invalid_timestamp']}`\n"
-        f"Skipped (conflict/already set): `{stats['skipped_conflict']}`\n"
-        f"Write errors: `{stats['write_errors']}`"
-    )
 
 @bot.hybrid_command(name="hunt", description="Go hunting for animals.")
 @commands.cooldown(1, 3600, commands.BucketType.member)
@@ -7940,6 +8005,8 @@ def is_prefix(ctx):
 
 async def send_hybrid_error(ctx, *, content=None, embed=None, delete_after=None):
     """Send errors privately for slash invocations and normally for prefix invocations."""
+    setattr(ctx, "_skip_xp_award", True)
+
     if is_prefix(ctx):
         return await ctx.send(content=content, embed=embed, delete_after=delete_after)
 
@@ -11012,10 +11079,10 @@ async def stickynote(ctx):
     try:
         reply = await bot.wait_for("message", check=check, timeout=60)
 
-        doc = await sticky_col.find_one({"guild": str(ctx.guild.id), "channel": str(ctx.channel.id)})
+        doc = await find_sticky_note_doc(ctx.guild.id, ctx.channel.id)
         if doc:
             try:
-                old_msg = await ctx.channel.fetch_message(doc["message"])
+                old_msg = await ctx.channel.fetch_message(int(doc["message"]))
                 await old_msg.delete()
             except discord.NotFound:
                 print(f"[stickynote] Previous message {doc['message']} not found, creating new one")
@@ -11025,11 +11092,25 @@ async def stickynote(ctx):
                 print(f"[stickynote delete error] {e}")
 
         sent = await ctx.send(reply.content)
-        await sticky_col.update_one(
-            {"guild": str(ctx.guild.id), "channel": str(ctx.channel.id)},
-            {"$set": {"text": reply.content, "message": sent.id}},
-            upsert=True
-        )
+        if doc:
+            await sticky_col.update_one(
+                {"_id": doc["_id"]},
+                {
+                    "$set": {
+                        "guild": str(ctx.guild.id),
+                        "channel": str(ctx.channel.id),
+                        "text": reply.content,
+                        "message": sent.id,
+                    }
+                }
+            )
+        else:
+            await sticky_col.update_one(
+                {"guild": str(ctx.guild.id), "channel": str(ctx.channel.id)},
+                {"$set": {"text": reply.content, "message": sent.id}},
+                upsert=True
+            )
+        last_sticky_msg[ctx.channel.id] = sent.id
         await ctx.send("✅ Sticky note created.")
     except asyncio.TimeoutError:
         await ctx.send("❌ Timeout. Sticky note creation cancelled.")
@@ -11038,10 +11119,10 @@ async def stickynote(ctx):
 @staffperm("stickynotes")
 @staff_only()
 async def unstickynote(ctx):
-    doc = await sticky_col.find_one({"guild": str(ctx.guild.id), "channel": str(ctx.channel.id)})
+    doc = await find_sticky_note_doc(ctx.guild.id, ctx.channel.id)
     if doc:
         try:
-            msg = await ctx.channel.fetch_message(doc["message"])
+            msg = await ctx.channel.fetch_message(int(doc["message"]))
             await msg.delete()
         except discord.NotFound:
             print(f"[unstickynote] Message {doc['message']} not found, removing from database")
@@ -11052,7 +11133,8 @@ async def unstickynote(ctx):
             print(f"[unstickynote error] {e}")
             await ctx.send("❌ Could not remove stickynote.")
             return
-        sticky_col.delete_one({"guild": str(ctx.guild.id), "channel": str(ctx.channel.id)})
+        await sticky_col.delete_one({"_id": doc["_id"]})
+        last_sticky_msg.pop(ctx.channel.id, None)
         await ctx.send("✅ Sticky note removed.")
     else:
         await ctx.send("⚠️ No sticky note set for this channel.")
@@ -12090,24 +12172,6 @@ async def help(ctx):
     view = CommandPages(pages, is_staff)
     ctx.bot.help_pages = pages
     await ctx.send(embed=pages[0], view=view)
-
-@bot.command()
-async def sync(ctx):
-    try:
-        print("✅ Manual command sync activated")
-        synced = await asyncio.wait_for(bot.tree.sync(), timeout=30.0)
-        await ctx.send(f"✅ Synced **{len(synced)}** global commands!")
-    except asyncio.TimeoutError:
-        await ctx.send("⚠️ Sync timed out - Discord may be rate limiting. Try again in a few minutes.")
-    except discord.HTTPException as e:
-        if e.status == 429:
-            retry_after = e.retry_after if hasattr(e, 'retry_after') else 300
-            await ctx.send(f"⚠️ Rate limited, wait {retry_after}s and try again.")
-        else:
-            await ctx.send(f"⚠️ Discord API error: `{e}`")
-    except Exception as e:
-        await ctx.send(f"⚠️ Sync failed: `{e}`")
-        print(f"Sync error details: {type(e).__name__} - {e}")
 
 @bot.command()
 @staffperm("stopbot")

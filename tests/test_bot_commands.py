@@ -286,6 +286,113 @@ async def test_investstatus_handles_legacy_timestamp_without_date(monkeypatch):
     assert "Date: <t:" in sent_embed.fields[0].value
 
 
+@pytest.mark.asyncio
+async def test_invest_slash_respects_active_investment_limit(monkeypatch):
+    guild = SimpleNamespace(id=123)
+    author = SimpleNamespace(id=456)
+    ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
+
+    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"wallet": 5000}))
+    monkeypatch.setattr(main, "create_investment", AsyncMock())
+    monkeypatch.setattr(main, "subtract_balance", AsyncMock())
+
+    investments_col = SimpleNamespace(count_documents=AsyncMock(return_value=5))
+    monkeypatch.setattr(main, "investments_col", investments_col)
+
+    await main.invest.callback(ctx, "Techify", "500")
+
+    ctx.send.assert_awaited_once_with(
+        "❌ You can only have up to **5 active investments** at a time. Sell some before investing again."
+    )
+    main.create_investment.assert_not_awaited()
+    main.subtract_balance.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_find_sticky_note_doc_queries_legacy_and_canonical_ids(monkeypatch):
+    expected_doc = {"_id": "sticky-1", "guild": 123, "channel": 456, "text": "hello", "message": 111}
+
+    class _StickyCol:
+        async def find_one(self, query):
+            assert "$or" in query
+            assert {"guild": "123", "channel": "456"} in query["$or"]
+            assert {"guild": 123, "channel": 456} in query["$or"]
+            return expected_doc
+
+    monkeypatch.setattr(main, "sticky_col", _StickyCol())
+    doc = await main.find_sticky_note_doc(123, 456)
+    assert doc == expected_doc
+
+
+@pytest.mark.asyncio
+async def test_unstickynote_removes_doc_and_cache(monkeypatch):
+    channel = SimpleNamespace(id=456)
+    message = SimpleNamespace(delete=AsyncMock())
+    channel.fetch_message = AsyncMock(return_value=message)
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(id=123),
+        channel=channel,
+        send=AsyncMock(),
+    )
+
+    main.last_sticky_msg[456] = 99999
+    monkeypatch.setattr(
+        main,
+        "find_sticky_note_doc",
+        AsyncMock(return_value={"_id": "sticky-1", "message": 99999}),
+    )
+    monkeypatch.setattr(main, "sticky_col", SimpleNamespace(delete_one=AsyncMock()))
+
+    await main.unstickynote.callback(ctx)
+
+    main.sticky_col.delete_one.assert_awaited_once_with({"_id": "sticky-1"})
+    assert 456 not in main.last_sticky_msg
+    ctx.send.assert_awaited_with("✅ Sticky note removed.")
+
+
+@pytest.mark.asyncio
+async def test_xp_earn_skips_xp_when_command_sends_error(monkeypatch):
+    async def _failing_cmd(ctx):
+        await ctx.send("❌ You cannot give coins to yourself.")
+
+    decorated = main.xp_earn(5, 5)(_failing_cmd)
+    fake_xp_col = SimpleNamespace(update_one=AsyncMock())
+    monkeypatch.setattr(main, "xp_col", fake_xp_col)
+
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(id=123),
+        author=SimpleNamespace(id=456, mention="@tester"),
+        command=SimpleNamespace(name="give"),
+        send=AsyncMock(),
+    )
+
+    await decorated(ctx)
+
+    fake_xp_col.update_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_xp_earn_awards_xp_on_success(monkeypatch):
+    async def _successful_cmd(ctx):
+        await ctx.send("✅ Success")
+
+    decorated = main.xp_earn(7, 7)(_successful_cmd)
+    fake_xp_col = SimpleNamespace(update_one=AsyncMock())
+    monkeypatch.setattr(main, "xp_col", fake_xp_col)
+
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(id=123),
+        author=SimpleNamespace(id=456, mention="@tester"),
+        command=SimpleNamespace(name="work"),
+        send=AsyncMock(),
+    )
+
+    await decorated(ctx)
+
+    fake_xp_col.update_one.assert_awaited_once()
+
+
 def test_get_investment_date_handles_invalid_or_missing_values():
     dt_missing = main.get_investment_date({})
     dt_invalid = main.get_investment_date({"date": "not-a-date"})
