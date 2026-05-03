@@ -1,11 +1,13 @@
 # test_bot_commands.py
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock
-from datetime import datetime
-from types import SimpleNamespace
-import main
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+import main
+
 
 @pytest.mark.asyncio
 async def test_warn_command():
@@ -310,6 +312,21 @@ async def test_invest_slash_respects_active_investment_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_calculate_investment_value_returns_exact_principal():
+    inv = {
+        "_id": "inv-1",
+        "company": "Oceanic",
+        "amount": 25_000,
+        "date": "2026-01-01T00:00:00+00:00",
+        "history": [999999, -500000],
+    }
+
+    value = await main.calculate_investment_value(inv)
+
+    assert value == 25_000
+
+
+@pytest.mark.asyncio
 async def test_find_sticky_note_doc_queries_legacy_and_canonical_ids(monkeypatch):
     expected_doc = {"_id": "sticky-1", "guild": 123, "channel": 456, "text": "hello", "message": 111}
 
@@ -431,6 +448,103 @@ async def test_dig_adds_rock_to_inventory(monkeypatch):
     command.reset_cooldown.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_bugcatch_requires_butterfly_net_and_resets_cooldown(monkeypatch):
+    guild = SimpleNamespace(id=123)
+    author = SimpleNamespace(id=456)
+    command = SimpleNamespace(reset_cooldown=MagicMock())
+    ctx = SimpleNamespace(guild=guild, author=author, command=command, send=AsyncMock())
+
+    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"inventory": []}))
+    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(main, "economy_col", SimpleNamespace(update_one=AsyncMock()))
+
+    await main.bugcatch.callback(ctx)
+
+    command.reset_cooldown.assert_called_once_with(ctx)
+    sent_content = ctx.send.await_args.args[0]
+    assert "Butterfly Net" in sent_content
+    main.add_balance.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bugcatch_sells_immediately_and_breaks_net(monkeypatch):
+    guild = SimpleNamespace(id=123)
+    author = SimpleNamespace(id=456)
+    command = SimpleNamespace(reset_cooldown=MagicMock())
+    ctx = SimpleNamespace(guild=guild, author=author, command=command, send=AsyncMock())
+
+    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        main,
+        "get_user",
+        AsyncMock(return_value={"inventory": [{"_id": "butterfly net", "uses_left": 1}]}),
+    )
+    monkeypatch.setattr(main.random, "choice", MagicMock(return_value=("🦋 butterfly", 180)))
+    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(main, "economy_col", SimpleNamespace(update_one=AsyncMock()))
+
+    await main.bugcatch.callback(ctx)
+
+    main.add_balance.assert_awaited_once_with(456, 123, 180)
+    main.economy_col.update_one.assert_awaited_once_with(
+        {"_id": "123-456"},
+        {"$set": {"inventory": []}},
+    )
+    sent_content = ctx.send.await_args.args[0]
+    assert "sold it immediately" in sent_content
+    assert "Butterfly Net" in sent_content
+    command.reset_cooldown.assert_not_called()
+
+
+def test_consume_tool_use_breaks_and_removes_tool():
+    inventory = [{"_id": "lockpick", "uses_left": 1}]
+
+    consumed, broke, uses_left = main.consume_tool_use(inventory, "lockpick")
+
+    assert consumed is True
+    assert broke is True
+    assert uses_left == 0
+    assert inventory == []
+
+
+@pytest.mark.asyncio
+async def test_inventory_shows_tool_durability(monkeypatch):
+    guild = SimpleNamespace(id=123)
+    author = SimpleNamespace(id=456, display_name="Tester")
+    ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
+
+    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        main,
+        "get_user",
+        AsyncMock(return_value={
+            "inventory": [
+                {"_id": "shovel", "uses_left": 100},
+                {"_id": "pet_duck", "uses_left": 2},
+            ]
+        }),
+    )
+
+    class _ShopCol:
+        async def find_one(self, query):
+            if query == {"_id": "pet_duck"}:
+                return {"name": "Pet Duck", "description": "Duck buddy"}
+            if query == {"name_lower": "shovel"}:
+                return {"name": "Shovel", "description": "Tool"}
+            return None
+
+    monkeypatch.setattr(main, "shop_col", _ShopCol())
+
+    await main.inventory.callback(ctx)
+
+    embed = ctx.send.await_args.kwargs["embed"]
+    assert embed is not None
+    assert any("Shovel" in field.name for field in embed.fields)
+    assert any("100/336" in field.value for field in embed.fields)
+
+
 def test_get_investment_date_handles_invalid_or_missing_values():
     dt_missing = main.get_investment_date({})
     dt_invalid = main.get_investment_date({"date": "not-a-date"})
@@ -492,6 +606,59 @@ async def test_backfill_investment_dates_from_timestamp_is_non_destructive(monke
     assert docs[0].get("date") == "2026-04-10T10:00:00+00:00"
     assert docs[1].get("date") is None
     assert docs[2]["date"] == "2026-04-09T10:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_backfill_legacy_tool_durability_converts_legacy_strings(monkeypatch):
+    docs = [
+        {"_id": "u1", "inventory": ["shovel", "rabbit"]},
+        {"_id": "u2", "inventory": [{"_id": "laptop", "uses_left": 3}]},
+    ]
+
+    class _Result:
+        def __init__(self, modified_count):
+            self.modified_count = modified_count
+
+    class _Cursor:
+        def __init__(self, data):
+            self._iter = iter(data)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._iter)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    class _EconomyCol:
+        def __init__(self, data):
+            self.data = data
+
+        def find(self, query):
+            return _Cursor(self.data)
+
+        async def update_one(self, query, update):
+            for d in self.data:
+                if d.get("_id") == query.get("_id"):
+                    d["inventory"] = update["$set"]["inventory"]
+                    return _Result(1)
+            return _Result(0)
+
+    fake_col = _EconomyCol(docs)
+    monkeypatch.setattr(main, "economy_col", fake_col)
+
+    stats = await main.backfill_legacy_tool_durability()
+
+    assert stats["scanned"] == 2
+    assert stats["updated"] == 1
+    assert stats["write_errors"] == 0
+    assert docs[0]["inventory"][0] == {
+        "_id": "shovel",
+        "uses_left": main.TOOL_DURABILITIES["shovel"],
+    }
+    assert docs[1]["inventory"][0] == {"_id": "laptop", "uses_left": 3}
 
 
 @pytest.mark.asyncio
