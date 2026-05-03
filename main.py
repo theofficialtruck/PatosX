@@ -240,7 +240,8 @@ print(f"🔧 Tree object: {bot.tree}")
 
 print("📊 Checking registered commands...")
 for cmd in bot.tree.walk_commands():
-    print(f"📌 Registered command: {cmd.name}, guilds: {cmd.guild_ids}")
+    guild_scope = getattr(cmd, "guild_ids", getattr(cmd, "_guild_ids", None))
+    print(f"📌 Registered command: {cmd.name}, guilds: {guild_scope}")
 print(f"📊 Total commands registered: {len(list(bot.tree.walk_commands()))}")
 
 @bot.event
@@ -3347,7 +3348,8 @@ async def on_ready():
             print(f"❌ Failed to sync global commands: {e}")
 
         for cmd in bot.tree.walk_commands():
-            print(f"📌 Registered command: {cmd.name}, guilds: {cmd.guild_ids}")
+            guild_scope = getattr(cmd, "guild_ids", getattr(cmd, "_guild_ids", None))
+            print(f"📌 Registered command: {cmd.name}, guilds: {guild_scope}")
 
     asyncio.create_task(sync_hybrid_commands())
         
@@ -6255,7 +6257,7 @@ async def delitem(ctx, *, name: str):
 @app_commands.describe(item="The item to buy (e.g., 'fishing rod', 'rifle', 'laptop'). Use '/shop' to see available items.")
 @blacklist_barrier()
 @xp_earn(8, 16)
-async def buy(ctx, item: str = None):
+async def buy(ctx, *, item: str = None):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     if not item:
