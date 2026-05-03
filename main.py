@@ -7852,7 +7852,7 @@ async def investstatus(ctx):
     if not investments:
         return await ctx.send("❌ You don’t have any active investments.")
 
-    embed = discord.Embed(a
+    embed = discord.Embed(
         title=f"📊 {ctx.author.display_name}'s Investments",
         color=discord.Color.blue()
     )
