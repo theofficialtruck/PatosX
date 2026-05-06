@@ -297,8 +297,16 @@ async def test_investstatus_handles_legacy_timestamp_without_date(monkeypatch):
 
     await cog.investstatus.callback(cog, ctx)
 
-    ctx.send.assert_awaited_once()
-    sent_embed = ctx.send.await_args.kwargs["embed"]
+    # The investstatus callback sends an embed; the @xp_earn wrapper then
+    # sends a second "you earned X xp" message. We only care about the
+    # embed assertion here.
+    assert ctx.send.await_count >= 1
+    embed_call = next(
+        (c for c in ctx.send.await_args_list if c.kwargs.get("embed")),
+        None,
+    )
+    assert embed_call is not None, "expected an embed to be sent"
+    sent_embed = embed_call.kwargs["embed"]
     assert sent_embed is not None
     assert sent_embed.fields
     assert "Date: <t:" in sent_embed.fields[0].value

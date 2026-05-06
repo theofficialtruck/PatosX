@@ -12,7 +12,7 @@ from discord.ext import commands
 from discord.ext.commands import BucketType, cooldown
 
 from bot.config.secrets import TENOR_API_KEY
-from bot.database import config_col
+from bot.database import config_col, xp_col
 from bot.utils.checks import blacklist_barrier
 from bot.views.leaderboard import QuackTopView
 
@@ -206,6 +206,39 @@ class FunCog(commands.Cog, name="Fun"):
         )
         view = QuackTopView(ctx, top_quackers)
         await ctx.send(embed=view.get_embed(), view=view)
+
+    @commands.command(
+        name="xp",
+        description="Check how much XP you (or another member) have earned.",
+    )
+    async def xp(
+        self,
+        ctx: commands.Context,
+        member: discord.Member | None = None,
+    ) -> None:
+        """Diagnostic-friendly XP lookup.
+
+        Lets a user verify the XP system is actually persisting their
+        earnings even if they missed the announcement message in chat.
+
+        Prefix-only so we stay under Discord's 100-slash-command global cap.
+        """
+        target = member or ctx.author
+        key = f"{ctx.guild.id}-{target.id}"
+        doc = await xp_col.find_one({"_id": key})
+        xp_value = doc.get("xp", 0) if doc else 0
+
+        embed = discord.Embed(
+            title=f"⭐ XP — {target.display_name}",
+            description=f"**{xp_value:,} XP**",
+            color=discord.Color.gold(),
+        )
+        embed.set_thumbnail(url=target.display_avatar.url)
+        if target.id == ctx.author.id:
+            embed.set_footer(
+                text="Use any economy/game command to earn XP!"
+            )
+        await ctx.send(embed=embed)
 
 
 async def setup(bot: commands.Bot) -> None:

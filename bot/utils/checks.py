@@ -117,6 +117,20 @@ def xp_earn(min_xp: int, max_xp: int):
     Works on both free-standing functions and cog methods. The wrapper
     introspects ``args`` to find the ``Context`` regardless of whether
     ``self`` is also present.
+
+    Robustness notes
+    ----------------
+    The decorator is intentionally fault-tolerant — a flaky Mongo write or
+    a Discord permission error must never crash the underlying command
+    callback. We:
+
+    * wrap the DB update in its own try/except so the message still fires
+      even if Mongo is slow or briefly unavailable;
+    * try ``ctx.send`` first (which is hybrid-aware in discord.py 2.x and
+      will route through the interaction followup when needed) and only
+      fall back to the raw interaction followup if it fails;
+    * print a one-line console marker on every award so production logs
+      show whether the system is actually running.
     """
 
     def decorator(func):
@@ -132,7 +146,7 @@ def xp_earn(min_xp: int, max_xp: int):
 
             result = await func(*args, **kwargs)
 
-            if not ctx.guild:
+            if not getattr(ctx, "guild", None):
                 return result
 
             command = getattr(ctx, "command", None)
@@ -150,30 +164,61 @@ def xp_earn(min_xp: int, max_xp: int):
             guild_id = str(ctx.guild.id)
             key = f"{guild_id}-{user_id}"
 
-            await xp_col.update_one(
-                {"_id": key},
-                {
-                    "$inc": {"xp": xp_gained},
-                    "$set": {"guild": guild_id, "user": user_id},
-                },
-                upsert=True,
-            )
-
+            # 1. Persist the XP award. If Mongo briefly fails we still want
+            #    the user-facing message to fire.
             try:
+                await xp_col.update_one(
+                    {"_id": key},
+                    {
+                        "$inc": {"xp": xp_gained},
+                        "$set": {"guild": guild_id, "user": user_id},
+                    },
+                    upsert=True,
+                )
+                print(
+                    f"[XP] Awarded {xp_gained} xp to {ctx.author} "
+                    f"({ctx.author.id}) for /{command_name}"
+                )
+            except Exception as exc:
+                print(
+                    f"[XP Decorator] DB update failed for {ctx.author.id} "
+                    f"on /{command_name}: {type(exc).__name__}: {exc}"
+                )
+
+            # 2. Send the announcement. ``ctx.send`` is hybrid-aware and will
+            #    route through interaction followup when needed, so it's the
+            #    safest first attempt. Fall back to the raw followup channel
+            #    only if ``ctx.send`` raises.
+            try:
+                mention = getattr(ctx.author, "mention", f"<@{ctx.author.id}>")
                 xp_msg = (
-                    f"{ctx.author.mention}, you earned **{xp_gained} xp** "
+                    f"{mention}, you earned **{xp_gained} xp** "
                     f"by using `/{command_name}`"
                 )
-                if (
-                    hasattr(ctx, "interaction")
-                    and ctx.interaction
-                    and ctx.interaction.response.is_done()
-                ):
-                    await ctx.interaction.followup.send(xp_msg)
-                else:
+                try:
                     await ctx.send(xp_msg)
-            except Exception as exc:  # pragma: no cover
-                print(f"[XP Decorator Error] Could not send XP message: {exc}")
+                except Exception as primary_exc:
+                    interaction = getattr(ctx, "interaction", None)
+                    if interaction is not None:
+                        try:
+                            await interaction.followup.send(xp_msg)
+                            return result
+                        except Exception as followup_exc:
+                            print(
+                                f"[XP Decorator] Followup send failed for "
+                                f"{ctx.author.id} on /{command_name}: "
+                                f"{type(followup_exc).__name__}: {followup_exc}"
+                            )
+                    print(
+                        f"[XP Decorator] Could not send XP message for "
+                        f"{ctx.author.id} on /{command_name}: "
+                        f"{type(primary_exc).__name__}: {primary_exc}"
+                    )
+            except Exception as exc:  # last-resort safety net
+                print(
+                    f"[XP Decorator] Unexpected error building XP message "
+                    f"for /{command_name}: {type(exc).__name__}: {exc}"
+                )
 
             return result
 
