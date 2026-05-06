@@ -114,6 +114,8 @@ def xp_earn(min_xp: int, max_xp: int):
     * staff helper commands (kick/ban/etc.) that shouldn't farm XP
     * commands that set ``ctx._skip_xp_award`` to flag an early exit
 
+    XP is awarded silently; this decorator does not send a second message.
+
     Works on both free-standing functions and cog methods. The wrapper
     introspects ``args`` to find the ``Context`` regardless of whether
     ``self`` is also present.
@@ -158,27 +160,6 @@ def xp_earn(min_xp: int, max_xp: int):
                 },
                 upsert=True,
             )
-
-            try:
-                cmd_ref = (
-                    f"/{command_name}"
-                    if (hasattr(ctx, "interaction") and ctx.interaction)
-                    else f"{ctx.prefix}{command_name}"
-                )
-                xp_msg = (
-                    f"{ctx.author.mention}, you earned **{xp_gained} xp** "
-                    f"by using `{cmd_ref}`"
-                )
-                if (
-                    hasattr(ctx, "interaction")
-                    and ctx.interaction
-                    and ctx.interaction.response.is_done()
-                ):
-                    await ctx.interaction.followup.send(xp_msg)
-                else:
-                    await ctx.send(xp_msg)
-            except Exception as exc:  # pragma: no cover
-                print(f"[XP Decorator Error] Could not send XP message: {exc}")
 
             return result
 

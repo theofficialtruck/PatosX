@@ -42,7 +42,8 @@ class MessageEventsCog(commands.Cog, name="MessageEvents"):
         if message.author.bot:
             return
 
-        await self.bot.process_commands(message)
+        # commands.Bot already calls process_commands in its own on_message.
+        # Calling it here again makes every prefix command run twice.
 
         if not message.guild:
             return
