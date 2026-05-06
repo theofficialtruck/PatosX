@@ -108,13 +108,20 @@ def maintenance_bypass():
 
 
 def xp_earn(min_xp: int, max_xp: int):
-    """Award random XP after a successful command invocation.
+    """Award random XP after a *successful* command invocation.
 
     Skips:
     * staff helper commands (kick/ban/etc.) that shouldn't farm XP
     * commands that set ``ctx._skip_xp_award`` to flag an early exit
+    * non-guild contexts (DMs / no Context resolved)
 
-    XP is awarded silently; this decorator does not send a second message.
+    Awards XP exactly once and sends a single chat announcement so users
+    can see the system is working. Both the DB update and the message
+    send are guarded with their own ``ctx._xp_already_awarded`` sentinel,
+    which makes the decorator idempotent — even if discord.py somehow
+    invokes the callback twice for one user message (the historical
+    duplicate-``process_commands`` bug, for example) the second pass
+    becomes a no-op.
 
     Works on both free-standing functions and cog methods. The wrapper
     introspects ``args`` to find the ``Context`` regardless of whether
@@ -124,7 +131,10 @@ def xp_earn(min_xp: int, max_xp: int):
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            # Resolve context without depending on concrete context subclasses.
+            # 1. Resolve the Context without depending on a concrete subclass.
+            #    Cog methods get `(self, ctx, ...)`; free functions get
+            #    `(ctx, ...)`. We treat the first arg with both `.guild` and
+            #    `.author` as the context.
             ctx = kwargs.get("ctx")
             if ctx is None and args:
                 first = args[0]
@@ -134,11 +144,23 @@ def xp_earn(min_xp: int, max_xp: int):
                     second = args[1]
                     if hasattr(second, "guild") and hasattr(second, "author"):
                         ctx = second
-            if ctx is None:
-                result = await func(*args, **kwargs)
-                return result
 
+            # If we couldn't find a context, just run the inner function.
+            if ctx is None:
+                return await func(*args, **kwargs)
+
+            # 2. Run the underlying command. If the command raises (or
+            #    discord.py blocks it via cooldown / check failure before we
+            #    even get here), XP is *not* awarded — that's the whole point
+            #    of putting the award after the await.
             result = await func(*args, **kwargs)
+
+            # 3. Idempotency guard: if this Context already had XP awarded
+            #    once during the same invocation, do nothing. This protects
+            #    against a stale duplicate-``process_commands`` regression.
+            if getattr(ctx, "_xp_already_awarded", False):
+                return result
+            ctx._xp_already_awarded = True
 
             guild = getattr(ctx, "guild", None)
             author = getattr(ctx, "author", None)
@@ -160,6 +182,8 @@ def xp_earn(min_xp: int, max_xp: int):
             guild_id = str(guild.id)
             key = f"{guild_id}-{user_id}"
 
+            # 4. Persist the XP. A flaky Mongo write should never crash the
+            #    invocation that just succeeded; log and continue.
             try:
                 await xp_col.update_one(
                     {"_id": key},
@@ -169,8 +193,51 @@ def xp_earn(min_xp: int, max_xp: int):
                     },
                     upsert=True,
                 )
+                print(
+                    f"[XP] Awarded {xp_gained} xp to {author} "
+                    f"({author.id}) for /{command_name}"
+                )
             except Exception as exc:  # pragma: no cover
-                print(f"[XP Decorator Error] Could not award XP: {exc}")
+                print(
+                    f"[XP Decorator] DB update failed for {author.id} "
+                    f"on /{command_name}: {type(exc).__name__}: {exc}"
+                )
+
+            # 5. Announce the award. ``ctx.send`` is hybrid-aware in
+            #    discord.py 2.x and routes through the interaction followup
+            #    automatically when needed. We try it first and only fall
+            #    back to the raw followup if it raises (e.g. permissions or
+            #    expired interaction).
+            try:
+                mention = getattr(author, "mention", f"<@{author.id}>")
+                xp_msg = (
+                    f"{mention}, you earned **{xp_gained} xp** "
+                    f"by using `/{command_name}`"
+                )
+                try:
+                    await ctx.send(xp_msg)
+                except Exception as primary_exc:
+                    interaction = getattr(ctx, "interaction", None)
+                    if interaction is not None:
+                        try:
+                            await interaction.followup.send(xp_msg)
+                            return result
+                        except Exception as followup_exc:
+                            print(
+                                f"[XP Decorator] Followup send failed for "
+                                f"{author.id} on /{command_name}: "
+                                f"{type(followup_exc).__name__}: {followup_exc}"
+                            )
+                    print(
+                        f"[XP Decorator] Could not send XP message for "
+                        f"{author.id} on /{command_name}: "
+                        f"{type(primary_exc).__name__}: {primary_exc}"
+                    )
+            except Exception as exc:  # pragma: no cover
+                print(
+                    f"[XP Decorator] Unexpected error building XP message "
+                    f"for /{command_name}: {type(exc).__name__}: {exc}"
+                )
 
             return result
 
