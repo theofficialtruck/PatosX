@@ -124,17 +124,24 @@ def xp_earn(min_xp: int, max_xp: int):
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            # Cog methods receive `(self, ctx, ...)`; free functions receive
-            # `(ctx, ...)`. Detect which case we're in by looking for a
-            # commands.Cog at args[0].
-            if args and isinstance(args[0], commands.Cog):
+            # Resolve Context robustly across bound methods and keyword-passed ctx.
+            ctx = kwargs.get("ctx")
+            if ctx is None:
+                for arg in args:
+                    if isinstance(arg, commands.Context):
+                        ctx = arg
+                        break
+            if ctx is None and args and isinstance(args[0], commands.Cog) and len(args) > 1:
                 ctx = args[1]
-            else:
-                ctx = args[0]
+            if ctx is None:
+                result = await func(*args, **kwargs)
+                return result
 
             result = await func(*args, **kwargs)
 
-            if not ctx.guild:
+            guild = getattr(ctx, "guild", None)
+            author = getattr(ctx, "author", None)
+            if not guild or not author:
                 return result
 
             command = getattr(ctx, "command", None)
@@ -148,8 +155,8 @@ def xp_earn(min_xp: int, max_xp: int):
                 return result
 
             xp_gained = random.randint(min_xp, max_xp)
-            user_id = str(ctx.author.id)
-            guild_id = str(ctx.guild.id)
+            user_id = str(author.id)
+            guild_id = str(guild.id)
             key = f"{guild_id}-{user_id}"
 
             await xp_col.update_one(
