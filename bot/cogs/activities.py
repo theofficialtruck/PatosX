@@ -312,7 +312,7 @@ class ActivitiesCog(commands.Cog, name="Activities"):
             if shovel_data is None or shovel_index is None:
                 ctx._skip_xp_award = True
                 ctx.command.reset_cooldown(ctx)
-                return await ctx.send("🪏 You need a shovel to dig!")
+                return await ctx.send("🕳️ You need a shovel to dig!")
 
             find_name, coins = random.choice(DIG_REWARDS)
             await add_balance(ctx.author.id, ctx.guild.id, coins)
@@ -327,10 +327,10 @@ class ActivitiesCog(commands.Cog, name="Activities"):
             durability_text = (
                 " Your shovel broke after this dig."
                 if broke
-                else f" (🪏 Shovel durability: {remaining_uses})"
+                else f" (🕳️ Shovel durability: {remaining_uses})"
             )
             await ctx.send(
-                f"🪏 You dug up a **{find_name}** and sold it for **{coins} coins**!"
+                f"🕳️ You dug up a **{find_name}** and sold it for **{coins} coins**!"
                 f"{durability_text}"
             )
         except Exception as exc:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import discord
 
 from bot.database import economy_col
@@ -47,6 +49,8 @@ async def process_shop_purchase(
     role_id = store_item.get("role_id")
     total_price = price * quantity
 
+    purchase_record: dict | None = None
+
     if role_id is not None:
         if quantity != 1:
             return {
@@ -78,6 +82,21 @@ async def process_shop_purchase(
         except (discord.Forbidden, discord.HTTPException) as role_error:
             await economy_col.update_one({"_id": user_key}, {"$set": {"wallet": wallet}})
             return {"ok": False, "message": f"❌ Couldn't assign the role (`{role_error}`). You were refunded."}
+
+        purchase_record = {
+            "item_name": item_name,
+            "price": price,
+            "quantity": 1,
+            "purchase_type": "role",
+            "role_id": role.id,
+            "inventory_key": None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        await economy_col.update_one(
+            {"_id": user_key},
+            {"$set": {"last_shop_purchase": purchase_record}},
+            upsert=True,
+        )
 
         return {
             "ok": True,
@@ -130,7 +149,21 @@ async def process_shop_purchase(
 
     await economy_col.update_one(
         {"_id": user_key},
-        {"$set": {"wallet": new_wallet, "inventory": inventory}},
+        {
+            "$set": {
+                "wallet": new_wallet,
+                "inventory": inventory,
+                "last_shop_purchase": {
+                    "item_name": item_name,
+                    "price": total_price,
+                    "quantity": quantity,
+                    "purchase_type": purchase_type,
+                    "role_id": None,
+                    "inventory_key": inventory_key,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+        },
     )
 
     return {
@@ -145,104 +178,6 @@ async def process_shop_purchase(
         "purchase_type": purchase_type,
         "inventory_key": inventory_key,
     }
-
-
-class PurchaseRefundView(discord.ui.View):
-    """One-click refund for the most recent interactive shop purchase."""
-
-    def __init__(self, user_id: int, guild_id: str, purchase: dict) -> None:
-        super().__init__(timeout=120)
-        self.user_id = user_id
-        self.guild_id = guild_id
-        self.purchase = purchase
-        self._done = False
-
-    @discord.ui.button(
-        label="↩️ Refund",
-        style=discord.ButtonStyle.secondary,
-        custom_id="shop_refund_button",
-    )
-    async def refund(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ You can't refund someone else's purchase.", ephemeral=True
-            )
-            return
-
-        if self._done:
-            await interaction.response.send_message(
-                "❌ This purchase has already been refunded.", ephemeral=True
-            )
-            return
-
-        from bot.utils.economy import get_user
-
-        data = await get_user(None, self.guild_id, interaction.user.id)
-        wallet = int(data.get("wallet", 0) or 0)
-        inventory = list(data.get("inventory", []))
-        refund_amount = int(self.purchase.get("price", 0) or 0)
-        quantity = int(self.purchase.get("quantity", 1) or 1)
-        purchase_type = self.purchase.get("purchase_type")
-        user_key = f"{interaction.guild.id}-{interaction.user.id}"
-
-        if refund_amount <= 0:
-            await interaction.response.send_message(
-                "❌ This purchase cannot be refunded.", ephemeral=True
-            )
-            return
-
-        if purchase_type == "role":
-            role_id = self.purchase.get("role_id")
-            role = interaction.guild.get_role(int(role_id)) if role_id else None
-            if not role or role not in interaction.user.roles:
-                await interaction.response.send_message(
-                    "❌ Refund unavailable: role is missing or already removed.",
-                    ephemeral=True,
-                )
-                return
-            try:
-                await interaction.user.remove_roles(
-                    role, reason="Shop refund requested by user"
-                )
-            except (discord.Forbidden, discord.HTTPException):
-                await interaction.response.send_message(
-                    "❌ I couldn't remove the role, so refund was canceled.",
-                    ephemeral=True,
-                )
-                return
-
-        else:
-            key = str(self.purchase.get("inventory_key", "")).lower()
-            removed = 0
-            kept: list = []
-            for item in inventory:
-                if removed < quantity and (
-                    (isinstance(item, str) and item.lower() == key)
-                    or (isinstance(item, dict) and str(item.get("_id", "")).lower() == key)
-                ):
-                    removed += 1
-                    continue
-                kept.append(item)
-            if removed < quantity:
-                await interaction.response.send_message(
-                    "❌ Refund unavailable: purchased item was already used or missing.",
-                    ephemeral=True,
-                )
-                return
-            inventory = kept
-
-        await economy_col.update_one(
-            {"_id": user_key},
-            {"$set": {"wallet": wallet + refund_amount, "inventory": inventory}},
-            upsert=True,
-        )
-        self._done = True
-        button.disabled = True
-        button.label = "Refunded"
-        await interaction.response.edit_message(
-            content=f"✅ Refunded **{refund_amount}** coins back to your wallet.",
-            view=self,
-        )
 
 
 class ShopDropdown(discord.ui.View):
@@ -306,14 +241,7 @@ class ShopDropdown(discord.ui.View):
                 ),
                 color=discord.Color.green(),
             )
-            refund_view = PurchaseRefundView(
-                self.user_id, str(interaction.guild.id), result
-            )
-            await interaction.response.send_message(
-                embed=embed,
-                view=refund_view,
-                ephemeral=True,
-            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
             self.dropdown.disabled = True
             self.dropdown.placeholder = "Purchase completed!"
@@ -387,6 +315,105 @@ class ShopView(discord.ui.View):
             color=discord.Color.blue(),
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @discord.ui.button(
+        label="↩️ Refund Last Purchase",
+        style=discord.ButtonStyle.secondary,
+        custom_id="refund_last_shop_purchase_button",
+    )
+    async def refund_last_purchase(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ You can't use this button!", ephemeral=True
+            )
+            return
+
+        from bot.utils.economy import get_user
+
+        guild_id = str(interaction.guild.id)
+        data = await get_user(None, guild_id, interaction.user.id)
+        purchase = data.get("last_shop_purchase") or {}
+
+        if not purchase:
+            await interaction.response.send_message(
+                "❌ No recent purchase found to refund.", ephemeral=True
+            )
+            return
+
+        wallet = int(data.get("wallet", 0) or 0)
+        inventory = list(data.get("inventory", []))
+        refund_amount = int(purchase.get("price", 0) or 0)
+        quantity = int(purchase.get("quantity", 1) or 1)
+        purchase_type = purchase.get("purchase_type")
+        user_key = f"{interaction.guild.id}-{interaction.user.id}"
+
+        if refund_amount <= 0:
+            await interaction.response.send_message(
+                "❌ This purchase cannot be refunded.", ephemeral=True
+            )
+            return
+
+        if purchase_type == "role":
+            role_id = purchase.get("role_id")
+            role = interaction.guild.get_role(int(role_id)) if role_id else None
+            if not role or role not in interaction.user.roles:
+                await interaction.response.send_message(
+                    "❌ Refund unavailable: role is missing or already removed.",
+                    ephemeral=True,
+                )
+                return
+            try:
+                await interaction.user.remove_roles(
+                    role, reason="Shop refund requested by user"
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                await interaction.response.send_message(
+                    "❌ I couldn't remove the role, so refund was canceled.",
+                    ephemeral=True,
+                )
+                return
+        else:
+            key = str(purchase.get("inventory_key", "")).lower()
+            removed = 0
+            kept: list = []
+            for item in inventory:
+                if removed < quantity and (
+                    (isinstance(item, str) and item.lower() == key)
+                    or (
+                        isinstance(item, dict)
+                        and str(item.get("_id", "")).lower() == key
+                    )
+                ):
+                    removed += 1
+                    continue
+                kept.append(item)
+
+            if removed < quantity:
+                await interaction.response.send_message(
+                    "❌ Refund unavailable: purchased item was already used or missing.",
+                    ephemeral=True,
+                )
+                return
+            inventory = kept
+
+        await economy_col.update_one(
+            {"_id": user_key},
+            {
+                "$set": {
+                    "wallet": wallet + refund_amount,
+                    "inventory": inventory,
+                    "last_shop_purchase": None,
+                }
+            },
+            upsert=True,
+        )
+        self.balance = wallet + refund_amount
+        await interaction.response.send_message(
+            f"✅ Refunded **{refund_amount}** coins back to your wallet.",
+            ephemeral=True,
+        )
 
 
 __all__ = ["ShopView", "ShopDropdown", "process_shop_purchase"]

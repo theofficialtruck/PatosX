@@ -63,6 +63,17 @@ class ShopCog(commands.Cog, name="Shop"):
                     ).sort("price", 1)
                 ]
 
+            # Normalize legacy shovel emoji that renders as a tofu box on some clients.
+            for item in items_list:
+                if str(item.get("name_lower", "")).lower() == "shovel":
+                    description = str(item.get("description", ""))
+                    if "🪏" in description:
+                        item["description"] = description.replace("🪏", "🕳️")
+                        await guild_shop_col.update_one(
+                            {"_id": item["_id"]},
+                            {"$set": {"description": item["description"]}},
+                        )
+
             embed = discord.Embed(
                 title="🛍️ Shop",
                 description=(

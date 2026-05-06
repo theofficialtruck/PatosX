@@ -70,7 +70,7 @@ class EconomyCog(commands.Cog, name="Economy"):
         if int(data.get("mine_count", 0) or 0) >= 25:
             badges.append(("⛏️ Miner", "Mine 25 times."))
         if int(data.get("dig_count", 0) or 0) >= 25:
-            badges.append(("🪏 Digger", "Dig 25 times."))
+            badges.append(("🕳️ Digger", "Dig 25 times."))
         if int(data.get("bugcatch_count", 0) or 0) >= 25:
             badges.append(("🪲 Bug Catcher", "Catch bugs 25 times."))
         if investment_count > 0:
