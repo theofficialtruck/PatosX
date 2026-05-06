@@ -14,7 +14,6 @@ from bot.utils.checks import staff_only, staffperm
 from bot.utils.errors import send_hybrid_error
 from bot.utils.logging import log_action
 
-
 PROMPTS = {
     "welcome_channel": "Enter the **welcome channel ID** (required for welcome system):",
     "welcome_message": "Enter the **welcome message** (required):",
@@ -56,7 +55,7 @@ class ConfigurationCog(commands.Cog, name="Configuration"):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    @commands.hybrid_command(
+    @commands.command(
         name="configure",
         aliases=["config"],
         description="Make server configuration.",
@@ -158,7 +157,7 @@ class ConfigurationCog(commands.Cog, name="Configuration"):
                 delete_after=10,
             )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="editconfig",
         aliases=["editconfiguration"],
         description="Edit one configuration setting.",
@@ -389,7 +388,7 @@ class ConfigurationCog(commands.Cog, name="Configuration"):
                 ),
             )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="viewconfig",
         description="View the current server configuration.",
     )
