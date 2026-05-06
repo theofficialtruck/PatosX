@@ -58,8 +58,15 @@ class PollButton(discord.ui.Button):
             duration=poll["duration_raw"],
         )
         channel = interaction.client.get_channel(int(poll["channel_id"]))
-        message = await channel.fetch_message(int(poll["message_id"]))
-        await message.edit(embed=embed, view=self.view)
+        if channel is None:
+            return await interaction.response.send_message(
+                "⚠️ Poll channel not found.", ephemeral=True
+            )
+        try:
+            message = await channel.fetch_message(int(poll["message_id"]))
+            await message.edit(embed=embed, view=self.view)
+        except (discord.NotFound, discord.Forbidden):
+            pass
 
         await interaction.response.send_message(
             f"✅ You voted for **{self.label}**", ephemeral=True
@@ -96,8 +103,15 @@ class RemoveVoteButton(discord.ui.Button):
                 duration=poll["duration_raw"],
             )
             channel = interaction.client.get_channel(int(poll["channel_id"]))
-            message = await channel.fetch_message(int(poll["message_id"]))
-            await message.edit(embed=embed, view=self.view)
+            if channel is None:
+                return await interaction.response.send_message(
+                    "⚠️ Poll channel not found.", ephemeral=True
+                )
+            try:
+                message = await channel.fetch_message(int(poll["message_id"]))
+                await message.edit(embed=embed, view=self.view)
+            except (discord.NotFound, discord.Forbidden):
+                pass
 
             await interaction.response.send_message(
                 "🗑️ Your vote was removed.", ephemeral=True

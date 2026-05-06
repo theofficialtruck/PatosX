@@ -24,11 +24,13 @@ class ConfirmSellAll(View):
     @discord.ui.button(label="✅ Confirm", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         self.value = True
+        await interaction.response.defer()
         self.stop()
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.red)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         self.value = False
+        await interaction.response.defer()
         self.stop()
 
 
