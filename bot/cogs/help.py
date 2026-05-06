@@ -80,7 +80,7 @@ class HelpCog(commands.Cog, name="Help"):
             ("?deposit / ?dep <amount>", "Deposit to bank"),
             ("?withdraw / ?with <amount>", "Withdraw from bank"),
             ("?shop", "View the shop"),
-            ("?buy <item>", "Buy an item from the shop"),
+            ("?buy <item> [amount]", "Buy an item from the shop"),
             ("?use <item>", "Use an item from your inventory"),
             ("?inventory / ?inv", "View your items"),
             ("?give / ?pay @user <amount>", "Give coins to another user"),

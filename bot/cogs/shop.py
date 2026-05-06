@@ -283,28 +283,64 @@ class ShopCog(commands.Cog, name="Shop"):
     )
     @app_commands.describe(
         item="The item to buy (e.g., 'fishing rod', 'rifle', 'laptop'). "
+        "You can add an optional amount at the end (e.g., 'coffee cup 10'). "
         "Use '/shop' to see available items."
     )
     @blacklist_barrier()
     @xp_earn(8, 16)
-    async def buy(
-        self, ctx: commands.Context, item: str | None = None
-    ) -> None:
+    async def buy(self, ctx: commands.Context, *, item: str | None = None) -> None:
         if not await check_channel(ctx, "economy_channel", "Economy"):
             return
         if not item:
             return await ctx.send("❌ You must specify an item to buy.")
 
-        item_name = item.strip().lower()
-        store_item = await guild_shop_col.find_one(
-            {"guild": str(ctx.guild.id), "name_lower": item_name}
-        )
+        raw_item = item.strip()
+        if not raw_item:
+            return await ctx.send("❌ You must specify an item to buy.")
+
+        guild_id = str(ctx.guild.id)
+
+        async def fetch_store_item(name_lower: str) -> dict | None:
+            shop_item = await guild_shop_col.find_one(
+                {"guild": guild_id, "name_lower": name_lower}
+            )
+            if shop_item:
+                return shop_item
+
+            default_item = await shop_col.find_one({"name_lower": name_lower})
+            if not default_item:
+                return None
+
+            shop_item = dict(default_item)
+            shop_item["_id"] = f"{guild_id}-{default_item['_id']}"
+            shop_item["guild"] = guild_id
+            await guild_shop_col.update_one(
+                {"_id": shop_item["_id"]},
+                {"$set": shop_item},
+                upsert=True,
+            )
+            return shop_item
+
+        quantity = 1
+        item_name_input = raw_item
+        store_item = await fetch_store_item(raw_item.lower())
+
+        if not store_item and " " in raw_item:
+            maybe_name, maybe_quantity = raw_item.rsplit(" ", 1)
+            maybe_name = maybe_name.strip()
+            if maybe_quantity.isdigit() and maybe_name:
+                quantity = int(maybe_quantity)
+                if quantity <= 0:
+                    return await ctx.send("❌ Quantity must be greater than 0.")
+                item_name_input = maybe_name
+                store_item = await fetch_store_item(item_name_input.lower())
+
         if not store_item:
-            return await ctx.send(f"❌ Item **{item}** not found in the shop.")
+            return await ctx.send(f"❌ Item **{item_name_input}** not found in the shop.")
 
         data = await get_user(ctx, ctx.guild.id, ctx.author.id)
         result = await process_shop_purchase(
-            ctx.author, ctx.guild, store_item, data
+            ctx.author, ctx.guild, store_item, data, quantity=quantity
         )
         await ctx.send(result["message"])
 
@@ -370,9 +406,14 @@ class ShopCog(commands.Cog, name="Shop"):
         for item in inv:
             if isinstance(item, dict) and item.get("_id") == "pet_duck":
                 duck_total += 1
-                duck_uses += item.get("uses_left", 0)
-            else:
+                duck_uses += int(item.get("uses_left", 0) or 0)
+            elif isinstance(item, str):
                 counts[item] = counts.get(item, 0) + 1
+            elif isinstance(item, dict):
+                item_key = item.get("name_lower") or item.get("_id") or item.get("name")
+                if isinstance(item_key, str):
+                    normalized_key = item_key.lower()
+                    counts[normalized_key] = counts.get(normalized_key, 0) + 1
 
         embed = discord.Embed(
             title=f"🎒 {ctx.author.display_name}'s Inventory",

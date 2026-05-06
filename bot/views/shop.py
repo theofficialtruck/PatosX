@@ -12,6 +12,7 @@ async def process_shop_purchase(
     guild: discord.Guild,
     store_item: dict,
     user_data: dict,
+    quantity: int = 1,
 ) -> dict:
     """Run the buy logic for a single shop item.
 
@@ -20,6 +21,9 @@ async def process_shop_purchase(
     deduction, so a failed purchase never leaves the user out of pocket.
     """
     item_name = store_item.get("name") or store_item.get("name_lower") or "Unknown Item"
+
+    if quantity <= 0:
+        return {"ok": False, "message": "❌ Quantity must be greater than 0."}
 
     try:
         price = int(store_item.get("price", 0))
@@ -33,8 +37,14 @@ async def process_shop_purchase(
     inventory = list(user_data.get("inventory", []))
     user_key = f"{guild.id}-{member.id}"
     role_id = store_item.get("role_id")
+    total_price = price * quantity
 
     if role_id is not None:
+        if quantity != 1:
+            return {
+                "ok": False,
+                "message": "❌ Role items can only be purchased one at a time.",
+            }
         try:
             role = guild.get_role(int(role_id))
         except (TypeError, ValueError):
@@ -47,7 +57,10 @@ async def process_shop_purchase(
             return {"ok": False, "message": f"✅ You already have the role for **{item_name}**."}
 
         if wallet < price:
-            return {"ok": False, "message": f"❌ You don’t have enough coins. **{item_name}** costs {price} coins."}
+            return {
+                "ok": False,
+                "message": f"❌ You don’t have enough coins. **{item_name}** costs {price} coins.",
+            }
 
         new_wallet = wallet - price
         await economy_col.update_one({"_id": user_key}, {"$set": {"wallet": new_wallet}})
@@ -63,16 +76,21 @@ async def process_shop_purchase(
             "message": f"✅ You bought **{item_name}** for {price} coins and got {role.mention}!",
             "item_name": item_name,
             "price": price,
+            "unit_price": price,
+            "quantity": 1,
             "old_wallet": wallet,
             "new_wallet": new_wallet,
             "purchase_type": "role",
             "role_mention": role.mention,
         }
 
-    if wallet < price:
-        return {"ok": False, "message": f"❌ You don’t have enough coins. **{item_name}** costs {price} coins."}
+    if wallet < total_price:
+        return {
+            "ok": False,
+            "message": f"❌ You don’t have enough coins. **{item_name} x{quantity}** costs {total_price} coins.",
+        }
 
-    new_wallet = wallet - price
+    new_wallet = wallet - total_price
     item_id = str(store_item.get("_id", ""))
     is_pet_duck = (
         store_item.get("name_lower") == "pet_duck"
@@ -81,12 +99,17 @@ async def process_shop_purchase(
     )
 
     if is_pet_duck:
-        inventory.append({"_id": "pet_duck", "uses_left": 3})
-        success_message = "🦆 You bought a Pet Duck! It has 3 uses. You can stack multiple ducks."
+        inventory.extend({"_id": "pet_duck", "uses_left": 3} for _ in range(quantity))
+        success_message = (
+            f"🦆 You bought **{item_name} x{quantity}** for {total_price} coins! "
+            "Each has 3 uses."
+        )
         purchase_type = "pet_duck"
     else:
-        inventory.append(store_item.get("name_lower", item_name.lower()))
-        success_message = f"✅ You bought **{item_name}** for {price} coins!"
+        inventory.extend(
+            [store_item.get("name_lower", item_name.lower())] * quantity
+        )
+        success_message = f"✅ You bought **{item_name} x{quantity}** for {total_price} coins!"
         purchase_type = "inventory"
 
     await economy_col.update_one(
@@ -98,7 +121,9 @@ async def process_shop_purchase(
         "ok": True,
         "message": success_message,
         "item_name": item_name,
-        "price": price,
+        "price": total_price,
+        "unit_price": price,
+        "quantity": quantity,
         "old_wallet": wallet,
         "new_wallet": new_wallet,
         "purchase_type": purchase_type,
