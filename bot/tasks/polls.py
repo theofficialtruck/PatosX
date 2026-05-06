@@ -11,7 +11,7 @@ from bot.utils.state import has_bot, get_bot
 from bot.views.polls import build_poll_embed
 
 
-@tasks.loop(seconds=0.01)
+@tasks.loop(seconds=30)
 async def check_polls() -> None:
     if not has_bot():
         return
