@@ -160,9 +160,14 @@ def xp_earn(min_xp: int, max_xp: int):
             )
 
             try:
+                cmd_ref = (
+                    f"/{command_name}"
+                    if (hasattr(ctx, "interaction") and ctx.interaction)
+                    else f"{ctx.prefix}{command_name}"
+                )
                 xp_msg = (
                     f"{ctx.author.mention}, you earned **{xp_gained} xp** "
-                    f"by using `/{command_name}`"
+                    f"by using `{cmd_ref}`"
                 )
                 if (
                     hasattr(ctx, "interaction")
