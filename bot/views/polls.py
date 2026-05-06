@@ -65,8 +65,8 @@ class PollButton(discord.ui.Button):
         try:
             message = await channel.fetch_message(int(poll["message_id"]))
             await message.edit(embed=embed, view=self.view)
-        except (discord.NotFound, discord.Forbidden):
-            pass
+        except (discord.NotFound, discord.Forbidden) as exc:
+            print(f"Could not update poll embed for {self.poll_id}: {exc}")
 
         await interaction.response.send_message(
             f"✅ You voted for **{self.label}**", ephemeral=True
@@ -110,8 +110,8 @@ class RemoveVoteButton(discord.ui.Button):
             try:
                 message = await channel.fetch_message(int(poll["message_id"]))
                 await message.edit(embed=embed, view=self.view)
-            except (discord.NotFound, discord.Forbidden):
-                pass
+            except (discord.NotFound, discord.Forbidden) as exc:
+                print(f"Could not update poll embed for {self.poll_id}: {exc}")
 
             await interaction.response.send_message(
                 "🗑️ Your vote was removed.", ephemeral=True
