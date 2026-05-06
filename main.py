@@ -1489,7 +1489,7 @@ async def check_muted_role_permissions():
 async def before_unmute_loop():
     await bot.wait_until_ready()
 
-@bot.hybrid_command(name="configure", aliases=["config"], description="Make server configuration.")
+@bot.command()
 @staffperm("config")
 @staff_only()
 async def configure(ctx):
@@ -1574,7 +1574,7 @@ async def configure_error(ctx, error):
             delete_after=10
         )
 
-@bot.hybrid_command(name="editconfig", aliases=["editconfiguration"], description="Edit one configuration setting.")
+@bot.command()
 @app_commands.describe(args="Configuration arguments")
 @staffperm("config")
 @staff_only()
@@ -1748,7 +1748,7 @@ async def editconfig_error(ctx, error):
             content=f"⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`"
         )
 
-@bot.hybrid_command(name="viewconfig", description="View the current server configuration.")
+@bot.command()
 @staffperm("config")
 @staff_only()
 async def viewconfig(ctx: commands.Context):
