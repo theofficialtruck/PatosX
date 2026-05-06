@@ -1,66 +1,198 @@
-"""Smoke tests for the refactored DuckParadise bot.
-
-The test suite focuses on pure utilities and on Cog-method behaviour that
-can be exercised without spinning up the gateway. Each test mocks the
-narrow database surface a particular code path needs.
-"""
-
-from __future__ import annotations
-
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+# test_bot_commands.py
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime
+from types import SimpleNamespace
+import main
+import asyncio
 
-import main  # noqa: F401 — verifies the public re-export surface still imports
-from bot.cogs.economy import EconomyCog
-from bot.cogs.games import GamesCog
-from bot.cogs.investments import InvestmentsCog
-from bot.cogs.moderation import ModerationCog
-from bot.cogs.tickets import TicketsCog
-from bot.utils import economy as economy_utils
-from bot.utils import investments as investments_utils
-from bot.utils.errors import (
-    is_discord_service_unavailable_error,
-    send_hybrid_error,
-)
-from discord.ext import commands
+@pytest.mark.asyncio
+async def test_warn_command():
+    ctx = MagicMock()
+    member = MagicMock()
+    ctx.guild.id = 123456789
+    ctx.author = MagicMock(name="Moderator", id=111)
+    member.id = 222
+    member.mention = "@TestUser"
+    member.send = AsyncMock()
+    main.warnings_data.clear()
 
+    await main.warn(ctx, member, reason="Breaking rules")
 
-# ---------------------------------------------------------------------------
-# Discord-service-unavailable detection
-# ---------------------------------------------------------------------------
+    assert str(ctx.guild.id) in main.warnings_data
+    assert str(member.id) in main.warnings_data[str(ctx.guild.id)]
+    assert main.warnings_data[str(ctx.guild.id)][str(member.id)][0]["reason"] == "Breaking rules"
+
+@pytest.mark.asyncio
+async def test_kick_command():
+    ctx = MagicMock()
+    member = AsyncMock()
+    ctx.guild.id = 987654321
+    ctx.author = MagicMock(name="Moderator", id=111)
+    member.id = 222
+    member.mention = "@UserToKick"
+    member.kick = AsyncMock()
+    main.actions_data.clear()
+
+    await main.kick(ctx, member, reason="Violation")
+    member.kick.assert_awaited_with(reason="Violation")
+    assert str(ctx.guild.id) in main.actions_data
+    assert str(member.id) in main.actions_data[str(ctx.guild.id)]
+    assert main.actions_data[str(ctx.guild.id)][str(member.id)][-1]["type"] == "kick"
+
+@pytest.mark.asyncio
+async def test_mute_command_with_duration():
+    ctx = MagicMock()
+    member = MagicMock()
+    mute_role = MagicMock()
+    ctx.guild.id = 123
+    ctx.guild.roles = [mute_role]
+    mute_role.name = "Muted"
+    ctx.guild.channels = []
+    mute_role in member.roles
+    member.add_roles = AsyncMock()
+    member.remove_roles = AsyncMock()
+    ctx.author = MagicMock(name="Mod", id=999)
+    member.id = 888
+    member.mention = "@User"
+    main.actions_data.clear()
+
+    async def fake_sleep(x): pass
+    asyncio.sleep = fake_sleep
+
+    await main.mute(ctx, member, duration="10s", reason="Spamming")
+    member.add_roles.assert_awaited()
+    member.remove_roles.assert_awaited()
+    assert str(ctx.guild.id) in main.actions_data
+    assert str(member.id) in main.actions_data[str(ctx.guild.id)]
+    assert main.actions_data[str(ctx.guild.id)][str(member.id)][-1]["type"] == "unmute"
+
 
 def test_detect_discord_service_unavailable_from_wrapped_error():
-    wrapped = commands.CommandInvokeError(
+    wrapped = main.commands.CommandInvokeError(
         RuntimeError(
             "DiscordServerError: 503 Service Unavailable (error code: 0): "
             "upstream connect error"
         )
     )
-    assert is_discord_service_unavailable_error(wrapped) is True
+    assert main.is_discord_service_unavailable_error(wrapped) is True
 
 
 def test_do_not_treat_generic_invoke_error_as_service_unavailable():
-    wrapped = commands.CommandInvokeError(RuntimeError("some unrelated failure"))
-    assert is_discord_service_unavailable_error(wrapped) is False
+    wrapped = main.commands.CommandInvokeError(RuntimeError("some unrelated failure"))
+    assert main.is_discord_service_unavailable_error(wrapped) is False
 
 
-# ---------------------------------------------------------------------------
-# Hybrid error responses
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_coinflip_error_hides_wrapped_503_details():
+    ctx = MagicMock()
+    ctx.send = AsyncMock()
+    ctx.interaction = None
+    wrapped = main.commands.CommandInvokeError(
+        RuntimeError("503 Service Unavailable: upstream connect error")
+    )
+
+    await main.coinflip_error(ctx, wrapped)
+
+    ctx.send.assert_awaited_once_with(main.DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
+
+
+@pytest.mark.asyncio
+async def test_coinflip_zero_bet_does_not_award_xp(monkeypatch):
+    ctx = MagicMock()
+    ctx.guild.id = 123
+    ctx.author.id = 456
+    ctx.author.mention = "@Tester"
+    ctx.command = MagicMock()
+    ctx.command.name = "coinflip"
+    ctx.send = AsyncMock()
+
+    mock_xp_col = MagicMock()
+    mock_xp_col.update_one = AsyncMock()
+
+    monkeypatch.setattr(main, "xp_col", mock_xp_col)
+    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"wallet": 100}))
+
+    await main.coinflip(ctx, "0")
+
+    ctx.send.assert_awaited_once_with("❌ Invalid amount to coin flip.")
+    mock_xp_col.update_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ticketclose_slash_prompt_is_public(monkeypatch):
+    opener = SimpleNamespace(mention="@opener")
+    guild = SimpleNamespace(id=123, get_member=MagicMock(return_value=opener))
+    channel = SimpleNamespace(id=456, guild=guild)
+
+    response = SimpleNamespace(is_done=MagicMock(return_value=False), send_message=AsyncMock())
+    followup = SimpleNamespace(send=AsyncMock())
+    interaction = SimpleNamespace(response=response, followup=followup)
+
+    ctx = SimpleNamespace(
+        guild=guild,
+        channel=channel,
+        interaction=interaction,
+        send=AsyncMock(),
+    )
+
+    fake_tickets_col = SimpleNamespace(
+        find_one=AsyncMock(return_value={"_id": "ticket-1", "owner_id": "999"}),
+        update_one=AsyncMock(),
+    )
+    monkeypatch.setattr(main, "tickets_col", fake_tickets_col)
+
+    await main.ticketclose.callback(ctx)
+
+    response.send_message.assert_awaited_once()
+    send_kwargs = response.send_message.await_args.kwargs
+    assert send_kwargs["ephemeral"] is False
+    assert "confirm closing this ticket" in send_kwargs["content"]
+    followup.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ticketclose_slash_prompt_uses_public_followup_when_response_done(monkeypatch):
+    opener = SimpleNamespace(mention="@opener")
+    guild = SimpleNamespace(id=123, get_member=MagicMock(return_value=opener))
+    channel = SimpleNamespace(id=456, guild=guild)
+
+    response = SimpleNamespace(is_done=MagicMock(return_value=True), send_message=AsyncMock())
+    followup = SimpleNamespace(send=AsyncMock())
+    interaction = SimpleNamespace(response=response, followup=followup)
+
+    ctx = SimpleNamespace(
+        guild=guild,
+        channel=channel,
+        interaction=interaction,
+        send=AsyncMock(),
+    )
+
+    fake_tickets_col = SimpleNamespace(
+        find_one=AsyncMock(return_value={"_id": "ticket-1", "owner_id": "999"}),
+        update_one=AsyncMock(),
+    )
+    monkeypatch.setattr(main, "tickets_col", fake_tickets_col)
+
+    await main.ticketclose.callback(ctx)
+
+    followup.send.assert_awaited_once()
+    send_kwargs = followup.send.await_args.kwargs
+    assert send_kwargs["ephemeral"] is False
+    assert "confirm closing this ticket" in send_kwargs["content"]
+    response.send_message.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 async def test_send_hybrid_error_uses_ephemeral_initial_response_for_slash():
-    response = SimpleNamespace(
-        is_done=MagicMock(return_value=False),
-        send_message=AsyncMock(),
-    )
+    response = SimpleNamespace(is_done=MagicMock(return_value=False), send_message=AsyncMock())
     followup = SimpleNamespace(send=AsyncMock())
     interaction = SimpleNamespace(response=response, followup=followup)
     ctx = SimpleNamespace(interaction=interaction, send=AsyncMock())
 
-    await send_hybrid_error(ctx, content="⚠️ test")
+    await main.send_hybrid_error(ctx, content="⚠️ test")
 
     response.send_message.assert_awaited_once()
     kwargs = response.send_message.await_args.kwargs
@@ -72,15 +204,12 @@ async def test_send_hybrid_error_uses_ephemeral_initial_response_for_slash():
 
 @pytest.mark.asyncio
 async def test_send_hybrid_error_uses_ephemeral_followup_when_response_done_for_slash():
-    response = SimpleNamespace(
-        is_done=MagicMock(return_value=True),
-        send_message=AsyncMock(),
-    )
+    response = SimpleNamespace(is_done=MagicMock(return_value=True), send_message=AsyncMock())
     followup = SimpleNamespace(send=AsyncMock())
     interaction = SimpleNamespace(response=response, followup=followup)
     ctx = SimpleNamespace(interaction=interaction, send=AsyncMock())
 
-    await send_hybrid_error(ctx, content="⚠️ test")
+    await main.send_hybrid_error(ctx, content="⚠️ test")
 
     followup.send.assert_awaited_once()
     kwargs = followup.send.await_args.kwargs
@@ -90,146 +219,12 @@ async def test_send_hybrid_error_uses_ephemeral_followup_when_response_done_for_
     ctx.send.assert_not_awaited()
 
 
-# ---------------------------------------------------------------------------
-# Coinflip cog behaviour
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_coinflip_error_hides_wrapped_503_details():
-    cog = GamesCog(MagicMock())
-    ctx = MagicMock()
-    ctx.send = AsyncMock()
-    ctx.interaction = None
-    wrapped = commands.CommandInvokeError(
-        RuntimeError("503 Service Unavailable: upstream connect error")
-    )
-
-    await cog.coinflip_error.__func__(cog, ctx, wrapped)
-
-    # ``send_hybrid_error`` forwards through keyword arguments; assert on the
-    # ``content`` key rather than a positional value.
-    ctx.send.assert_awaited_once()
-    kwargs = ctx.send.await_args.kwargs
-    assert kwargs["content"] == main.DISCORD_SERVICE_UNAVAILABLE_MESSAGE
-
-
-@pytest.mark.asyncio
-async def test_coinflip_zero_bet_does_not_award_xp(monkeypatch):
-    cog = GamesCog(MagicMock())
-    ctx = MagicMock()
-    ctx.guild.id = 123
-    ctx.author.id = 456
-    ctx.author.mention = "@Tester"
-    ctx.command = MagicMock()
-    ctx.command.name = "coinflip"
-    ctx.send = AsyncMock()
-
-    mock_xp_col = MagicMock()
-    mock_xp_col.update_one = AsyncMock()
-    monkeypatch.setattr("bot.utils.checks.xp_col", mock_xp_col)
-    monkeypatch.setattr(
-        "bot.cogs.games.check_channel",
-        AsyncMock(return_value=True),
-    )
-    monkeypatch.setattr(
-        "bot.cogs.games.get_user",
-        AsyncMock(return_value={"wallet": 100}),
-    )
-
-    # ``coinflip`` is wrapped by the xp_earn decorator; reach the underlying
-    # callback via the HybridCommand's ``callback`` attribute.
-    await cog.coinflip.callback(cog, ctx, "0")
-
-    ctx.send.assert_awaited_once_with("❌ Invalid amount to coin flip.")
-    mock_xp_col.update_one.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# Ticket close prompt visibility
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_ticketclose_slash_prompt_is_public(monkeypatch):
-    cog = TicketsCog(MagicMock())
-    opener = SimpleNamespace(mention="@opener")
-    guild = SimpleNamespace(id=123, get_member=MagicMock(return_value=opener))
-    channel = SimpleNamespace(id=456, guild=guild)
-
-    response = SimpleNamespace(
-        is_done=MagicMock(return_value=False),
-        send_message=AsyncMock(),
-    )
-    followup = SimpleNamespace(send=AsyncMock())
-    interaction = SimpleNamespace(response=response, followup=followup)
-
-    ctx = SimpleNamespace(
-        guild=guild,
-        channel=channel,
-        interaction=interaction,
-        send=AsyncMock(),
-    )
-
-    fake_tickets_col = SimpleNamespace(
-        find_one=AsyncMock(return_value={"_id": "ticket-1", "owner_id": "999"}),
-        update_one=AsyncMock(),
-    )
-    monkeypatch.setattr("bot.cogs.tickets.tickets_col", fake_tickets_col)
-
-    await cog.ticketclose.callback(cog, ctx)
-
-    response.send_message.assert_awaited_once()
-    send_kwargs = response.send_message.await_args.kwargs
-    assert send_kwargs["ephemeral"] is False
-    assert "confirm closing this ticket" in send_kwargs["content"]
-    followup.send.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_ticketclose_slash_prompt_uses_public_followup_when_response_done(monkeypatch):
-    cog = TicketsCog(MagicMock())
-    opener = SimpleNamespace(mention="@opener")
-    guild = SimpleNamespace(id=123, get_member=MagicMock(return_value=opener))
-    channel = SimpleNamespace(id=456, guild=guild)
-
-    response = SimpleNamespace(
-        is_done=MagicMock(return_value=True),
-        send_message=AsyncMock(),
-    )
-    followup = SimpleNamespace(send=AsyncMock())
-    interaction = SimpleNamespace(response=response, followup=followup)
-
-    ctx = SimpleNamespace(
-        guild=guild,
-        channel=channel,
-        interaction=interaction,
-        send=AsyncMock(),
-    )
-
-    fake_tickets_col = SimpleNamespace(
-        find_one=AsyncMock(return_value={"_id": "ticket-1", "owner_id": "999"}),
-        update_one=AsyncMock(),
-    )
-    monkeypatch.setattr("bot.cogs.tickets.tickets_col", fake_tickets_col)
-
-    await cog.ticketclose.callback(cog, ctx)
-
-    followup.send.assert_awaited_once()
-    send_kwargs = followup.send.await_args.kwargs
-    assert send_kwargs["ephemeral"] is False
-    assert "confirm closing this ticket" in send_kwargs["content"]
-    response.send_message.assert_not_awaited()
-
-
 @pytest.mark.asyncio
 async def test_ticketclose_slash_error_is_ephemeral(monkeypatch):
-    cog = TicketsCog(MagicMock())
     guild = SimpleNamespace(id=123, get_member=MagicMock())
     channel = SimpleNamespace(id=456, guild=guild)
 
-    response = SimpleNamespace(
-        is_done=MagicMock(return_value=False),
-        send_message=AsyncMock(),
-    )
+    response = SimpleNamespace(is_done=MagicMock(return_value=False), send_message=AsyncMock())
     followup = SimpleNamespace(send=AsyncMock())
     interaction = SimpleNamespace(response=response, followup=followup)
 
@@ -244,9 +239,9 @@ async def test_ticketclose_slash_error_is_ephemeral(monkeypatch):
         find_one=AsyncMock(side_effect=RuntimeError("db failed")),
         update_one=AsyncMock(),
     )
-    monkeypatch.setattr("bot.cogs.tickets.tickets_col", fake_tickets_col)
+    monkeypatch.setattr(main, "tickets_col", fake_tickets_col)
 
-    await cog.ticketclose.callback(cog, ctx)
+    await main.ticketclose.callback(ctx)
 
     response.send_message.assert_awaited_once()
     kwargs = response.send_message.await_args.kwargs
@@ -255,13 +250,8 @@ async def test_ticketclose_slash_error_is_ephemeral(monkeypatch):
     followup.send.assert_not_awaited()
 
 
-# ---------------------------------------------------------------------------
-# Investment migrations
-# ---------------------------------------------------------------------------
-
 @pytest.mark.asyncio
 async def test_investstatus_handles_legacy_timestamp_without_date(monkeypatch):
-    cog = InvestmentsCog(MagicMock())
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456, display_name="Tester")
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
@@ -284,18 +274,10 @@ async def test_investstatus_handles_legacy_timestamp_without_date(monkeypatch):
         update_one=AsyncMock(),
     )
 
-    monkeypatch.setattr(
-        "bot.cogs.investments.check_channel",
-        AsyncMock(return_value=True),
-    )
-    monkeypatch.setattr(
-        "bot.cogs.investments.investments_col", investments_col
-    )
-    monkeypatch.setattr(
-        "bot.utils.investments.investments_col", investments_col
-    )
+    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(main, "investments_col", investments_col)
 
-    await cog.investstatus.callback(cog, ctx)
+    await main.investstatus.callback(ctx)
 
     ctx.send.assert_awaited_once()
     sent_embed = ctx.send.await_args.kwargs["embed"]
@@ -305,11 +287,9 @@ async def test_investstatus_handles_legacy_timestamp_without_date(monkeypatch):
 
 
 def test_get_investment_date_handles_invalid_or_missing_values():
-    dt_missing = investments_utils.get_investment_date({})
-    dt_invalid = investments_utils.get_investment_date({"date": "not-a-date"})
-    dt_legacy = investments_utils.get_investment_date(
-        {"timestamp": "2026-04-10T10:00:00+00:00"}
-    )
+    dt_missing = main.get_investment_date({})
+    dt_invalid = main.get_investment_date({"date": "not-a-date"})
+    dt_legacy = main.get_investment_date({"timestamp": "2026-04-10T10:00:00+00:00"})
 
     assert dt_missing.tzinfo is not None
     assert dt_invalid.tzinfo is not None
@@ -321,11 +301,7 @@ async def test_backfill_investment_dates_from_timestamp_is_non_destructive(monke
     docs = [
         {"_id": "a", "timestamp": "2026-04-10T10:00:00+00:00"},
         {"_id": "b", "timestamp": "bad-date"},
-        {
-            "_id": "c",
-            "date": "2026-04-09T10:00:00+00:00",
-            "timestamp": "2026-04-01T10:00:00+00:00",
-        },
+        {"_id": "c", "date": "2026-04-09T10:00:00+00:00", "timestamp": "2026-04-01T10:00:00+00:00"},
     ]
 
     class _Result:
@@ -361,11 +337,9 @@ async def test_backfill_investment_dates_from_timestamp_is_non_destructive(monke
             return _Result(0)
 
     fake_col = _InvestmentsCol(docs)
-    monkeypatch.setattr(
-        "bot.utils.investments.investments_col", fake_col
-    )
+    monkeypatch.setattr(main, "investments_col", fake_col)
 
-    stats = await investments_utils.backfill_investment_dates_from_timestamp()
+    stats = await main.backfill_investment_dates_from_timestamp()
 
     assert stats["scanned"] == 2
     assert stats["updated"] == 1
@@ -377,28 +351,25 @@ async def test_backfill_investment_dates_from_timestamp_is_non_destructive(monke
 
 @pytest.mark.asyncio
 async def test_investmigrate_reports_backfill_stats(monkeypatch):
-    cog = InvestmentsCog(MagicMock())
     monkeypatch.setattr(
-        "bot.cogs.investments.backfill_investment_dates_from_timestamp",
-        AsyncMock(
-            return_value={
-                "scanned": 4,
-                "updated": 3,
-                "invalid_timestamp": 1,
-                "skipped_conflict": 0,
-                "write_errors": 0,
-            }
-        ),
+        main,
+        "backfill_investment_dates_from_timestamp",
+        AsyncMock(return_value={
+            "scanned": 4,
+            "updated": 3,
+            "invalid_timestamp": 1,
+            "skipped_conflict": 0,
+            "write_errors": 0,
+        }),
     )
 
     ctx = SimpleNamespace(send=AsyncMock())
-    await cog.investmigrate.callback(cog, ctx)
+    await main.investmigrate.callback(ctx)
 
     ctx.send.assert_awaited_once()
     content = ctx.send.await_args.args[0]
     assert "Updated: `3`" in content
     assert "Write errors: `0`" in content
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     pytest.main([__file__])
