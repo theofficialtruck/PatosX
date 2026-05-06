@@ -159,7 +159,7 @@ class StaffCog(commands.Cog, name="Staff"):
         except Exception as exc:
             await ctx.send(f"⚠️ An error occurred: {exc}")
 
-    @commands.hybrid_command(
+    @commands.command(
         name="viewperms",
         description="View staff permissions for the server or a specific user.",
     )
