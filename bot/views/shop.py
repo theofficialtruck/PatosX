@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import discord
 
-from bot.database import economy_col
+from bot.database import economy_col, guild_shop_col, shop_col
 
 TOOL_DURABILITY: dict[str, int] = {
     "fishing rod": 30,
@@ -15,6 +15,86 @@ TOOL_DURABILITY: dict[str, int] = {
     "bug net": 20,
     "shovel": 20,
 }
+
+
+def _is_fully_unused_item(item) -> bool:
+    if isinstance(item, str):
+        return True
+    if not isinstance(item, dict):
+        return False
+
+    key = str(item.get("_id", "")).lower()
+    if key in TOOL_DURABILITY:
+        return int(item.get("uses_left", 0) or 0) >= TOOL_DURABILITY[key]
+    if key == "pet_duck":
+        return int(item.get("uses_left", 0) or 0) >= 3
+    return True
+
+
+async def _resolve_refund_item(guild_id: str, key: str) -> dict | None:
+    key = key.lower().strip()
+    candidates = {key, key.replace("_", " "), key.replace(" ", "_")}
+
+    for candidate in candidates:
+        doc = await guild_shop_col.find_one({"guild": guild_id, "name_lower": candidate})
+        if doc:
+            return doc
+    for candidate in candidates:
+        doc = await shop_col.find_one({"name_lower": candidate})
+        if doc:
+            return doc
+    for candidate in candidates:
+        doc = await shop_col.find_one({"_id": candidate})
+        if doc:
+            return doc
+    return None
+
+
+async def _build_refundable_options(guild_id: str, inventory: list) -> list[discord.SelectOption]:
+    refundable_counts: dict[str, int] = {}
+    refund_meta: dict[str, tuple[str, int]] = {}
+
+    for item in inventory:
+        if not _is_fully_unused_item(item):
+            continue
+
+        if isinstance(item, str):
+            key = item.lower()
+        elif isinstance(item, dict):
+            key = str(item.get("_id", "")).lower()
+        else:
+            continue
+
+        if not key:
+            continue
+
+        store_item = await _resolve_refund_item(guild_id, key)
+        if not store_item:
+            continue
+
+        try:
+            price = int(store_item.get("price", 0))
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+
+        display_name = str(store_item.get("name") or key.replace("_", " ").title())
+        refundable_counts[key] = refundable_counts.get(key, 0) + 1
+        refund_meta[key] = (display_name, price)
+
+    options: list[discord.SelectOption] = []
+    for key, count in refundable_counts.items():
+        display_name, price = refund_meta[key]
+        options.append(
+            discord.SelectOption(
+                label=f"{display_name} x{count}",
+                description=f"Refund: 🪙 {price} per item",
+                value=key,
+            )
+        )
+
+    return options[:25]
 
 
 async def process_shop_purchase(
@@ -260,6 +340,91 @@ class ShopDropdown(discord.ui.View):
             )
 
 
+class RefundDropdownView(discord.ui.View):
+    """Refund a selected inventory item from a dropdown."""
+
+    def __init__(self, user_id: int, guild_id: str, options: list[discord.SelectOption]) -> None:
+        super().__init__(timeout=180)
+        self.user_id = user_id
+        self.guild_id = guild_id
+        self.dropdown = discord.ui.Select(
+            placeholder="Choose an item to refund...",
+            options=options,
+        )
+        self.dropdown.callback = self._on_select
+        self.add_item(self.dropdown)
+
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ You can't use this dropdown!", ephemeral=True
+            )
+            return
+
+        from bot.utils.economy import get_user
+
+        key = self.dropdown.values[0].lower().strip()
+        data = await get_user(None, self.guild_id, interaction.user.id)
+        inventory = list(data.get("inventory", []))
+        wallet = int(data.get("wallet", 0) or 0)
+        store_item = await _resolve_refund_item(self.guild_id, key)
+        if not store_item:
+            await interaction.response.send_message(
+                "❌ That item is not refundable.", ephemeral=True
+            )
+            return
+
+        try:
+            refund_amount = int(store_item.get("price", 0))
+        except (TypeError, ValueError):
+            refund_amount = 0
+        if refund_amount <= 0:
+            await interaction.response.send_message(
+                "❌ That item is not refundable.", ephemeral=True
+            )
+            return
+
+        removed = False
+        new_inventory: list = []
+        for item in inventory:
+            if removed:
+                new_inventory.append(item)
+                continue
+
+            if isinstance(item, str) and item.lower() == key and _is_fully_unused_item(item):
+                removed = True
+                continue
+
+            if (
+                isinstance(item, dict)
+                and str(item.get("_id", "")).lower() == key
+                and _is_fully_unused_item(item)
+            ):
+                removed = True
+                continue
+
+            new_inventory.append(item)
+
+        if not removed:
+            await interaction.response.send_message(
+                "❌ You don't currently have a refundable copy of that item.",
+                ephemeral=True,
+            )
+            return
+
+        await economy_col.update_one(
+            {"_id": f"{interaction.guild.id}-{interaction.user.id}"},
+            {"$set": {"wallet": wallet + refund_amount, "inventory": new_inventory}},
+            upsert=True,
+        )
+
+        item_name = str(store_item.get("name") or key.replace("_", " ").title())
+        await interaction.response.send_message(
+            f"✅ Refunded **{item_name}** for **{refund_amount}** coins.",
+            ephemeral=True,
+        )
+
+
 class ShopView(discord.ui.View):
     """Top-level shop view with a "Buy Items" button that opens the dropdown."""
 
@@ -317,8 +482,8 @@ class ShopView(discord.ui.View):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @discord.ui.button(
-        label="↩️ Refund Last Purchase",
-        style=discord.ButtonStyle.secondary,
+        label="Refund Item",
+        style=discord.ButtonStyle.primary,
         custom_id="refund_last_shop_purchase_button",
     )
     async def refund_last_purchase(
@@ -334,86 +499,20 @@ class ShopView(discord.ui.View):
 
         guild_id = str(interaction.guild.id)
         data = await get_user(None, guild_id, interaction.user.id)
-        purchase = data.get("last_shop_purchase") or {}
-
-        if not purchase:
+        options = await _build_refundable_options(guild_id, list(data.get("inventory", [])))
+        if not options:
             await interaction.response.send_message(
-                "❌ No recent purchase found to refund.", ephemeral=True
+                "❌ You don't have any refundable items right now.", ephemeral=True
             )
             return
 
-        wallet = int(data.get("wallet", 0) or 0)
-        inventory = list(data.get("inventory", []))
-        refund_amount = int(purchase.get("price", 0) or 0)
-        quantity = int(purchase.get("quantity", 1) or 1)
-        purchase_type = purchase.get("purchase_type")
-        user_key = f"{interaction.guild.id}-{interaction.user.id}"
-
-        if refund_amount <= 0:
-            await interaction.response.send_message(
-                "❌ This purchase cannot be refunded.", ephemeral=True
-            )
-            return
-
-        if purchase_type == "role":
-            role_id = purchase.get("role_id")
-            role = interaction.guild.get_role(int(role_id)) if role_id else None
-            if not role or role not in interaction.user.roles:
-                await interaction.response.send_message(
-                    "❌ Refund unavailable: role is missing or already removed.",
-                    ephemeral=True,
-                )
-                return
-            try:
-                await interaction.user.remove_roles(
-                    role, reason="Shop refund requested by user"
-                )
-            except (discord.Forbidden, discord.HTTPException):
-                await interaction.response.send_message(
-                    "❌ I couldn't remove the role, so refund was canceled.",
-                    ephemeral=True,
-                )
-                return
-        else:
-            key = str(purchase.get("inventory_key", "")).lower()
-            removed = 0
-            kept: list = []
-            for item in inventory:
-                if removed < quantity and (
-                    (isinstance(item, str) and item.lower() == key)
-                    or (
-                        isinstance(item, dict)
-                        and str(item.get("_id", "")).lower() == key
-                    )
-                ):
-                    removed += 1
-                    continue
-                kept.append(item)
-
-            if removed < quantity:
-                await interaction.response.send_message(
-                    "❌ Refund unavailable: purchased item was already used or missing.",
-                    ephemeral=True,
-                )
-                return
-            inventory = kept
-
-        await economy_col.update_one(
-            {"_id": user_key},
-            {
-                "$set": {
-                    "wallet": wallet + refund_amount,
-                    "inventory": inventory,
-                    "last_shop_purchase": None,
-                }
-            },
-            upsert=True,
+        view = RefundDropdownView(self.user_id, guild_id, options)
+        embed = discord.Embed(
+            title="↩️ Refund Item",
+            description="Select an item from your inventory to refund.",
+            color=discord.Color.orange(),
         )
-        self.balance = wallet + refund_amount
-        await interaction.response.send_message(
-            f"✅ Refunded **{refund_amount}** coins back to your wallet.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 __all__ = ["ShopView", "ShopDropdown", "process_shop_purchase"]
