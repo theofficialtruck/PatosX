@@ -100,6 +100,7 @@ duck_conversations_col = db["duck_conversations"]
 staffperms_col = db["staffperms"]
 minigameplayerdata_col = db["minigameplayerdata"]
 xp_col = db["xp"]
+badges_col = db["badges"]
 
 fishes = [
     ("🦐 Shrimp", 100),
@@ -108,6 +109,33 @@ fishes = [
     ("🦑 Squid", 400),
     ("🐡 Pufferfish", 500)
 ]
+
+dig_rocks = [
+    ("amber shard", 240),
+    ("moonstone fragment", 650),
+    ("fossil core", 1000),
+]
+
+bugs_to_catch = [
+    ("🦋 butterfly", 180),
+    ("🐞 ladybug", 140),
+    ("🐛 caterpillar", 120),
+    ("🪲 beetle", 210),
+    ("🦟 mosquito", 90),
+    ("🪰 fly", 100),
+    ("🕷️ spider", 160),
+    ("🦗 cricket", 150),
+]
+
+TOOL_DURABILITIES = {
+    "shovel": 336,
+    "laptop": 28,
+    "fishing rod": 112,
+    "lockpick": 14,
+    "pickaxe": 336,
+    "rifle": 336,
+    "butterfly net": 336,
+}
 
 NUM_Q = 10
 PASS_PCT = 80.0
@@ -657,24 +685,303 @@ STAFF_HELP_COMMANDS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Badge system definitions
+# ---------------------------------------------------------------------------
+BADGES = {
+    "first_cast": {
+        "name": "First Cast",
+        "emoji": "🎣",
+        "description": "Went fishing for the first time.",
+        "check": lambda data, xp, extra: extra.get("fish_count", 0) >= 1,
+    },
+    "fish_fanatic": {
+        "name": "Fish Fanatic",
+        "emoji": "🐟",
+        "description": "Caught 50 fish total.",
+        "check": lambda data, xp, extra: extra.get("fish_count", 0) >= 50,
+    },
+    "first_strike": {
+        "name": "First Strike",
+        "emoji": "⛏️",
+        "description": "Went mining for the first time.",
+        "check": lambda data, xp, extra: extra.get("mine_count", 0) >= 1,
+    },
+    "deep_miner": {
+        "name": "Deep Miner",
+        "emoji": "💎",
+        "description": "Completed 50 mining trips.",
+        "check": lambda data, xp, extra: extra.get("mine_count", 0) >= 50,
+    },
+    "first_hunt": {
+        "name": "First Hunt",
+        "emoji": "🔫",
+        "description": "Went hunting for the first time.",
+        "check": lambda data, xp, extra: extra.get("hunt_count", 0) >= 1,
+    },
+    "big_game_hunter": {
+        "name": "Big Game Hunter",
+        "emoji": "🦌",
+        "description": "Completed 50 hunts.",
+        "check": lambda data, xp, extra: extra.get("hunt_count", 0) >= 50,
+    },
+    "coin_tosser": {
+        "name": "Coin Tosser",
+        "emoji": "🪙",
+        "description": "Won a coinflip.",
+        "check": lambda data, xp, extra: extra.get("coinflip_wins", 0) >= 1,
+    },
+    "hot_streak": {
+        "name": "Hot Streak",
+        "emoji": "🔥",
+        "description": "Won 10 coinflips in a row.",
+        "check": lambda data, xp, extra: extra.get("coinflip_win_streak", 0) >= 10,
+    },
+    "pocket_change": {
+        "name": "Pocket Change",
+        "emoji": "💵",
+        "description": "Accumulated 1,000 coins.",
+        "check": lambda data, xp, extra: (data.get("wallet", 0) + data.get("bank", 0)) >= 1000,
+    },
+    "millionaire": {
+        "name": "Millionaire",
+        "emoji": "🤑",
+        "description": "Accumulated 1,000,000 coins.",
+        "check": lambda data, xp, extra: (data.get("wallet", 0) + data.get("bank", 0)) >= 1_000_000,
+    },
+    "daily_devotee": {
+        "name": "Daily Devotee",
+        "emoji": "📅",
+        "description": "Reached a 7-day daily streak.",
+        "check": lambda data, xp, extra: data.get("daily_streak", 0) >= 7,
+    },
+    "streak_master": {
+        "name": "Streak Master",
+        "emoji": "🏆",
+        "description": "Reached a 30-day daily streak.",
+        "check": lambda data, xp, extra: data.get("daily_streak", 0) >= 30,
+    },
+    "apprentice": {
+        "name": "Apprentice",
+        "emoji": "⭐",
+        "description": "Earned 500 XP.",
+        "check": lambda data, xp, extra: xp >= 500,
+    },
+    "scholar": {
+        "name": "Scholar",
+        "emoji": "🎓",
+        "description": "Earned 5,000 XP.",
+        "check": lambda data, xp, extra: xp >= 5000,
+    },
+    "legend": {
+        "name": "Legend",
+        "emoji": "👑",
+        "description": "Earned 25,000 XP.",
+        "check": lambda data, xp, extra: xp >= 25000,
+    },
+    "shopaholic": {
+        "name": "Shopaholic",
+        "emoji": "🛍️",
+        "description": "Purchased 10 items from the shop.",
+        "check": lambda data, xp, extra: extra.get("shop_purchases", 0) >= 10,
+    },
+    "bug_hunter": {
+        "name": "Bug Hunter",
+        "emoji": "🦋",
+        "description": "Caught 20 bugs.",
+        "check": lambda data, xp, extra: extra.get("bug_count", 0) >= 20,
+    },
+    "treasure_hunter": {
+        "name": "Treasure Hunter",
+        "emoji": "🗺️",
+        "description": "Dug up 20 rocks.",
+        "check": lambda data, xp, extra: extra.get("dig_count", 0) >= 20,
+    },
+    "banker": {
+        "name": "Banker",
+        "emoji": "🏦",
+        "description": "Deposited at least 10,000 coins into the bank.",
+        "check": lambda data, xp, extra: data.get("bank", 0) >= 10000,
+    },
+    "duck_whisperer": {
+        "name": "Duck Whisperer",
+        "emoji": "🦆",
+        "description": "Owned a Pet Duck.",
+        "check": lambda data, xp, extra: any(
+            (isinstance(i, dict) and i.get("_id") == "pet_duck") or i == "pet_duck"
+            for i in data.get("inventory", [])
+        ),
+    },
+}
+
+
+def get_badge_role_name(badge: dict) -> str:
+    return f"{badge['emoji']} {badge['name']}"
+
+
+async def ensure_badge_role_for_guild(guild: discord.Guild, badge: dict):
+    badge_name = get_badge_role_name(badge)
+    role = discord.utils.get(guild.roles, name=badge_name)
+    if role:
+        return role
+    return await guild.create_role(name=badge_name, reason="Badge role auto-created")
+
+
+async def ensure_badge_roles_for_guild(guild: discord.Guild) -> None:
+    for badge in BADGES.values():
+        try:
+            await ensure_badge_role_for_guild(guild, badge)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            print(f"[Badge Roles] Could not ensure role {get_badge_role_name(badge)} in {guild.id}: {e}")
+
+
+async def ensure_all_badge_roles() -> None:
+    for guild in bot.guilds:
+        if isinstance(guild, discord.Guild):
+            await ensure_badge_roles_for_guild(guild)
+
+
+async def get_badge_extra_data(guild_id: str, user_id: str) -> dict:
+    """Load auxiliary badge counters for a user from the badges collection."""
+    key = f"{guild_id}-{user_id}"
+    doc = await badges_col.find_one({"_id": key}) or {}
+    return doc.get("counters", {})
+
+
+async def check_and_award_badges(
+    ctx_or_channel,
+    guild: discord.Guild,
+    member: discord.Member,
+    economy_data: dict,
+) -> None:
+    """Check all badge conditions for a user and award any newly earned badges."""
+    try:
+        guild_id = str(guild.id)
+        user_id = str(member.id)
+        key = f"{guild_id}-{user_id}"
+
+        badge_doc = await badges_col.find_one({"_id": key}) or {"_id": key, "earned": [], "counters": {}}
+        earned_ids = set(badge_doc.get("earned", []))
+        extra = badge_doc.get("counters", {})
+
+        xp_doc = await xp_col.find_one({"_id": key}) or {}
+        xp = xp_doc.get("xp", 0)
+
+        newly_earned = []
+        for badge_id, badge in BADGES.items():
+            if badge_id in earned_ids:
+                continue
+            try:
+                if badge["check"](economy_data, xp, extra):
+                    newly_earned.append(badge_id)
+            except Exception:
+                pass
+
+        if not newly_earned:
+            return
+
+        earned_ids.update(newly_earned)
+        await badges_col.update_one(
+            {"_id": key},
+            {"$set": {"earned": list(earned_ids), "guild": guild_id, "user": user_id, "counters": extra}},
+            upsert=True,
+        )
+
+        for badge_id in newly_earned:
+            badge = BADGES[badge_id]
+            badge_name = get_badge_role_name(badge)
+
+            try:
+                role = await ensure_badge_role_for_guild(guild, badge)
+                if role not in member.roles:
+                    await member.add_roles(role, reason=f"Earned badge: {badge_name}")
+            except (discord.Forbidden, discord.HTTPException) as role_err:
+                print(f"[Badge] Could not assign role for {badge_name}: {role_err}")
+
+            announcement = (
+                f"🏅 {member.mention} just earned the **{badge_name}** badge! "
+                f"*{badge['description']}*"
+            )
+            try:
+                if hasattr(ctx_or_channel, "send"):
+                    await ctx_or_channel.send(announcement)
+            except (discord.Forbidden, discord.HTTPException):
+                print(f"[Badge] Could not announce badge {badge_name} in guild {guild_id}.")
+
+    except Exception as e:
+        print(f"[Badge check error] {type(e).__name__}: {e}")
+
+
+async def increment_badge_counter(guild_id: str, user_id: str, counter: str, amount: int = 1) -> None:
+    """Increment a badge counter (e.g. fish_count, mine_count) for a user."""
+    key = f"{guild_id}-{user_id}"
+    await badges_col.update_one(
+        {"_id": key},
+        {"$inc": {f"counters.{counter}": amount}, "$set": {"guild": guild_id, "user": user_id}},
+        upsert=True,
+    )
+
+
 def xp_earn(min_xp: int, max_xp: int):
     def decorator(func):
         import functools
 
         @functools.wraps(func)
         async def wrapper(ctx, *args, **kwargs):
-            # Execute the command first
-            result = await func(ctx, *args, **kwargs)
-            
-            # Check if command was successful (didn't raise exception)
-            # and it's in a guild
+            original_send = getattr(ctx, "send", None)
+            sent_error_response = False
+
+            def looks_like_failure_message(content: str) -> bool:
+                text = content.strip().lower()
+                if text.startswith(("❌", "⚠️", "⏰", "🕒")):
+                    return True
+                failure_markers = (
+                    " on cooldown",
+                    "try again in",
+                    "you need ",
+                    "don't need",
+                    "you don't have",
+                    "you cannot",
+                    "you can't",
+                    "invalid",
+                    "not found",
+                )
+                return any(marker in text for marker in failure_markers)
+
+            async def tracked_send(*send_args, **send_kwargs):
+                nonlocal sent_error_response
+                content = send_kwargs.get("content")
+                if content is None and send_args:
+                    content = send_args[0]
+
+                if isinstance(content, str):
+                    if looks_like_failure_message(content):
+                        sent_error_response = True
+                        setattr(ctx, "_skip_xp_award", True)
+
+                return await original_send(*send_args, **send_kwargs)
+
+            if callable(original_send):
+                setattr(ctx, "send", tracked_send)
+
+            try:
+                result = await func(ctx, *args, **kwargs)
+            finally:
+                if callable(original_send):
+                    setattr(ctx, "send", original_send)
+
             if ctx.guild:
+                if getattr(ctx, "_xp_already_awarded", False):
+                    return result
+
                 command_name = (ctx.command.name if ctx.command else func.__name__).lower()
                 if command_name in STAFF_HELP_COMMANDS:
                     return result
-                if getattr(ctx, "_skip_xp_award", False):
+                if sent_error_response or getattr(ctx, "_skip_xp_award", False):
                     setattr(ctx, "_skip_xp_award", False)
                     return result
+
+                setattr(ctx, "_xp_already_awarded", True)
 
                 xp_gained = random.randint(min_xp, max_xp)
                 user_id = str(ctx.author.id)
@@ -748,11 +1055,138 @@ async def get_user(ctx, guild_id, user_id):
                 if isinstance(current_val, int) and current_val != defaults[field]:
                     changes_detected.append((field, u[field], current_val))
 
+        inventory = u.get("inventory", [])
+        normalized_inventory, inventory_changed = normalize_inventory_items(inventory)
+        if inventory_changed:
+            u["inventory"] = normalized_inventory
+            updated = True
+
         if updated:
             await economy_col.update_one({"_id": key}, {"$set": u})
 
         return u
-        
+
+
+def normalize_item_key(item):
+    if isinstance(item, str):
+        return item.strip().lower()
+
+    if isinstance(item, dict):
+        raw = item.get("_id") or item.get("name_lower") or item.get("name")
+        if raw is None:
+            return None
+        return str(raw).strip().lower()
+
+    return None
+
+
+def normalize_inventory_items(inventory):
+    normalized = []
+    changed = False
+
+    for item in inventory or []:
+        item_key = normalize_item_key(item)
+
+        if item_key in TOOL_DURABILITIES:
+            max_uses = TOOL_DURABILITIES[item_key]
+            if isinstance(item, dict):
+                uses_left = item.get("uses_left")
+                if not isinstance(uses_left, int):
+                    uses_left = max_uses
+                    changed = True
+                uses_left = max(0, min(uses_left, max_uses))
+                canonical = {"_id": item_key, "uses_left": uses_left}
+                if item != canonical:
+                    changed = True
+                normalized.append(canonical)
+            else:
+                normalized.append({"_id": item_key, "uses_left": max_uses})
+                changed = True
+            continue
+
+        if item_key == "pet_duck":
+            uses_left = 3
+            if isinstance(item, dict) and isinstance(item.get("uses_left"), int):
+                uses_left = max(0, item.get("uses_left"))
+            canonical = {"_id": "pet_duck", "uses_left": uses_left}
+            if item != canonical:
+                changed = True
+            normalized.append(canonical)
+            continue
+
+        normalized.append(item)
+
+    return normalized, changed
+
+
+def consume_tool_use(inventory, tool_name):
+    tool_key = tool_name.strip().lower()
+    max_uses = TOOL_DURABILITIES.get(tool_key)
+    if max_uses is None:
+        return False, False, None
+
+    for idx, item in enumerate(inventory):
+        item_key = normalize_item_key(item)
+        if item_key != tool_key:
+            continue
+
+        if isinstance(item, dict):
+            uses_left = item.get("uses_left")
+            if not isinstance(uses_left, int):
+                uses_left = max_uses
+        else:
+            uses_left = max_uses
+
+        uses_left -= 1
+        if uses_left <= 0:
+            inventory.pop(idx)
+            return True, True, 0
+
+        inventory[idx] = {"_id": tool_key, "uses_left": uses_left}
+        return True, False, uses_left
+
+    return False, False, None
+
+
+async def backfill_legacy_tool_durability() -> dict:
+    """Temporary migration: convert legacy string tools into full-durability tool objects."""
+    stats = {
+        "scanned": 0,
+        "updated": 0,
+        "write_errors": 0,
+    }
+
+    query = {"inventory": {"$exists": True}}
+    async for doc in economy_col.find(query):
+        inventory = doc.get("inventory")
+        if not isinstance(inventory, list) or not inventory:
+            continue
+
+        stats["scanned"] += 1
+        has_legacy_tool_string = any(
+            isinstance(item, str) and normalize_item_key(item) in TOOL_DURABILITIES
+            for item in inventory
+        )
+        if not has_legacy_tool_string:
+            continue
+
+        normalized_inventory, _ = normalize_inventory_items(inventory)
+        if normalized_inventory == inventory:
+            continue
+
+        try:
+            result = await economy_col.update_one(
+                {"_id": doc.get("_id")},
+                {"$set": {"inventory": normalized_inventory}}
+            )
+            if getattr(result, "modified_count", 1):
+                stats["updated"] += 1
+        except Exception:
+            stats["write_errors"] += 1
+
+    return stats
+
+
 async def prompt_for_role(ctx):
     def check(m):
         return m.author == ctx.author and m.channel == ctx.channel
@@ -2177,28 +2611,49 @@ async def ensure_shop_items():
             "name": "Fishing Rod",
             "name_lower": "fishing rod",
             "price": 150,
-            "description": "🎣 Needed to catch fish to earn coins."
+            "description": f"🎣 Needed to catch fish to earn coins. Breaks after {TOOL_DURABILITIES['fishing rod']} uses."
         },
         {
             "_id": "laptop",
             "name": "Laptop",
             "name_lower": "laptop",
             "price": 500,
-            "description": "💻 Needed to work the developer job."
+            "description": f"💻 Needed to work the developer job. Breaks after {TOOL_DURABILITIES['laptop']} uses."
         },
         {
             "_id": "pickaxe",
             "name": "Pickaxe",
             "name_lower": "pickaxe",
             "price": 500,
-            "description": "⛏️ Needed to go mining."
+            "description": f"⛏️ Needed to go mining. Breaks after {TOOL_DURABILITIES['pickaxe']} uses."
+        },
+        {
+            "_id": "shovel",
+            "name": "Shovel",
+            "name_lower": "shovel",
+            "price": 350,
+            "description": f"🪏 Needed to dig for cool rocks. Breaks after {TOOL_DURABILITIES['shovel']} uses."
         },
         {
             "_id": "rifle",
             "name": "Rifle",
             "name_lower": "rifle",
             "price": 500,
-            "description": "🔫 Needed to go hunting."
+            "description": f"🔫 Needed to go hunting. Breaks after {TOOL_DURABILITIES['rifle']} uses."
+        },
+        {
+            "_id": "lockpick",
+            "name": "Lockpick",
+            "name_lower": "lockpick",
+            "price": 250,
+            "description": f"🗝️ Needed for bank crimes. Breaks after {TOOL_DURABILITIES['lockpick']} uses."
+        },
+        {
+            "_id": "butterfly net",
+            "name": "Butterfly Net",
+            "name_lower": "butterfly net",
+            "price": 450,
+            "description": f"🦋 Needed to catch bugs with bugcatch. Breaks after {TOOL_DURABILITIES['butterfly net']} uses."
         },
         {
             "_id": "pet_duck",
@@ -2275,6 +2730,12 @@ async def check_expired_drops():
                 print(f"Error refunding drop {drop['_id']} to {drop['author_id']}: {e}")
         
         await drop_instances_col.delete_one({"_id": drop["_id"]})
+
+
+@tasks.loop(hours=1)
+async def ensure_badge_roles_hourly():
+    await ensure_all_badge_roles()
+
 
 @tasks.loop(hours=24)
 async def periodic_cleanup():
@@ -2598,6 +3059,21 @@ async def on_ready():
 
     print(f"Logging in as {bot.user}...")
 
+    run_legacy_tool_backfill = os.getenv("RUN_LEGACY_TOOL_DURABILITY_BACKFILL", "true").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if run_legacy_tool_backfill:
+        try:
+            tool_backfill_stats = await backfill_legacy_tool_durability()
+            print(
+                "[Legacy Tool Durability Backfill] "
+                f"scanned={tool_backfill_stats['scanned']} "
+                f"updated={tool_backfill_stats['updated']} "
+                f"write_errors={tool_backfill_stats['write_errors']}"
+            )
+        except Exception as e:
+            print(f"[Legacy Tool Durability Backfill] failed: {type(e).__name__} - {e}")
+
     run_investment_backfill = os.getenv("RUN_INVESTMENT_DATE_BACKFILL", "true").strip().lower() in {
         "1", "true", "yes", "on"
     }
@@ -2635,6 +3111,9 @@ async def on_ready():
 
     if not check_expired_mutes.is_running():
         check_expired_mutes.start()
+
+    if not ensure_badge_roles_hourly.is_running():
+        ensure_badge_roles_hourly.start()
 
     await load_sticky_notes()
 
@@ -2767,6 +3246,8 @@ async def on_ready():
 
     await ensure_shop_items()
     print("✅ Shop synced with initial items.")
+    await ensure_all_badge_roles()
+    print("✅ Badge roles ensured.")
 
     guilds = await settings_col.distinct("guild")
     for guild_id in guilds:
@@ -5040,14 +5521,20 @@ async def process_shop_purchase(member, guild, store_item: dict, user_data: dict
 
     new_wallet = wallet - price
     item_id = str(store_item.get("_id", ""))
+    item_key = str(store_item.get("name_lower") or item_name).strip().lower()
     is_pet_duck = store_item.get("name_lower") == "pet_duck" or item_id == "pet_duck" or item_id.endswith("-pet_duck")
 
     if is_pet_duck:
         inventory.append({"_id": "pet_duck", "uses_left": 3})
         success_message = "🦆 You bought a Pet Duck! It has 3 uses. You can stack multiple ducks."
         purchase_type = "pet_duck"
+    elif item_key in TOOL_DURABILITIES:
+        max_uses = TOOL_DURABILITIES[item_key]
+        inventory.append({"_id": item_key, "uses_left": max_uses})
+        success_message = f"✅ You bought **{item_name}** for {price} coins! Durability: **{max_uses}/{max_uses}**"
+        purchase_type = "inventory"
     else:
-        inventory.append(store_item.get("name_lower", item_name.lower()))
+        inventory.append(item_key)
         success_message = f"✅ You bought **{item_name}** for {price} coins!"
         purchase_type = "inventory"
 
@@ -5065,6 +5552,78 @@ async def process_shop_purchase(member, guild, store_item: dict, user_data: dict
         "new_wallet": new_wallet,
         "purchase_type": purchase_type,
     }
+
+
+async def process_shop_refund(member, guild, item_key: str, user_data: dict):
+    normalized_key = str(item_key or "").strip().lower()
+    if not normalized_key:
+        return {"ok": False, "message": "❌ Invalid refund item."}
+
+    wallet = int(user_data.get("wallet", 0) or 0)
+    inventory = list(user_data.get("inventory", []))
+    user_key = f"{guild.id}-{member.id}"
+
+    remove_index = None
+    removed_item = None
+    for idx, item in enumerate(inventory):
+        if normalize_item_key(item) == normalized_key:
+            remove_index = idx
+            removed_item = item
+            break
+
+    if remove_index is None:
+        return {"ok": False, "message": "❌ That item is not in your inventory anymore."}
+
+    normalized_candidates = {
+        normalized_key,
+        normalized_key.replace("_", " "),
+        normalized_key.replace(" ", "_"),
+    }
+    prefixed_ids = [f"{guild.id}-{candidate}" for candidate in normalized_candidates]
+    store_item = await guild_shop_col.find_one({
+        "guild": str(guild.id),
+        "$or": [
+            {"name_lower": {"$in": list(normalized_candidates)}},
+            {"_id": {"$in": prefixed_ids}},
+        ],
+    })
+    if not store_item:
+        store_item = await shop_col.find_one({
+            "$or": [
+                {"name_lower": {"$in": list(normalized_candidates)}},
+                {"_id": {"$in": list(normalized_candidates)}},
+            ]
+        })
+
+    if not store_item:
+        return {"ok": False, "message": "❌ This item can’t be refunded because it no longer exists in the shop."}
+
+    try:
+        price = int(store_item.get("price", 0))
+    except (TypeError, ValueError):
+        return {"ok": False, "message": "❌ This item has an invalid shop price and cannot be refunded."}
+
+    if price <= 0:
+        return {"ok": False, "message": "❌ This item has an invalid shop price and cannot be refunded."}
+
+    refund_amount = price // 2
+    inventory.pop(remove_index)
+    new_wallet = wallet + refund_amount
+    await economy_col.update_one(
+        {"_id": user_key},
+        {"$set": {"wallet": new_wallet, "inventory": inventory}},
+    )
+
+    item_name = store_item.get("name") or normalized_key.replace("_", " ").title()
+    return {
+        "ok": True,
+        "item_name": item_name,
+        "refund_amount": refund_amount,
+        "old_wallet": wallet,
+        "new_wallet": new_wallet,
+        "removed_item": removed_item,
+    }
+
 
 class ShopView(discord.ui.View):
     def __init__(self, user_id, guild_id, items, user_balance):
@@ -5108,6 +5667,88 @@ class ShopView(discord.ui.View):
             color=discord.Color.blue()
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @discord.ui.button(label="💸 Refund", style=discord.ButtonStyle.blurple, custom_id="refund_items_button")
+    async def refund_items(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ You can't use this button!", ephemeral=True)
+            return
+
+        guild_id = str(interaction.guild.id)
+        user_data = await get_user(None, guild_id, interaction.user.id)
+        inventory = list(user_data.get("inventory", []))
+        if not inventory:
+            await interaction.response.send_message("❌ Your inventory is empty, so there’s nothing to refund.", ephemeral=True)
+            return
+
+        counts = {}
+        for item in inventory:
+            item_key = normalize_item_key(item)
+            if not item_key:
+                continue
+            counts[item_key] = counts.get(item_key, 0) + 1
+
+        if not counts:
+            await interaction.response.send_message("❌ No refundable items were found in your inventory.", ephemeral=True)
+            return
+
+        options = []
+        for item_key, count in counts.items():
+            normalized_candidates = {
+                item_key,
+                item_key.replace("_", " "),
+                item_key.replace(" ", "_"),
+            }
+            prefixed_ids = [f"{guild_id}-{candidate}" for candidate in normalized_candidates]
+            store_item = await guild_shop_col.find_one({
+                "guild": guild_id,
+                "$or": [
+                    {"name_lower": {"$in": list(normalized_candidates)}},
+                    {"_id": {"$in": prefixed_ids}},
+                ],
+            })
+            if not store_item:
+                store_item = await shop_col.find_one({
+                    "$or": [
+                        {"name_lower": {"$in": list(normalized_candidates)}},
+                        {"_id": {"$in": list(normalized_candidates)}},
+                    ]
+                })
+            if not store_item:
+                continue
+
+            try:
+                item_price = int(store_item.get("price", 0))
+            except (TypeError, ValueError):
+                continue
+            if item_price <= 0:
+                continue
+
+            refund_amount = item_price // 2
+            item_name = store_item.get("name") or item_key.replace("_", " ").title()
+            label = f"{item_name} x{count}"
+            description = f"Refund value: +🪙 {refund_amount:,} each"
+            options.append(
+                discord.SelectOption(
+                    label=label[:100],
+                    description=description[:100],
+                    value=item_key,
+                    emoji="💸",
+                )
+            )
+
+        if not options:
+            await interaction.response.send_message("❌ No refundable items were found in your inventory.", ephemeral=True)
+            return
+
+        view = RefundDropdown(self.user_id, guild_id, options)
+        embed = discord.Embed(
+            title="💸 Refund an Item",
+            description="Choose one inventory item to refund for half its shop price.",
+            color=discord.Color.orange(),
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
 
 class ShopDropdown(discord.ui.View):
     def __init__(self, user_id, guild_id, items, user_balance, options):
@@ -5173,6 +5814,50 @@ class ShopDropdown(discord.ui.View):
                 f"❌ An error occurred during purchase: `{type(e).__name__}: {e}`",
                 ephemeral=True
             )
+
+
+class RefundDropdown(discord.ui.View):
+    def __init__(self, user_id, guild_id, options):
+        super().__init__(timeout=180)
+        self.user_id = user_id
+        self.guild_id = guild_id
+        self.dropdown = discord.ui.Select(
+            placeholder="Choose an item to refund...",
+            options=options[:25],
+        )
+        self.dropdown.callback = self.dropdown_callback
+        self.add_item(self.dropdown)
+
+    async def dropdown_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ You can't use this dropdown!", ephemeral=True)
+            return
+
+        selected_item_key = self.dropdown.values[0]
+        user_data = await get_user(None, self.guild_id, interaction.user.id)
+        result = await process_shop_refund(interaction.user, interaction.guild, selected_item_key, user_data)
+        if not result.get("ok"):
+            await interaction.response.send_message(result["message"], ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="✅ Refund Complete",
+            description=(
+                f"Refunded **{result['item_name']}**.\n\n"
+                f"Returned: 🪙 {result['refund_amount']:,}\n"
+                f"Old Wallet: 🪙 {result['old_wallet']:,}\n"
+                f"New Wallet: 🪙 {result['new_wallet']:,}"
+            ),
+            color=discord.Color.green(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        self.dropdown.disabled = True
+        self.dropdown.placeholder = "Refund completed!"
+        try:
+            await interaction.followup.edit_message(interaction.message.id, view=self)
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
 @bot.command(name="maintenance", description="Toggle maintenance mode (staff only access).")
 @staffperm("config")
@@ -5291,6 +5976,12 @@ async def shop(ctx):
         async for item in shop_items:
             exists = True
             items_list.append(item)
+
+        existing_name_lowers = {
+            str(item.get("name_lower") or "").strip().lower()
+            for item in items_list
+            if item.get("name_lower")
+        }
         
         if not exists:
             defaults = shop_col.find()
@@ -5303,6 +5994,26 @@ async def shop(ctx):
             shop_items = guild_shop_col.find({"guild": guild_id}).sort("price", 1)
             async for item in shop_items:
                 items_list.append(item)
+                if item.get("name_lower"):
+                    existing_name_lowers.add(str(item.get("name_lower")).strip().lower())
+
+        defaults = shop_col.find()
+        added_default_item = False
+        async for item in defaults:
+            default_name_lower = str(item.get("name_lower") or item.get("_id") or "").strip().lower()
+            if not default_name_lower or default_name_lower in existing_name_lowers:
+                continue
+
+            doc = dict(item)
+            doc["_id"] = f"{guild_id}-{item['_id']}"
+            doc["guild"] = guild_id
+            await guild_shop_col.update_one({"_id": doc["_id"]}, {"$set": doc}, upsert=True)
+            items_list.append(doc)
+            existing_name_lowers.add(default_name_lower)
+            added_default_item = True
+
+        if added_default_item:
+            items_list.sort(key=lambda x: x.get("price", 0))
 
         embed = discord.Embed(
             title="🛍️ Shop",
@@ -5521,11 +6232,28 @@ async def buy(ctx, item: str = None):
     item_name = item.strip().lower()
     store_item = await guild_shop_col.find_one({"guild": str(ctx.guild.id), "name_lower": item_name})
     if not store_item:
-        return await ctx.send(f"❌ Item **{item}** not found in the shop.")
+        default_item = await shop_col.find_one({"name_lower": item_name})
+        if default_item:
+            guild_id = str(ctx.guild.id)
+            store_item = dict(default_item)
+            store_item["_id"] = f"{guild_id}-{default_item['_id']}"
+            store_item["guild"] = guild_id
+            await guild_shop_col.update_one(
+                {"_id": store_item["_id"]},
+                {"$set": store_item},
+                upsert=True
+            )
+        else:
+            return await ctx.send(f"❌ Item **{item}** not found in the shop.")
 
     data = await get_user(ctx, ctx.guild.id, ctx.author.id)
     result = await process_shop_purchase(ctx.author, ctx.guild, store_item, data)
     await ctx.send(result["message"])
+
+    if result.get("ok"):
+        await increment_badge_counter(str(ctx.guild.id), str(ctx.author.id), "shop_purchases")
+        fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+        await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
     
 @bot.hybrid_command(name="use", description="Use an item from your inventory.")
 @app_commands.describe(item_name="The item to use (e.g., 'fishing rod', 'energy drink', 'laptop'). Use '/inventory' to see your items.")
@@ -5539,7 +6267,7 @@ async def use(ctx, item_name: str):
 
     item_name = item_name.strip().lower()
 
-    matched_item = next((i for i in inventory if i.lower() == item_name), None)
+    matched_item = next((i for i in inventory if normalize_item_key(i) == item_name), None)
     if not matched_item:
         return await ctx.send("❌ You don’t have that item in your inventory.")
 
@@ -5568,15 +6296,22 @@ async def inventory(ctx):
         return await ctx.send("🎒 Your inventory is empty.")
 
     counts = {}
+    tool_durability = {}
     duck_total = 0
     duck_uses = 0
 
     for item in inv:
-        if isinstance(item, dict) and item.get("_id") == "pet_duck":
+        item_key = normalize_item_key(item)
+
+        if item_key == "pet_duck":
             duck_total += 1
-            duck_uses += item.get("uses_left", 0)
+            duck_uses += item.get("uses_left", 0) if isinstance(item, dict) else 0
+        elif item_key in TOOL_DURABILITIES:
+            uses_left = item.get("uses_left", TOOL_DURABILITIES[item_key]) if isinstance(item, dict) else TOOL_DURABILITIES[item_key]
+            tool_durability.setdefault(item_key, []).append(uses_left)
         else:
-            counts[item] = counts.get(item, 0) + 1
+            key = item_key if item_key else str(item)
+            counts[key] = counts.get(key, 0) + 1
 
     embed = discord.Embed(
         title=f"🎒 {ctx.author.display_name}'s Inventory",
@@ -5591,6 +6326,28 @@ async def inventory(ctx):
             inline=False
         )
 
+    for tool_key, durability_values in tool_durability.items():
+        shop_item = await shop_col.find_one({"name_lower": tool_key})
+        max_uses = TOOL_DURABILITIES[tool_key]
+        display_name = shop_item["name"] if shop_item else tool_key.replace("_", " ").title()
+        description = shop_item.get("description", "No description.") if shop_item else "No description."
+
+        durability_text = ", ".join(f"{uses}/{max_uses}" for uses in durability_values[:5])
+        if len(durability_values) > 5:
+            durability_text += ", ..."
+
+        embed.add_field(
+            name=f"{display_name} x{len(durability_values)}",
+            value=f"{description}\nDurability: {durability_text}",
+            inline=False
+        )
+
+        if len(embed.fields) >= 24:
+            break
+
+    if len(embed.fields) >= 24:
+        return await ctx.send(embed=embed)
+
     for key, count in counts.items():
         shop_item = await shop_col.find_one({"name_lower": key})
         if shop_item:
@@ -5602,13 +6359,12 @@ async def inventory(ctx):
         else:
             clean_name = key.split("-", 1)[-1] if "-" in key else key
             emoji = "📦"
-            
             embed.add_field(
                 name=f"{emoji} {clean_name.replace('_', ' ').title()} x{count}",
                 value="*Item no longer sold in shop*",
                 inline=False
             )
-        
+
         if len(embed.fields) >= 24:
             embed.add_field(
                 name="📦 More Items",
@@ -5761,6 +6517,44 @@ async def leaderboard(ctx):
     view = LeaderboardView(ctx)
     embed = await view.get_money_embed()
     await ctx.send(embed=embed, view=view)
+
+@bot.hybrid_command(name="badges", description="View your earned badges.")
+@blacklist_barrier()
+async def badges(ctx, member: discord.Member = None):
+    if not await check_channel(ctx, "economy_channel", "Economy"):
+        return
+
+    target = member or ctx.author
+    guild_id = str(ctx.guild.id)
+    user_id = str(target.id)
+    key = f"{guild_id}-{user_id}"
+
+    badge_doc = await badges_col.find_one({"_id": key}) or {}
+    earned_ids = set(badge_doc.get("earned", []))
+
+    embed = discord.Embed(
+        title=f"🏅 {target.display_name}'s Badges",
+        color=discord.Color.gold(),
+    )
+
+    earned_lines = []
+    locked_lines = []
+    for badge_id, badge in BADGES.items():
+        line = f"{badge['emoji']} **{badge['name']}** — {badge['description']}"
+        if badge_id in earned_ids:
+            earned_lines.append(f"✅ {line}")
+        else:
+            locked_lines.append(f"🔒 {line}")
+
+    if earned_lines:
+        embed.add_field(name=f"Earned ({len(earned_lines)}/{len(BADGES)})", value="\n".join(earned_lines), inline=False)
+    else:
+        embed.add_field(name="Earned (0)", value="No badges earned yet. Get out there and play!", inline=False)
+
+    if locked_lines:
+        embed.add_field(name="Locked", value="\n".join(locked_lines[:15]), inline=False)
+
+    await ctx.send(embed=embed)
 
 @bot.hybrid_command(name="coinflip", description="Coin flip for coins.", aliases=["cf"])
 @app_commands.describe(amount="Amount to bet (number or 'all')")
@@ -5991,20 +6785,6 @@ async def work(ctx):
             prefix = doc.get("prefix", "?") if doc else "?"
             return await ctx.send(f"❌ You don't have a job yet! Use `{prefix}choosejob` to get one.")
 
-        inventory = data.get("inventory", [])
-        
-        has_laptop = False
-        for item in inventory:
-            if isinstance(item, str) and item == "laptop":
-                has_laptop = True
-                break
-            elif isinstance(item, dict) and item.get("_id") == "laptop":
-                has_laptop = True
-                break
-        
-        if job == "developer" and not has_laptop:
-            return await ctx.send("💻 You need a **laptop** to work as a developer!")
-
         if job not in ["developer", "duck"]:
             return await ctx.send("⚠️ You have an invalid job. Please use `?choosejob` to pick a valid one.")
 
@@ -6035,16 +6815,33 @@ async def work(ctx):
         earnings_multiplier = await get_earnings_multiplier(ctx.author.id, ctx.guild.id)
         
         inventory = data.get("inventory", [])
+        inventory_dirty = False
+        tool_break_notice = ""
+
+        if job == "developer":
+            consumed, broke, _ = consume_tool_use(inventory, "laptop")
+            if not consumed:
+                return await ctx.send("💻 You need a **laptop** to work as a developer!")
+            inventory_dirty = True
+            if broke:
+                tool_break_notice = "\n💥 Your **Laptop** broke. Buy a new one with `.buy laptop`."
+
         duck_used = False
         for i, item in enumerate(inventory):
             if isinstance(item, dict) and item.get("_id") == "pet_duck":
                 earnings_multiplier *= 1.3
                 item["uses_left"] -= 1
                 await ctx.send("🦆 Your Pet Duck boosted your work earnings by 30%!")
+                if item["uses_left"] <= 0:
+                    inventory.pop(i)
+                    await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
                 duck_used = True
                 break
         
         if duck_used:
+            inventory_dirty = True
+
+        if inventory_dirty:
             await economy_col.update_one(
                 {"_id": f"{ctx.guild.id}-{ctx.author.id}"},
                 {"$set": {"inventory": inventory}},
@@ -6088,6 +6885,8 @@ async def work(ctx):
         
         if earnings_multiplier > 1.0:
             msg += "\n🍪 **Lucky Cookie consumed!** Earnings doubled!"
+        if tool_break_notice:
+            msg += tool_break_notice
             
         await ctx.send(msg)
 
@@ -6275,17 +7074,9 @@ async def fish(ctx):
         now = datetime.now(timezone.utc)
 
         inventory = data.get("inventory", [])
-        
-        has_fishing_rod = False
-        for item in inventory:
-            if isinstance(item, str) and item == "fishing rod":
-                has_fishing_rod = True
-                break
-            elif isinstance(item, dict) and item.get("_id") == "fishing rod":
-                has_fishing_rod = True
-                break
-        
-        if not has_fishing_rod:
+
+        consumed, rod_broke, _ = consume_tool_use(inventory, "fishing rod")
+        if not consumed:
             return await ctx.send("🎣 You need a fishing rod to fish!")
 
         base_chance = 1.0
@@ -6311,13 +7102,18 @@ async def fish(ctx):
         catch = random.choice(fishes)
         coins_earned = int(catch[1] * (1 + luck_buff))
         await add_balance(ctx.author.id, ctx.guild.id, coins_earned)
+        tool_break_notice = "\n💥 Your **Fishing Rod** broke. Buy a new one with `.buy fishing rod`." if rod_broke else ""
         await economy_col.update_one(
             {"_id": user_id},
             {"$set": {"inventory": inventory, "last_fished": now.isoformat()}}
         )
 
-        msg = f"🎣 You caught a **{catch[0]}** and earned **{coins_earned} coins**!"
+        msg = f"🎣 You caught a **{catch[0]}** and earned **{coins_earned} coins**!{tool_break_notice}"
         await ctx.send(msg)
+
+        await increment_badge_counter(str(ctx.guild.id), str(ctx.author.id), "fish_count")
+        fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+        await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
 
     except Exception as e:
         print(f"[ERROR] fish command: {type(e).__name__} - {e}")
@@ -6436,10 +7232,14 @@ async def crime(ctx, *, choice: str):
         if choice not in valid:
             return await ctx.send("❌ Choose a valid crime: `bank`, `shoplift`, or `payroll`.")
 
+        lockpick_break_notice = ""
+
         if choice == "bank":
-            if "lockpick" not in inventory:
+            consumed, broke, _ = consume_tool_use(inventory, "lockpick")
+            if not consumed:
                 return await ctx.send("🔐 You need to buy a **🗝️ Lockpick** to rob the bank!")
-            inventory.remove("lockpick")
+            if broke:
+                lockpick_break_notice = "\n💥 Your **Lockpick** broke. Buy a new one with `.buy lockpick`."
 
         config = {
             "bank": {"chance": 0.4, "gain": (1200, 3000), "fine": (600, 1500)},
@@ -6475,6 +7275,8 @@ async def crime(ctx, *, choice: str):
                 {"$set": {"inventory": inventory, "last_crime": now.isoformat()}}
             )
             msg = f"💥 Crime successful! You earned **{amount} coins** via `{choice}` crime."
+            if lockpick_break_notice:
+                msg += lockpick_break_notice
             await ctx.send(msg)
         else:
             fine = random.randint(*conf["fine"])
@@ -6483,7 +7285,7 @@ async def crime(ctx, *, choice: str):
                 {"_id": f"{ctx.guild.id}-{ctx.author.id}"},
                 {"$set": {"wallet": new_wallet, "inventory": inventory}}
             )
-            await ctx.send(f"🚓 You were caught during the `{choice}` attempt. Fined **{fine} coins**.")
+            await ctx.send(f"🚓 You were caught during the `{choice}` attempt. Fined **{fine} coins**.{lockpick_break_notice}")
     except Exception as e:
         await ctx.send(f"⚠️ An unexpected error occurred, please contact thetruck: `{type(e).__name__} - {e}`")
         
@@ -6889,6 +7691,13 @@ async def invest(ctx, company: str = None, amount: str = None):
         
         data = await get_user(ctx, ctx.guild.id, ctx.author.id)
         wallet = data.get("wallet", 0)
+        user_id = f"{ctx.guild.id}-{ctx.author.id}"
+        user_investments = await investments_col.count_documents({"user_id": user_id})
+
+        if user_investments >= 5:
+            return await ctx.send(
+                "❌ You can only have up to **5 active investments** at a time. Sell some before investing again."
+            )
         
         if amount.lower() == "all":
             invest_amount = wallet
@@ -6906,7 +7715,6 @@ async def invest(ctx, company: str = None, amount: str = None):
         if invest_amount > wallet:
             return await ctx.send("❌ You don't have enough coins!")
         
-        user_id = f"{ctx.guild.id}-{ctx.author.id}"
         await create_investment(user_id, company, invest_amount)
         
         await subtract_balance(ctx.author.id, ctx.guild.id, invest_amount)
@@ -6935,7 +7743,7 @@ async def invest(ctx, company: str = None, amount: str = None):
 
             user_id = f"{ctx.guild.id}-{ctx.author.id}"
             data = await get_user(ctx, ctx.guild.id, ctx.author.id)
-            wallet = data.get("wallet", 0)
+            wallet = int(data.get("wallet", 0) or 0)
             user_investments = await investments_col.count_documents({"user_id": user_id})
 
             if user_investments >= 5:
@@ -6944,8 +7752,15 @@ async def invest(ctx, company: str = None, amount: str = None):
                     ephemeral=True
                 )
 
+            if wallet < stats["min"]:
+                return await interaction.response.send_message(
+                    f"❌ You need at least {stats['min']} coins to invest in {company}.",
+                    ephemeral=True
+                )
+
             step = 500
-            amounts = [x for x in range(stats["min"], stats["max"] + step, step)]
+            max_affordable = min(stats["max"], wallet)
+            amounts = [x for x in range(stats["min"], max_affordable + step, step)]
             options = [
                 discord.SelectOption(label=f"{amt} coins", value=str(amt))
                 for amt in amounts
@@ -6962,19 +7777,26 @@ async def invest(ctx, company: str = None, amount: str = None):
 
                 invest_amount = int(select.values[0])
 
-                if wallet < invest_amount:
+                latest_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+                latest_wallet = int(latest_data.get("wallet", 0) or 0)
+                if latest_wallet < invest_amount:
                     return await inter.response.send_message(
-                        f"❌ You only have {wallet} coins but tried to invest {invest_amount}.",
+                        f"❌ You only have {latest_wallet} coins but tried to invest {invest_amount}.",
                         ephemeral=True
                     )
 
-                new_wallet = wallet - invest_amount
-
-                await economy_col.update_one(
-                    {"_id": user_id},
-                    {"$set": {"wallet": new_wallet}},
-                    upsert=True
+                update_result = await economy_col.update_one(
+                    {"_id": user_id, "wallet": {"$gte": invest_amount}},
+                    {"$inc": {"wallet": -invest_amount}},
+                    upsert=False
                 )
+                if getattr(update_result, "modified_count", 0) == 0:
+                    fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+                    fresh_wallet = int(fresh_data.get("wallet", 0) or 0)
+                    return await inter.response.send_message(
+                        f"❌ You only have {fresh_wallet} coins but tried to invest {invest_amount}.",
+                        ephemeral=True
+                    )
 
                 await create_investment(user_id, company, invest_amount)
 
@@ -7060,19 +7882,12 @@ async def hunt(ctx):
         data = await get_user(ctx, ctx.guild.id, ctx.author.id)
 
         inventory = data.get("inventory", [])
-        
-        has_rifle = False
-        for item in inventory:
-            if isinstance(item, str) and item == "rifle":
-                has_rifle = True
-                break
-            elif isinstance(item, dict) and item.get("_id") == "rifle":
-                has_rifle = True
-                break
-        
-        if not has_rifle:
+
+        consumed, rifle_broke, _ = consume_tool_use(inventory, "rifle")
+        if not consumed:
             ctx.command.reset_cooldown(ctx)
             return await ctx.send("🔫 You need a rifle to hunt!")
+        tool_break_notice = "\n💥 Your **Rifle** broke. Buy a new one with `.buy rifle`." if rifle_broke else ""
 
         animals = [
             ("rabbit", 200),
@@ -7083,7 +7898,6 @@ async def hunt(ctx):
         catch = random.choice(animals)
         animal, value = catch
 
-        inventory = data.get("inventory", [])
         inventory.append(animal)
 
         await economy_col.update_one(
@@ -7091,7 +7905,11 @@ async def hunt(ctx):
             {"$set": {"inventory": inventory}}
         )
 
-        await ctx.send(f"🏹 You hunted a **{animal}**! (Sell value: {value} coins)")
+        await ctx.send(f"🏹 You hunted a **{animal}**! (Sell value: {value} coins){tool_break_notice}")
+
+        await increment_badge_counter(str(ctx.guild.id), str(ctx.author.id), "hunt_count")
+        fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+        await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
 
     except Exception as e:
         ctx.command.reset_cooldown(ctx)
@@ -7122,19 +7940,12 @@ async def mine(ctx):
         data = await get_user(ctx, ctx.guild.id, ctx.author.id)
 
         inventory = data.get("inventory", [])
-        
-        has_pickaxe = False
-        for item in inventory:
-            if isinstance(item, str) and item == "pickaxe":
-                has_pickaxe = True
-                break
-            elif isinstance(item, dict) and item.get("_id") == "pickaxe":
-                has_pickaxe = True
-                break
-        
-        if not has_pickaxe:
+
+        consumed, pickaxe_broke, _ = consume_tool_use(inventory, "pickaxe")
+        if not consumed:
             ctx.command.reset_cooldown(ctx)
             return await ctx.send("⛏️ You need a pickaxe to mine!")
+        tool_break_notice = "\n💥 Your **Pickaxe** broke. Buy a new one with `.buy pickaxe`." if pickaxe_broke else ""
 
         ores = [
             ("iron ore", 200),
@@ -7145,7 +7956,6 @@ async def mine(ctx):
         catch = random.choice(ores)
         ore, value = catch
 
-        inventory = data.get("inventory", [])
         inventory.append(ore)
 
         await economy_col.update_one(
@@ -7153,7 +7963,11 @@ async def mine(ctx):
             {"$set": {"inventory": inventory}}
         )
 
-        await ctx.send(f"⛏️ You mined **{ore}**! (Sell value: {value} coins)")
+        await ctx.send(f"⛏️ You mined **{ore}**! (Sell value: {value} coins){tool_break_notice}")
+
+        await increment_badge_counter(str(ctx.guild.id), str(ctx.author.id), "mine_count")
+        fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+        await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
 
     except Exception as e:
         ctx.command.reset_cooldown(ctx)
@@ -7169,6 +7983,118 @@ async def mine_error(ctx, error):
         return await send_hybrid_error(ctx, content=f"🕒 You can mine again in {minutes} minutes.")
     else:
         await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred while mining.")
+
+@bot.hybrid_command(name="dig", description="Dig for cool rocks.")
+@commands.cooldown(1, 3600, commands.BucketType.member)
+@blacklist_barrier()
+@xp_earn(12, 24)
+async def dig(ctx):
+    if not await check_channel(ctx, "economy_channel", "Economy"):
+        return
+    try:
+        user_id = f"{ctx.guild.id}-{ctx.author.id}"
+        data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+
+        inventory = data.get("inventory", [])
+
+        consumed, shovel_broke, _ = consume_tool_use(inventory, "shovel")
+        if not consumed:
+            ctx.command.reset_cooldown(ctx)
+            return await ctx.send("🪏 You need a shovel to dig!")
+        tool_break_notice = "\n💥 Your **Shovel** broke. Buy a new one with `.buy shovel`." if shovel_broke else ""
+
+        found_rock, value = random.choice(dig_rocks)
+        inventory.append(found_rock)
+
+        await economy_col.update_one(
+            {"_id": user_id},
+            {"$set": {"inventory": inventory}}
+        )
+
+        await ctx.send(f"🪏 You dug up **{found_rock}**! (Sell value: {value} coins){tool_break_notice}")
+
+        await increment_badge_counter(str(ctx.guild.id), str(ctx.author.id), "dig_count")
+        fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+        await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
+
+    except Exception as e:
+        ctx.command.reset_cooldown(ctx)
+        await ctx.send("⚠️ Something went wrong while digging. Contact thetruck.")
+        print(f"[ERROR] dig command: {type(e).__name__} - {e}")
+        traceback.print_exc()
+
+@dig.error
+async def dig_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        total_seconds = int(error.retry_after)
+        minutes = total_seconds // 60
+        return await send_hybrid_error(ctx, content=f"🕒 You can dig again in {minutes} minutes.")
+    else:
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred while digging.")
+
+
+@bot.hybrid_command(name="bugcatch", description="Catch bugs and sell them instantly for coins.")
+@commands.cooldown(1, 3600, commands.BucketType.member)
+@blacklist_barrier()
+@xp_earn(12, 24)
+async def bugcatch(ctx):
+    if not await check_channel(ctx, "economy_channel", "Economy"):
+        return
+
+    try:
+        user_id = f"{ctx.guild.id}-{ctx.author.id}"
+        data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+        inventory = data.get("inventory", [])
+
+        consumed, net_broke, _ = consume_tool_use(inventory, "butterfly net")
+        if not consumed:
+            ctx.command.reset_cooldown(ctx)
+            return await ctx.send("🦋 You need a **Butterfly Net** to catch bugs! Buy one with `.buy butterfly net`.")
+
+        coins_multiplier = 1.0
+        for i, item in enumerate(inventory):
+            if isinstance(item, dict) and item.get("_id") == "pet_duck":
+                coins_multiplier *= 1.3
+                item["uses_left"] -= 1
+                await ctx.send("🦆 Your Pet Duck helped you sniff out better bugs!")
+                if item["uses_left"] <= 0:
+                    inventory.pop(i)
+                    await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
+                break
+
+        bug_name, base_value = random.choice(bugs_to_catch)
+        coins_earned = int(base_value * coins_multiplier)
+        await add_balance(ctx.author.id, ctx.guild.id, coins_earned)
+
+        await economy_col.update_one(
+            {"_id": user_id},
+            {"$set": {"inventory": inventory}}
+        )
+
+        message = f"🪲 You caught **{bug_name}** and sold it immediately for **{coins_earned} coins**!"
+        if net_broke:
+            message += "\n💥 Your **Butterfly Net** broke. Buy a new one with `.buy butterfly net`."
+        await ctx.send(message)
+
+        await increment_badge_counter(str(ctx.guild.id), str(ctx.author.id), "bug_count")
+        fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+        await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
+
+    except Exception as e:
+        ctx.command.reset_cooldown(ctx)
+        await ctx.send("⚠️ Something went wrong while bug catching. Contact thetruck.")
+        print(f"[ERROR] bugcatch command: {type(e).__name__} - {e}")
+        traceback.print_exc()
+
+
+@bugcatch.error
+async def bugcatch_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        total_seconds = int(error.retry_after)
+        minutes = total_seconds // 60
+        return await send_hybrid_error(ctx, content=f"🕒 You can bugcatch again in {minutes} minutes.")
+    else:
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred while bug catching.")
 
 class AnswerButton(discord.ui.Button):
     def __init__(self, label: str, value: int, parent_view):
