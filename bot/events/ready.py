@@ -109,6 +109,7 @@ class ReadyCog(commands.Cog, name="Ready"):
 
                     if datetime.now(timezone.utc) >= mute_end:
                         await mutes_col.delete_one({"_id": doc["_id"]})
+                        continue
                     if mute_role and mute_role not in member.roles:
                         await member.add_roles(
                             mute_role, reason="Reapplying mute after restart"
