@@ -402,6 +402,7 @@ class ShopCog(commands.Cog, name="Shop"):
         counts: dict[str, int] = {}
         duck_total = 0
         duck_uses = 0
+        tool_durabilities: dict[str, list[int]] = {}
 
         for item in inv:
             if isinstance(item, dict) and item.get("_id") == "pet_duck":
@@ -413,7 +414,11 @@ class ShopCog(commands.Cog, name="Shop"):
                 item_key = item.get("name_lower") or item.get("_id") or item.get("name")
                 if isinstance(item_key, str):
                     normalized_key = item_key.lower()
-                    counts[normalized_key] = counts.get(normalized_key, 0) + 1
+                    uses_left = item.get("uses_left")
+                    if isinstance(uses_left, int):
+                        tool_durabilities.setdefault(normalized_key, []).append(uses_left)
+                    else:
+                        counts[normalized_key] = counts.get(normalized_key, 0) + 1
 
         embed = discord.Embed(
             title=f"🎒 {ctx.author.display_name}'s Inventory",
@@ -425,6 +430,22 @@ class ShopCog(commands.Cog, name="Shop"):
             embed.add_field(
                 name=f"{shop_item['name']} x{duck_total}",
                 value=f"{shop_item.get('description', '')} ({duck_uses} uses left total)",
+                inline=False,
+            )
+
+        for key, durability_values in tool_durabilities.items():
+            count = len(durability_values)
+            min_uses = min(durability_values)
+            max_uses = max(durability_values)
+            shop_item = await shop_col.find_one({"name_lower": key})
+            item_name = shop_item["name"] if shop_item else key.replace("_", " ").title()
+            if min_uses == max_uses:
+                durability_text = f"{min_uses} durability each"
+            else:
+                durability_text = f"{min_uses}-{max_uses} durability"
+            embed.add_field(
+                name=f"{item_name} x{count}",
+                value=f"🛠️ {durability_text}",
                 inline=False,
             )
 

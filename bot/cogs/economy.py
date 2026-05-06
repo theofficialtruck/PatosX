@@ -8,9 +8,9 @@ import traceback
 from datetime import datetime, timedelta, timezone
 
 import discord
+from dateutil import parser as date_parser
 from discord import app_commands
 from discord.ext import commands
-from dateutil import parser as date_parser
 from pytz import UTC
 
 from bot.database import economy_col, investments_col, settings_col
@@ -29,7 +29,6 @@ from bot.views.confirmations import ConfirmSellAll
 from bot.views.jobs import JobPicker
 from bot.views.leaderboard import LeaderboardView
 
-
 SELL_PRICES: dict[str, int] = {
     "rabbit": 200,
     "deer": 450,
@@ -46,6 +45,37 @@ class EconomyCog(commands.Cog, name="Economy"):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+
+    def _collect_badges(
+        self,
+        data: dict,
+        total_balance: int,
+        investment_count: int,
+    ) -> list[tuple[str, str]]:
+        badges: list[tuple[str, str]] = []
+        if total_balance >= 1:
+            badges.append(("🟢 Starter", "Hold at least 1 coin."))
+        if data.get("job"):
+            badges.append(("💼 Employed", "Choose any job."))
+        if total_balance >= 10_000:
+            badges.append(("💰 Wealthy", "Reach 10,000 total coins."))
+        if total_balance >= 100_000:
+            badges.append(("🏦 Tycoon", "Reach 100,000 total coins."))
+        if int(data.get("daily_streak", 0) or 0) >= 7:
+            badges.append(("🔥 Streak Keeper", "Reach a 7-day daily streak."))
+        if int(data.get("fish_count", 0) or 0) >= 25:
+            badges.append(("🎣 Angler", "Catch fish 25 times."))
+        if int(data.get("hunt_count", 0) or 0) >= 25:
+            badges.append(("🏹 Hunter", "Hunt 25 times."))
+        if int(data.get("mine_count", 0) or 0) >= 25:
+            badges.append(("⛏️ Miner", "Mine 25 times."))
+        if int(data.get("dig_count", 0) or 0) >= 25:
+            badges.append(("🪏 Digger", "Dig 25 times."))
+        if int(data.get("bugcatch_count", 0) or 0) >= 25:
+            badges.append(("🪲 Bug Catcher", "Catch bugs 25 times."))
+        if investment_count > 0:
+            badges.append(("📈 Investor", "Open at least one investment."))
+        return badges
 
     # ------------------------------------------------------------------
     # Balance, daily, beg
@@ -149,6 +179,36 @@ class EconomyCog(commands.Cog, name="Economy"):
             traceback.print_exc()
 
     @commands.hybrid_command(
+        name="badges",
+        description="View your unlocked economy badges.",
+        aliases=["badge"],
+    )
+    @blacklist_barrier()
+    async def badges(self, ctx: commands.Context) -> None:
+        if not await check_channel(ctx, "economy_channel", "Economy"):
+            return
+
+        data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+        total_balance = int(data.get("wallet", 0) or 0) + int(data.get("bank", 0) or 0)
+        investment_count = await investments_col.count_documents(
+            {"guild_id": str(ctx.guild.id), "user_id": str(ctx.author.id)}
+        )
+        badges = self._collect_badges(data, total_balance, investment_count)
+
+        if not badges:
+            return await ctx.send(
+                "🏷️ You have no badges yet. Use economy/activity commands to unlock them."
+            )
+
+        embed = discord.Embed(
+            title=f"🏷️ {ctx.author.display_name}'s Badges",
+            description="\n".join(f"• **{name}** — {desc}" for name, desc in badges),
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text=f"Unlocked: {len(badges)}")
+        await ctx.send(embed=embed)
+
+    @commands.hybrid_command(
         name="daily",
         description="Claim your daily reward.",
         aliases=["collect"],
@@ -175,6 +235,7 @@ class EconomyCog(commands.Cog, name="Economy"):
                         remaining = timedelta(hours=24) - time_since_last
                         hours = remaining.seconds // 3600
                         minutes = (remaining.seconds // 60) % 60
+                        ctx._skip_xp_award = True
                         return await ctx.send(
                             f"🕒 Claim again in {hours}h {minutes}m"
                         )
@@ -246,6 +307,7 @@ class EconomyCog(commands.Cog, name="Economy"):
             await ctx.send(embed=embed)
 
         except Exception as exc:
+            ctx._skip_xp_award = True
             print(f"[ERROR] daily command: {type(exc).__name__} - {exc}")
             traceback.print_exc()
             await ctx.send(
@@ -270,6 +332,7 @@ class EconomyCog(commands.Cog, name="Economy"):
                         last_time = last_time.replace(tzinfo=timezone.utc)
                     if now - last_time < timedelta(minutes=15):
                         remaining = timedelta(minutes=15) - (now - last_time)
+                        ctx._skip_xp_award = True
                         return await ctx.send(
                             f"🕒 You can beg again in {remaining.seconds // 60} minutes."
                         )
@@ -317,6 +380,7 @@ class EconomyCog(commands.Cog, name="Economy"):
             await ctx.send(msg)
 
         except Exception as exc:
+            ctx._skip_xp_award = True
             print(f"[ERROR] beg command: {type(exc).__name__} - {exc}")
             traceback.print_exc()
             await ctx.send(
@@ -538,6 +602,7 @@ class EconomyCog(commands.Cog, name="Economy"):
             if not job:
                 doc = await settings_col.find_one({"guild": str(ctx.guild.id)})
                 prefix = doc.get("prefix", "?") if doc else "?"
+                ctx._skip_xp_award = True
                 return await ctx.send(
                     f"❌ You don't have a job yet! Use `{prefix}choosejob` to get one."
                 )
@@ -550,10 +615,12 @@ class EconomyCog(commands.Cog, name="Economy"):
             )
 
             if job == "developer" and not has_laptop:
+                ctx._skip_xp_award = True
                 return await ctx.send(
                     "💻 You need a **laptop** to work as a developer!"
                 )
             if job not in ["developer", "duck"]:
+                ctx._skip_xp_award = True
                 return await ctx.send(
                     "⚠️ You have an invalid job. Please use `?choosejob` to pick a valid one."
                 )
@@ -577,9 +644,11 @@ class EconomyCog(commands.Cog, name="Economy"):
                         hours, remainder = divmod(remaining, 3600)
                         minutes, _ = divmod(remainder, 60)
                         if hours > 0:
+                            ctx._skip_xp_award = True
                             return await ctx.send(
                                 f"⏰ You're on cooldown! Try again in {hours}h {minutes}m."
                             )
+                        ctx._skip_xp_award = True
                         return await ctx.send(
                             f"⏰ You're on cooldown! Try again in "
                             f"{minutes}m {int((remainder % 60))}s."
@@ -649,6 +718,7 @@ class EconomyCog(commands.Cog, name="Economy"):
             await ctx.send(msg)
 
         except Exception as exc:
+            ctx._skip_xp_award = True
             await ctx.send(
                 "⚠️ Something went wrong while processing your work. Contact thetruck."
             )
@@ -901,6 +971,7 @@ class EconomyCog(commands.Cog, name="Economy"):
         if not await check_channel(ctx, "economy_channel", "Economy"):
             return
         if member == ctx.author:
+            ctx._skip_xp_award = True
             return await ctx.send("❌ You can't rob yourself!")
 
         now = datetime.now(timezone.utc)
@@ -918,6 +989,7 @@ class EconomyCog(commands.Cog, name="Economy"):
             if now < cooldown_dt:
                 remaining = cooldown_dt - now
                 mins = int(remaining.total_seconds() // 60)
+                ctx._skip_xp_award = True
                 return await ctx.send(f"🕒 You can rob again in {mins} minute(s).")
 
         if r_doc.get("passive_until"):
@@ -925,6 +997,7 @@ class EconomyCog(commands.Cog, name="Economy"):
             if until.tzinfo is None:
                 until = until.replace(tzinfo=timezone.utc)
             if until > now:
+                ctx._skip_xp_award = True
                 return await ctx.send(
                     "🔒 You have passive mode enabled, disable it to rob others."
                 )
@@ -933,6 +1006,7 @@ class EconomyCog(commands.Cog, name="Economy"):
             if until.tzinfo is None:
                 until = until.replace(tzinfo=timezone.utc)
             if until > now:
+                ctx._skip_xp_award = True
                 return await ctx.send(
                     "🔒 That user has passive mode enabled, you can't rob them."
                 )
@@ -946,14 +1020,17 @@ class EconomyCog(commands.Cog, name="Economy"):
             if now - last_robbed < timedelta(hours=1):
                 rem = timedelta(hours=1) - (now - last_robbed)
                 minutes = round(rem.total_seconds() / 60)
+                ctx._skip_xp_award = True
                 return await ctx.send(
                     f"🛡️ {member.display_name} is under protection. Try again "
                     f"in {minutes} minutes."
                 )
 
         if r_doc.get("wallet", 0) < 500:
+            ctx._skip_xp_award = True
             return await ctx.send("❌ You need at least 500 coins to rob.")
         if v_doc.get("wallet", 0) < 300:
+            ctx._skip_xp_award = True
             return await ctx.send("❌ They don’t have enough coins to rob.")
 
         amount = random.randint(

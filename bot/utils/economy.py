@@ -38,6 +38,11 @@ async def get_user(ctx, guild_id, user_id) -> dict:
         "last_fished": None,
         "last_daily": None,
         "daily_streak": 0,
+        "fish_count": 0,
+        "hunt_count": 0,
+        "mine_count": 0,
+        "dig_count": 0,
+        "bugcatch_count": 0,
     }
 
     user = await economy_col.find_one({"_id": key})

@@ -145,6 +145,20 @@ INITIAL_SHOP_ITEMS: Final[tuple[dict, ...]] = (
         "description": "🔫 Needed to go hunting.",
     },
     {
+        "_id": "shovel",
+        "name": "Shovel",
+        "name_lower": "shovel",
+        "price": 450,
+        "description": "🪏 Needed to dig for buried finds.",
+    },
+    {
+        "_id": "bug_net",
+        "name": "Bug Net",
+        "name_lower": "bug net",
+        "price": 400,
+        "description": "🪲 Needed to catch bugs.",
+    },
+    {
         "_id": "pet_duck",
         "name": "Pet Duck",
         "name_lower": "pet duck",

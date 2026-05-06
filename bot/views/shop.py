@@ -6,6 +6,14 @@ import discord
 
 from bot.database import economy_col
 
+TOOL_DURABILITY: dict[str, int] = {
+    "fishing rod": 30,
+    "rifle": 25,
+    "pickaxe": 25,
+    "bug net": 20,
+    "shovel": 20,
+}
+
 
 async def process_shop_purchase(
     member: discord.Member,
@@ -82,6 +90,7 @@ async def process_shop_purchase(
             "new_wallet": new_wallet,
             "purchase_type": "role",
             "role_mention": role.mention,
+            "role_id": role.id,
         }
 
     if wallet < total_price:
@@ -105,12 +114,19 @@ async def process_shop_purchase(
             "Each has 3 uses."
         )
         purchase_type = "pet_duck"
+        inventory_key = "pet_duck"
     else:
-        inventory.extend(
-            [store_item.get("name_lower", item_name.lower())] * quantity
-        )
+        item_key = str(store_item.get("name_lower", item_name.lower())).lower()
+        inventory_key = item_key
+        if item_key in TOOL_DURABILITY:
+            inventory.extend(
+                {"_id": item_key, "uses_left": TOOL_DURABILITY[item_key]}
+                for _ in range(quantity)
+            )
+        else:
+            inventory.extend([item_key] * quantity)
         success_message = f"✅ You bought **{item_name} x{quantity}** for {total_price} coins!"
-        purchase_type = "inventory"
+        purchase_type = "tool" if item_key in TOOL_DURABILITY else "inventory"
 
     await economy_col.update_one(
         {"_id": user_key},
@@ -127,7 +143,106 @@ async def process_shop_purchase(
         "old_wallet": wallet,
         "new_wallet": new_wallet,
         "purchase_type": purchase_type,
+        "inventory_key": inventory_key,
     }
+
+
+class PurchaseRefundView(discord.ui.View):
+    """One-click refund for the most recent interactive shop purchase."""
+
+    def __init__(self, user_id: int, guild_id: str, purchase: dict) -> None:
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.guild_id = guild_id
+        self.purchase = purchase
+        self._done = False
+
+    @discord.ui.button(
+        label="↩️ Refund",
+        style=discord.ButtonStyle.secondary,
+        custom_id="shop_refund_button",
+    )
+    async def refund(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ You can't refund someone else's purchase.", ephemeral=True
+            )
+            return
+
+        if self._done:
+            await interaction.response.send_message(
+                "❌ This purchase has already been refunded.", ephemeral=True
+            )
+            return
+
+        from bot.utils.economy import get_user
+
+        data = await get_user(None, self.guild_id, interaction.user.id)
+        wallet = int(data.get("wallet", 0) or 0)
+        inventory = list(data.get("inventory", []))
+        refund_amount = int(self.purchase.get("price", 0) or 0)
+        quantity = int(self.purchase.get("quantity", 1) or 1)
+        purchase_type = self.purchase.get("purchase_type")
+        user_key = f"{interaction.guild.id}-{interaction.user.id}"
+
+        if refund_amount <= 0:
+            await interaction.response.send_message(
+                "❌ This purchase cannot be refunded.", ephemeral=True
+            )
+            return
+
+        if purchase_type == "role":
+            role_id = self.purchase.get("role_id")
+            role = interaction.guild.get_role(int(role_id)) if role_id else None
+            if not role or role not in interaction.user.roles:
+                await interaction.response.send_message(
+                    "❌ Refund unavailable: role is missing or already removed.",
+                    ephemeral=True,
+                )
+                return
+            try:
+                await interaction.user.remove_roles(
+                    role, reason="Shop refund requested by user"
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                await interaction.response.send_message(
+                    "❌ I couldn't remove the role, so refund was canceled.",
+                    ephemeral=True,
+                )
+                return
+
+        else:
+            key = str(self.purchase.get("inventory_key", "")).lower()
+            removed = 0
+            kept: list = []
+            for item in inventory:
+                if removed < quantity and (
+                    (isinstance(item, str) and item.lower() == key)
+                    or (isinstance(item, dict) and str(item.get("_id", "")).lower() == key)
+                ):
+                    removed += 1
+                    continue
+                kept.append(item)
+            if removed < quantity:
+                await interaction.response.send_message(
+                    "❌ Refund unavailable: purchased item was already used or missing.",
+                    ephemeral=True,
+                )
+                return
+            inventory = kept
+
+        await economy_col.update_one(
+            {"_id": user_key},
+            {"$set": {"wallet": wallet + refund_amount, "inventory": inventory}},
+            upsert=True,
+        )
+        self._done = True
+        button.disabled = True
+        button.label = "Refunded"
+        await interaction.response.edit_message(
+            content=f"✅ Refunded **{refund_amount}** coins back to your wallet.",
+            view=self,
+        )
 
 
 class ShopDropdown(discord.ui.View):
@@ -191,7 +306,14 @@ class ShopDropdown(discord.ui.View):
                 ),
                 color=discord.Color.green(),
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            refund_view = PurchaseRefundView(
+                self.user_id, str(interaction.guild.id), result
+            )
+            await interaction.response.send_message(
+                embed=embed,
+                view=refund_view,
+                ephemeral=True,
+            )
 
             self.dropdown.disabled = True
             self.dropdown.placeholder = "Purchase completed!"
