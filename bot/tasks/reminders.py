@@ -10,7 +10,7 @@ from bot.database import reminders_col
 from bot.utils.state import has_bot, get_bot
 
 
-@tasks.loop(seconds=0.01)
+@tasks.loop(seconds=5)
 async def check_reminders() -> None:
     if not has_bot():
         return
