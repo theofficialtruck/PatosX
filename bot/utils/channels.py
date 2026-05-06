@@ -35,15 +35,41 @@ async def check_channel_setting(
     """
     guild_id = str(ctx.guild.id)
 
+    async def _send_ctx_message(*, content: str | None = None, embed=None) -> None:
+        interaction = getattr(ctx, "interaction", None)
+        if interaction:
+            if interaction.response.is_done():
+                await interaction.followup.send(content=content, embed=embed, ephemeral=True)
+            else:
+                await interaction.response.send_message(
+                    content=content, embed=embed, ephemeral=True
+                )
+            return
+        await ctx.send(content=content, embed=embed)
+
     if await is_maintenance_mode(guild_id) and await is_staff_user(ctx):
         return True
 
-    settings = await settings_col.find_one({"guild": guild_id})
-    if not settings:
+    settings = await settings_col.find_one({"guild": guild_id}) or {}
+    config = await config_col.find_one({"guild": guild_id}) or {}
+
+    if not settings and not config:
+        await _send_ctx_message(
+            content=(
+                f"⚙️ {channel_type} channel isn't configured yet. "
+                "Ask staff to run `.configure`."
+            )
+        )
         return False
 
-    channel_id = settings.get(setting_key)
+    channel_id = settings.get(setting_key) or config.get(setting_key)
     if not channel_id:
+        await _send_ctx_message(
+            content=(
+                f"⚙️ {channel_type} channel isn't configured yet. "
+                "Ask staff to run `.configure`."
+            )
+        )
         return False
 
     if ctx.channel.id != channel_id:
@@ -61,10 +87,7 @@ async def check_channel_setting(
                     inline=False,
                 )
 
-        if hasattr(ctx, "respond") and ctx.is_interaction():
-            await ctx.respond(embed=embed, ephemeral=True)
-        else:
-            await ctx.send(embed=embed)
+        await _send_ctx_message(embed=embed)
         return False
 
     return True
