@@ -124,15 +124,16 @@ def xp_earn(min_xp: int, max_xp: int):
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            # Resolve Context robustly across bound methods and keyword-passed ctx.
+            # Resolve context without depending on concrete context subclasses.
             ctx = kwargs.get("ctx")
-            if ctx is None:
-                for arg in args:
-                    if isinstance(arg, commands.Context):
-                        ctx = arg
-                        break
-            if ctx is None and args and isinstance(args[0], commands.Cog) and len(args) > 1:
-                ctx = args[1]
+            if ctx is None and args:
+                first = args[0]
+                if hasattr(first, "guild") and hasattr(first, "author"):
+                    ctx = first
+                elif len(args) > 1:
+                    second = args[1]
+                    if hasattr(second, "guild") and hasattr(second, "author"):
+                        ctx = second
             if ctx is None:
                 result = await func(*args, **kwargs)
                 return result
@@ -159,14 +160,17 @@ def xp_earn(min_xp: int, max_xp: int):
             guild_id = str(guild.id)
             key = f"{guild_id}-{user_id}"
 
-            await xp_col.update_one(
-                {"_id": key},
-                {
-                    "$inc": {"xp": xp_gained},
-                    "$set": {"guild": guild_id, "user": user_id},
-                },
-                upsert=True,
-            )
+            try:
+                await xp_col.update_one(
+                    {"_id": key},
+                    {
+                        "$inc": {"xp": xp_gained},
+                        "$set": {"guild": guild_id, "user": user_id},
+                    },
+                    upsert=True,
+                )
+            except Exception as exc:  # pragma: no cover
+                print(f"[XP Decorator Error] Could not award XP: {exc}")
 
             return result
 
