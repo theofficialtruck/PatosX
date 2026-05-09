@@ -13047,13 +13047,23 @@ class CommandPages(discord.ui.View):
         return start, end
 
     def update_nav_buttons(self):
-        for btn in (self.prev_button, self.next_button):
-            if btn in self.children:
-                self.remove_item(btn)
+        # Remove any existing prev/next buttons by custom_id to avoid duplicate custom_id errors
+        existing_ids = {"prev_button_unique", "next_button_unique"}
+        # Make a shallow copy since we'll mutate children
+        for child in list(self.children):
+            try:
+                cid = getattr(child, "custom_id", None)
+            except Exception:
+                cid = None
+            if cid in existing_ids:
+                self.remove_item(child)
+
         start, end = self.get_section_bounds()
         if end - start <= 1:
             return
+        # Add buttons only when needed
         if self.current > start:
+            # access the bound button object via the attribute; add_item will handle binding
             self.add_item(self.prev_button)
         if self.current < end - 1:
             self.add_item(self.next_button)
