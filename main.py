@@ -34,6 +34,7 @@ genai_old = None
 from itertools import cycle
 import math
 import random
+import inspect
 
 # 1. SETUP ====================================================
 load_dotenv()
@@ -676,12 +677,29 @@ STAFF_HELP_COMMANDS = {
     "blacklist", "whitelist", "ticketsetup", "ticketdeletepanel", "ticketlist",
     "ticketforceclose", "transcriptsearch", "transcriptlist", "ticketaddbutton",
     "ticketeditbutton", "ticketpanel", "ticketclose", "transcript", "ticketadduser",
-    "ticketremoveuser", "stickynote", "unstickynote", "additem", "edititem", "delitem",
-    "drop", "addmoney", "removemoney", "vanityroles", "promoters", "resetpromoters",
-    "roleadd", "roleremove", "configure", "viewconfig", "editconfig", "resetconfig",
-    "setprefix", "invitechannel", "invites", "removeinvites", "giveaway", "reroll",
-    "disable", "enable", "listdisabled", "stop", "testwelcome", "testboost",
-    "reactionrole", "onetime", "restore", "disableonetime", "performance",
+    "ticketremoveuser", "ticketsync", "stickynote", "unstickynote", "additem", "edititem",
+    "delitem", "drop", "addmoney", "removemoney", "reseteconomy", "vanityroles",
+    "promoters", "resetpromoters", "roleadd", "roleremove", "configure", "viewconfig",
+    "editconfig", "resetconfig", "setprefix", "invitechannel", "removeinvites",
+    "resetinvites", "giveaway", "reroll", "draw", "disable", "enable", "listdisabled",
+    "modview", "say", "maintenance", "staffset", "staffget", "staff", "unstaff",
+    "viewperms", "debug", "stop", "testwelcome", "testboost", "reactionrole", "onetime",
+    "restore", "disableonetime", "performance",
+}
+
+ECONOMY_HELP_COMMANDS = {
+    "balance", "daily", "beg", "deposit", "withdraw", "shop", "buy", "use", "inventory",
+    "give", "leaderboard", "badges", "coinflip", "duckroll", "lottery", "choosejob",
+    "work", "jobstatus", "fish", "rob", "crime", "passive", "sell", "invest",
+    "investstatus", "hunt", "mine", "dig", "bugcatch", "doorgame", "ducktowers", "mines",
+}
+
+HELP_EXCLUDED_COMMANDS = {"override"}
+
+REMOVED_SHOP_ITEM_KEYS = {
+    "mystery box",
+    "mystery_box",
+    "mysterybox",
 }
 
 # ---------------------------------------------------------------------------
@@ -1074,6 +1092,48 @@ def normalize_item_key(item):
         return str(raw).strip().lower()
 
     return None
+
+
+def normalize_shop_item_name(raw):
+    return str(raw or "").strip().lower().replace("_", " ")
+
+
+def is_removed_shop_item(raw):
+    normalized = normalize_shop_item_name(raw)
+    removed = {normalize_shop_item_name(key) for key in REMOVED_SHOP_ITEM_KEYS}
+    return normalized in removed
+
+
+async def purge_removed_shop_items(guild_id: str | None = None):
+    removed_space = {normalize_shop_item_name(key) for key in REMOVED_SHOP_ITEM_KEYS}
+    removed_underscore = {name.replace(" ", "_") for name in removed_space}
+    removed_compact = {name.replace(" ", "") for name in removed_space}
+    removed_variants = removed_space | removed_underscore | removed_compact
+
+    await shop_col.delete_many(
+        {
+            "$or": [
+                {"name_lower": {"$in": list(removed_space)}},
+                {"_id": {"$in": list(removed_variants)}},
+            ]
+        }
+    )
+
+    guild_query = {
+        "$or": [
+            {"name_lower": {"$in": list(removed_space)}},
+            {
+                "_id": {
+                    "$regex": r"-(?:mystery box|mystery_box|mysterybox)$",
+                    "$options": "i",
+                }
+            },
+        ]
+    }
+    if guild_id:
+        guild_query["guild"] = str(guild_id)
+
+    await guild_shop_col.delete_many(guild_query)
 
 
 def normalize_inventory_items(inventory):
@@ -2614,6 +2674,7 @@ async def get_crime_bonus(user_id, guild_id):
     return 0.0
 
 async def ensure_shop_items():
+    await purge_removed_shop_items()
     initial_items = [
         {
             "_id": "fishing rod",
@@ -2699,6 +2760,8 @@ async def ensure_shop_items():
     ]
 
     for item in initial_items:
+        if is_removed_shop_item(item.get("name_lower") or item.get("_id")):
+            continue
         await shop_col.update_one(
             {"_id": item["_id"]},
             {"$set": item},
@@ -5997,6 +6060,7 @@ async def shop(ctx):
     try:
         guild_id = str(ctx.guild.id)
         user_id = str(ctx.author.id)
+        await purge_removed_shop_items(guild_id)
         
         user_data = await economy_col.find_one({"_id": f"{guild_id}-{user_id}"})
         wallet_balance = user_data.get("wallet", 0) if user_data else 0
@@ -6008,6 +6072,8 @@ async def shop(ctx):
         items_list = []
         
         async for item in shop_items:
+            if is_removed_shop_item(item.get("name_lower") or item.get("_id")):
+                continue
             exists = True
             items_list.append(item)
 
@@ -6020,6 +6086,8 @@ async def shop(ctx):
         if not exists:
             defaults = shop_col.find()
             async for item in defaults:
+                if is_removed_shop_item(item.get("name_lower") or item.get("_id")):
+                    continue
                 doc = dict(item)
                 doc["_id"] = f"{guild_id}-{item['_id']}"
                 doc["guild"] = guild_id
@@ -6034,6 +6102,8 @@ async def shop(ctx):
         defaults = shop_col.find()
         added_default_item = False
         async for item in defaults:
+            if is_removed_shop_item(item.get("name_lower") or item.get("_id")):
+                continue
             default_name_lower = str(item.get("name_lower") or item.get("_id") or "").strip().lower()
             if not default_name_lower or default_name_lower in existing_name_lowers:
                 continue
@@ -6124,6 +6194,8 @@ async def additem(ctx, name: str, price: int):
     name = name.strip()
     if not name:
         return await ctx.send("❌ Usage: `.additem \"item name\" <price>` or `/additem <name> <price>`")
+    if is_removed_shop_item(name):
+        return await ctx.send("❌ This item is blocked and cannot be added to the shop.")
     if price <= 0:
         return await ctx.send("❌ Price must be greater than 0.")
 
@@ -6176,6 +6248,8 @@ async def additem(ctx, name: str, price: int):
 @staffperm("economy")
 @staff_only()
 async def edititem(ctx, *, name: str):
+    if is_removed_shop_item(name):
+        return await ctx.send("❌ This item is blocked and cannot be used.")
     guild_id = str(ctx.guild.id)
     item = await guild_shop_col.find_one({"guild": guild_id, "name_lower": name.lower()})
     if not item:
@@ -6190,6 +6264,8 @@ async def edititem(ctx, *, name: str):
         new_name = name_msg.content.strip()
         if new_name.lower() == "skip":
             new_name = item["name"]
+        elif is_removed_shop_item(new_name):
+            return await ctx.send("❌ This item name is blocked and cannot be used.")
     except asyncio.TimeoutError:
         return await ctx.send("⌛ Edit cancelled due to timeout.")
 
@@ -6263,7 +6339,23 @@ async def buy(ctx, *, item: str = None):
     if not item:
         return await ctx.send("❌ You must specify an item to buy.")
 
-    item_name = item.strip().lower()
+    parts = item.lower().strip().split()
+    amount = 1
+    if parts and parts[-1].isdigit():
+        try:
+            amount = int(parts[-1])
+        except ValueError:
+            amount = 1
+        item_name = " ".join(parts[:-1]).strip()
+    else:
+        item_name = " ".join(parts).strip()
+
+    if not item_name:
+        return await ctx.send("❌ You must specify an item to buy.")
+
+    if is_removed_shop_item(item_name):
+        return await ctx.send("❌ This item is no longer available in the shop.")
+
     store_item = await guild_shop_col.find_one({"guild": str(ctx.guild.id), "name_lower": item_name})
     if not store_item:
         default_item = await shop_col.find_one({"name_lower": item_name})
@@ -6278,13 +6370,56 @@ async def buy(ctx, *, item: str = None):
                 upsert=True
             )
         else:
-            return await ctx.send(f"❌ Item **{item}** not found in the shop.")
+            return await ctx.send(f"❌ Item **{item_name}** not found in the shop.")
 
-    data = await get_user(ctx, ctx.guild.id, ctx.author.id)
-    result = await process_shop_purchase(ctx.author, ctx.guild, store_item, data)
-    await ctx.send(result["message"])
+    if amount <= 1:
+        data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+        result = await process_shop_purchase(ctx.author, ctx.guild, store_item, data)
+        await ctx.send(result["message"])
 
-    if result.get("ok"):
+        if result.get("ok"):
+            await increment_badge_counter(str(ctx.guild.id), str(ctx.author.id), "shop_purchases")
+            fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+            await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
+        return
+
+    bought = 0
+    messages = []
+    price = 0
+    try:
+        price = int(store_item.get("price", 0))
+    except Exception:
+        price = 0
+
+    for i in range(amount):
+        data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+        result = await process_shop_purchase(ctx.author, ctx.guild, store_item, data)
+        messages.append(result.get("message", "Unknown response"))
+        if not result.get("ok"):
+            break
+        bought += 1
+        if result.get("purchase_type") == "role":
+            break
+
+    if bought == 0:
+        await ctx.send(messages[0] if messages else "❌ Purchase failed.")
+        return
+
+    if bought < amount:
+        total_cost = (price * bought) if price else None
+        summary = f"✅ Successfully bought **{store_item.get('name', item_name)}** x{bought}."
+        if total_cost is not None:
+            summary += f" Total cost: {total_cost} coins."
+        summary += f"\n\n{messages[-1]}"
+        await ctx.send(summary)
+    else:
+        total_cost = (price * bought) if price else None
+        summary = f"✅ Successfully bought **{store_item.get('name', item_name)}** x{bought}."
+        if total_cost is not None:
+            summary += f" Total cost: {total_cost} coins. ({price} each)"
+        await ctx.send(summary)
+
+    if bought > 0:
         await increment_badge_counter(str(ctx.guild.id), str(ctx.author.id), "shop_purchases")
         fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
         await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
@@ -7579,15 +7714,37 @@ async def sell(ctx, *, item: str = None):
                     break
 
             if not found_investment:
-                if item_name not in prices:
+                # Normalize keys for comparison (robust against minor formatting differences)
+                normalized_target = normalize_shop_item_name(item_name)
+                # Build normalized prices map
+                normalized_prices = {normalize_shop_item_name(k): v for k, v in prices.items()}
+
+                if normalized_target not in normalized_prices:
                     return await ctx.send("❌ That item or investment cannot be sold.")
-                if inventory.count(item_name) < amount:
+
+                # Count matching inventory items using normalize_item_key for robustness
+                match_count = 0
+                for inv_item in list(inventory):
+                    if normalize_item_key(inv_item) == normalized_target:
+                        match_count += 1
+
+                if match_count < amount:
                     return await ctx.send(f"❌ You don’t have {amount}x `{item_name}` in your inventory.")
-                for _ in range(amount):
-                    inventory.remove(item_name)
-                gain = prices[item_name] * amount
+
+                # Remove `amount` matching items from inventory (preserving other items)
+                to_remove = amount
+                new_inventory = []
+                for inv_item in inventory:
+                    if to_remove > 0 and normalize_item_key(inv_item) == normalized_target:
+                        to_remove -= 1
+                        continue
+                    new_inventory.append(inv_item)
+
+                inventory = new_inventory
+                price_each = normalized_prices[normalized_target]
+                gain = price_each * amount
                 total_gain += gain
-                sold_items.append(f"{amount}x {item_name} ({prices[item_name]} each)")
+                sold_items.append(f"{amount}x {item_name} ({price_each} each)")
 
         if total_gain == 0:
             return await ctx.send("❌ You have nothing to sell.")
@@ -12846,8 +13003,9 @@ class StaffSections(discord.ui.View):
         doc = await settings_col.find_one({"guild": str(interaction.guild.id)})
         staff_role = interaction.guild.get_role(doc.get("staff_role")) if doc else None
         is_staff = staff_role in interaction.user.roles if staff_role else False
+        prefix = doc.get("prefix", "?") if doc else "?"
 
-        view = CommandPages(pages, is_staff)
+        view = CommandPages(pages, is_staff, prefix)
         await interaction.response.edit_message(embed=pages[0], view=view)
 
     async def handle_error(self, interaction, exception):
@@ -12859,10 +13017,11 @@ class StaffSections(discord.ui.View):
             pass
 
 class CommandPages(discord.ui.View):
-    def __init__(self, embeds, is_staff: bool):
+    def __init__(self, embeds, is_staff: bool, prefix: str):
         super().__init__(timeout=300)
         self.embeds = embeds
         self.is_staff = is_staff
+        self.prefix = prefix
         self.current = 0
         self.sect = {0: "General", 1: "Economy"}
         if is_staff:
@@ -12921,8 +13080,12 @@ class CommandPages(discord.ui.View):
         if not self.is_staff:
             await interaction.response.send_message("❌ You don’t have permission to view staff commands.", ephemeral=True)
             return
-        embed = discord.Embed(title="🛠️ Staff Command Sections", description="Select a category below to view its commands.", color=discord.Color.orange())
-        await interaction.response.edit_message(embed=embed, view=StaffSections("?"))
+        staff_idx = next((i for i, e in enumerate(self.embeds) if e.title.startswith("🛠️")), None)
+        if staff_idx is None:
+            return await interaction.response.send_message("❌ No staff pages found.", ephemeral=True)
+        self.current = staff_idx
+        self.update_nav_buttons()
+        await interaction.response.edit_message(embed=self.embeds[self.current], view=self)
 
     @discord.ui.button(label="⏮ Prev", style=discord.ButtonStyle.secondary, custom_id="prev_button_unique")
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -12964,89 +13127,74 @@ async def help(ctx):
     staff_role = ctx.guild.get_role(doc.get("staff_role")) if doc else None
     is_staff = staff_role in ctx.author.roles if staff_role else False
 
-    def format_field(name, value):
-        return name.replace("?", prefix), value
-
     pages = []
-
-    general_commands = [
-        ("?cmds", "Show this help menu"),
-        ("?serverinfo", "View server information"),
-        ("?userinfo [@user]", "Detailed user info"),
-        ("?afk [reason]", "Set your AFK status"),
-        ("?duck", "Random picture of a duck"),
-        ("?duckquiz", "Standardized Duck Quiz"),
-        ("?slap", "Slap another user"),
-        ("?duckfact", "Get a random duck fact"),
-        ("?quote", "Get a random quote"),
-        ("?roles", "Show claimable roles"),
-        ("?invitechannel", "Set the channel where invite joins are announced."),
-        ("?invites", "Check how many invites a user has."),
-        ("?inviteleaderboard", "Show the top inviters in the server.")
+    all_commands = [
+        cmd for cmd in bot.commands
+        if not cmd.hidden and cmd.name not in HELP_EXCLUDED_COMMANDS
     ]
+
+    def format_params(cmd):
+        params = []
+        for param_name, param in cmd.clean_params.items():
+            name = param_name.replace("_", "-")
+            if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                params.append(f"<{name}...>")
+            elif param.kind == inspect.Parameter.KEYWORD_ONLY:
+                params.append(f"<{name}>")
+            elif param.default is not param.empty:
+                params.append(f"[{name}]")
+            else:
+                params.append(f"<{name}>")
+        return " ".join(params)
+
+    def command_label(cmd):
+        param_text = format_params(cmd)
+        aliases = [f"{prefix}{alias}" for alias in (cmd.aliases or [])]
+        names = [f"{prefix}{cmd.name}", *aliases]
+        formatted_names = []
+        for name in dict.fromkeys(names):
+            formatted_names.append(f"{name} {param_text}".strip())
+        return " / ".join(formatted_names)
+
+    def command_desc(cmd):
+        return cmd.description or cmd.help or "No description provided."
+
+    staff_entries = []
+    economy_entries = []
+    general_entries = []
+
+    for cmd in all_commands:
+        entry = (command_label(cmd), command_desc(cmd))
+        if cmd.name in STAFF_HELP_COMMANDS:
+            staff_entries.append(entry)
+        elif cmd.name in ECONOMY_HELP_COMMANDS:
+            economy_entries.append(entry)
+        else:
+            general_entries.append(entry)
+
+    general_entries.sort(key=lambda e: e[0].lower())
+    economy_entries.sort(key=lambda e: e[0].lower())
+    staff_entries.sort(key=lambda e: e[0].lower())
 
     per_page = 10
-    for i in range(0, len(general_commands), per_page):
-        chunk = general_commands[i:i+per_page]
-        general_embed = discord.Embed(
-            title=f"💬 General Commands (Page {i//per_page + 1})",
-            color=discord.Color.blurple()
-        )
-        for name, value in chunk:
-            general_embed.add_field(
-                name=format_field(name, value)[0],
-                value=value,
-                inline=False
+
+    def append_pages(title_prefix, color, entries):
+        for i in range(0, len(entries), per_page):
+            chunk = entries[i:i + per_page]
+            embed = discord.Embed(
+                title=f"{title_prefix} (Page {i // per_page + 1})",
+                color=color
             )
-        pages.append(general_embed)
+            for name, value in chunk:
+                embed.add_field(name=name, value=value, inline=False)
+            pages.append(embed)
 
-    economy_commands = [
-        ("?balance / ?bal", "Check your balance"),
-        ("?daily", "Claim your daily reward"),
-        ("?work", "Work to earn coins"),
-        ("?beg", "Beg for coins"),
-        ("?deposit / ?dep <amount>", "Deposit to bank"),
-        ("?withdraw / ?with <amount>", "Withdraw from bank"),
-        ("?shop", "View the shop"),
-        ("?buy <item>", "Buy an item from the shop"),
-        ("?use <item>", "Use an item from your inventory"),
-        ("?inventory / ?inv", "View your items"),
-        ("?give / ?pay @user <amount>", "Give coins to another user"),
-        ("?leaderboard / ?lb", "View the top users"),
-        ("?coinflip / ?cf <amount>", "Coin flip for coins"),
-        ("?fish", "Go fishing to earn coins"),
-        ("?rob / ?steal @user", "Attempt to rob another user"),
-        ("?lottery", "Join the lottery"),
-        ("?choosejob", "Choose your dream job"),
-        ("?jobstatus", "Check your next promotion"),
-        ("?crime <bank/shoplift/payroll>", "Attempt a risky crime to earn coins"),
-        ("?sell <item> <amount>", "Sell items from your inventory"),
-        ("?invest", "Invest in fake companies for profit"),
-        ("?investstatus", "Check your investments"),
-        ("?hunt", "Go hunting for animals"),
-        ("?mine", "Go mining for ores"),
-        ("?dig", "Dig for cool rocks"),
-        ("?bugcatch", "Catch bugs and sell them instantly"),
-        ("?doorgame", "Try your luck through multiple doors!"),
-        ("?ducktowers", "Play a game of Duck Towers!"),
-        ("?mines", "Play Mines and test your luck!"),
-    ]
+    append_pages("💬 General Commands", discord.Color.blurple(), general_entries)
+    append_pages("💰 Economy Commands", discord.Color.green(), economy_entries)
+    if is_staff:
+        append_pages("🛠️ Staff Commands", discord.Color.orange(), staff_entries)
 
-    for i in range(0, len(economy_commands), per_page):
-        chunk = economy_commands[i:i+per_page]
-        economy_embed = discord.Embed(
-            title=f"💰 Economy Commands (Page {i//per_page + 1})",
-            color=discord.Color.green()
-        )
-        for name, value in chunk:
-            economy_embed.add_field(
-                name=format_field(name, value)[0],
-                value=value,
-                inline=False
-            )
-        pages.append(economy_embed)
-
-    view = CommandPages(pages, is_staff)
+    view = CommandPages(pages, is_staff, prefix)
     ctx.bot.help_pages = pages
     await ctx.send(embed=pages[0], view=view)
 
