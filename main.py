@@ -3791,7 +3791,7 @@ def format_permission_details(permissions: list[str]):
     for p in permissions:
         cmds = PERMISSION_COMMAND_MAP.get(p, ["Unknown"])
         cmds_text = ", ".join(cmds)
-        final += f"**• {p}** — `{cmds_text}`\n"
+        final += f"**• {p}** - `{cmds_text}`\n"
 
     return final
 
@@ -3901,7 +3901,7 @@ async def viewperms(ctx, member: discord.Member = None):
         perms_lower = [p.lower() for p in perms]
 
         embed = discord.Embed(
-            title=f"Staff Permissions — {member_obj.display_name}",
+            title=f"Staff Permissions - {member_obj.display_name}",
             color=discord.Color.blurple()
         )
         embed.set_thumbnail(url=member_obj.display_avatar.url)
@@ -4476,10 +4476,10 @@ class DoorCountSelect(discord.ui.Select):
             child.disabled = True
 
         embed = discord.Embed(
-            title=f"🚪 Door Game — {doors} Doors",
+            title=f"🚪 Door Game - {doors} Doors",
             description=(
                 f"You’ve bet **{add_suffix(self.bet)} coins** and will go through **{doors} doors.**\n\n"
-                "Each door gets harder — more risk, less reward. Good luck!"
+                "Each door gets harder - more risk, less reward. Good luck!"
             ),
             color=0xffa500
         )
@@ -5219,7 +5219,7 @@ async def ducktowers(ctx):
         await ctx.send("🦆 Choose your difficulty:", view=view)
 
     except asyncio.TimeoutError:
-        await ctx.send("⌛ You took too long to respond — game canceled.")
+        await ctx.send("⌛ You took too long to respond - game canceled.")
     except ValueError:
         await ctx.send("⚠️ Invalid bet amount. Try again using a number or 'all'.")
     except Exception as e:
@@ -6711,7 +6711,7 @@ async def badges(ctx, member: discord.Member = None):
     earned_lines = []
     locked_lines = []
     for badge_id, badge in BADGES.items():
-        line = f"{badge['emoji']} **{badge['name']}** — {badge['description']}"
+        line = f"{badge['emoji']} **{badge['name']}** - {badge['description']}"
         if badge_id in earned_ids:
             earned_lines.append(f"✅ {line}")
         else:
@@ -7111,7 +7111,7 @@ async def reseteconomy(ctx):
         )
 
         await ctx.send(f"🧹 Economy has been reset for this server!\nDeleted **{result.deleted_count}** player records.")
-        print(f"[RESET ECONOMY] {ctx.guild.name} ({ctx.guild.id}) — Deleted {result.deleted_count} entries.")
+        print(f"[RESET ECONOMY] {ctx.guild.name} ({ctx.guild.id}) - Deleted {result.deleted_count} entries.")
     except Exception as e:
         await ctx.send("⚠️ Something went wrong while resetting the economy.")
         print(f"[ERROR] reseteconomy command: {type(e).__name__} - {e}")
@@ -7213,7 +7213,7 @@ async def jobstatus(ctx):
                     next_time = (last_roll + timedelta(days=1)) if last_roll_str else (now + timedelta(days=1))
                     embed.add_field(
                         name="Promotion Chance",
-                        value=f"⏳ On cooldown ({promo_chance:.2f}%) — next roll <t:{int(next_time.timestamp())}:f>",
+                        value=f"⏳ On cooldown ({promo_chance:.2f}%) - next roll <t:{int(next_time.timestamp())}:f>",
                         inline=False
                     )
                 await ctx.send(embed=embed)
@@ -8527,7 +8527,7 @@ class QuackTopView(View):
         for i, (user_id, count) in enumerate(self.entries[start:end], start=start+1):
             member = self.ctx.guild.get_member(int(user_id))
             name = member.display_name if member else f"User ID {user_id}"
-            description += f"**{i}. {name}** — {count} quacks\n"
+            description += f"**{i}. {name}** - {count} quacks\n"
 
         embed = discord.Embed(
             title=f"🦆 Quack Leaderboard (Page {self.page+1}/{self.max_page+1})",
@@ -10710,7 +10710,7 @@ async def removemoney(ctx, amount: str, user: discord.Member):
         action_type="RemoveMoney"
     )
 
-    await ctx.send(f"✅ Removed 🪙 {coins:,} from {member.mention} — Wallet: {new_wallet:,} | Bank: {new_bank:,}")
+    await ctx.send(f"✅ Removed 🪙 {coins:,} from {member.mention} - Wallet: {new_wallet:,} | Bank: {new_bank:,}")
 
 @bot.hybrid_command(name="drop", description="Create a money drop (staff spawns money, members pay).")
 @app_commands.describe(amount="Amount to drop", message="Optional message to include")
@@ -12696,7 +12696,7 @@ async def tutorial(ctx):
         return f"{filled}{empty} **{index}/{total}**"
 
     intro = discord.Embed(
-        title="📚 Bot Tutorial — How Everything Works",
+        title="📚 Bot Tutorial - How Everything Works",
         description=(
             f"{bar(1)}\n\n"
             "Welcome to the full system tutorial! This menu guides you through every bot feature.\n"
