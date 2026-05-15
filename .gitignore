@@ -84,3 +84,5 @@ bot/actions.json
 .idea/
 .venv/
 .tests/
+.claude/
+.ai/

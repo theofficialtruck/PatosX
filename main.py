@@ -7779,6 +7779,8 @@ async def create_investment(user_id: str, company: str, amount: int):
         "user_id": user_id,
         "company": company,
         "amount": amount,
+        "current_value": amount,
+        "last_status_refresh_date": None,
         "date": now_iso,
         "timestamp": now_iso,
         "history": []
@@ -7849,8 +7851,65 @@ async def backfill_investment_dates_from_timestamp() -> dict:
     return stats
 
 async def calculate_investment_value(inv: dict) -> int:
-    # Investment payout is principal-only: users always receive exactly what they invested.
-    return int(inv.get("amount", 0))
+    current_value = inv.get("current_value")
+    if current_value is None:
+        current_value = inv.get("amount", 0)
+    try:
+        return max(0, int(current_value))
+    except (TypeError, ValueError):
+        return max(0, int(inv.get("amount", 0) or 0))
+
+
+def pick_daily_investment_change_pct() -> float:
+    # Slightly favor down days to keep risk noticeable.
+    return random.choices(
+        [-0.03, -0.02, -0.01, 0.01, 0.02, 0.03],
+        weights=[18, 18, 18, 16, 15, 15],
+        k=1,
+    )[0]
+
+
+async def refresh_user_investments_for_today(
+    investments: list[dict],
+    now: datetime | None = None,
+) -> list[dict]:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    refresh_date = now.date().isoformat()
+    refreshed: list[dict] = []
+
+    for inv in investments:
+        if inv.get("last_status_refresh_date") == refresh_date:
+            refreshed.append(inv)
+            continue
+
+        try:
+            old_value = max(0, int(inv.get("current_value", inv.get("amount", 0)) or 0))
+        except (TypeError, ValueError):
+            old_value = max(0, int(inv.get("amount", 0) or 0))
+
+        change_pct = pick_daily_investment_change_pct()
+        new_value = max(1, int(round(old_value * (1 + change_pct))))
+
+        history = inv.get("history")
+        if not isinstance(history, list):
+            history = []
+        history.append(new_value - old_value)
+        if len(history) > 180:
+            history = history[-180:]
+
+        patch = {
+            "current_value": new_value,
+            "last_status_refresh_date": refresh_date,
+            "history": history,
+        }
+        await investments_col.update_one({"_id": inv["_id"]}, {"$set": patch})
+
+        updated_inv = dict(inv)
+        updated_inv.update(patch)
+        refreshed.append(updated_inv)
+
+    return refreshed
 
 @bot.hybrid_command(name="invest", description="Invest in fake companies for profit.")
 @app_commands.describe(company="Company to invest in (e.g., 'Techify', 'MineCorp', 'Oceanic')", amount="Amount to invest (number or 'all')")
@@ -8010,6 +8069,8 @@ async def investstatus(ctx):
 
     if not investments:
         return await ctx.send("❌ You don’t have any active investments.")
+
+    investments = await refresh_user_investments_for_today(investments)
 
     embed = discord.Embed(
         title=f"📊 {ctx.author.display_name}'s Investments",
