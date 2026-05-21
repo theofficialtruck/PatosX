@@ -7482,8 +7482,10 @@ async def swim(ctx):
 
         consumed, gear_broke, _ = consume_tool_use(inventory, "scuba gear")
         if not consumed:
+            # Explicitly skip XP even if ctx.send tracking isn't available for this context.
+            setattr(ctx, "_skip_xp_award", True)
             ctx.command.reset_cooldown(ctx)
-            return await ctx.send("🤿 You need **Scuba Gear** to swim! Buy it with `.buy scuba gear`.")
+            return await ctx.send("❌ You need **Scuba Gear** to swim! Buy it with `.buy scuba gear`.")
         tool_break_notice = "\n💥 Your **Scuba Gear** broke. Buy a new one with `.buy scuba gear`." if gear_broke else ""
 
         base_chance = 1.0
