@@ -90,7 +90,8 @@ async def test_buy_role_item_grants_role_instead_of_inventory(monkeypatch):
     await main.buy.callback(ctx, item="Pond Royalty+")
 
     author.add_roles.assert_awaited_once()
-    assert any("got @PondRoyalty" in message for message in sent_messages)
+    assert any("You bought **Pond Royalty+** for 15000000 coins" in message for message in sent_messages)
+    assert not any("@PondRoyalty" in message for message in sent_messages)
     assert economy.calls == [
         ({"_id": "123-42"}, {"$set": {"wallet": 5_000_000}}, False)
     ]

@@ -1,6 +1,7 @@
 # test_bot_commands.py
 
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -312,18 +313,51 @@ async def test_invest_slash_respects_active_investment_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_calculate_investment_value_returns_exact_principal():
+async def test_calculate_investment_value_prefers_current_value():
     inv = {
         "_id": "inv-1",
         "company": "Oceanic",
         "amount": 25_000,
+        "current_value": 24_250,
         "date": "2026-01-01T00:00:00+00:00",
         "history": [999999, -500000],
     }
 
     value = await main.calculate_investment_value(inv)
 
-    assert value == 25_000
+    assert value == 24_250
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_investments_for_today_updates_only_once(monkeypatch):
+    today = datetime(2026, 5, 13, 12, 0, tzinfo=timezone.utc)
+
+    investments = [
+        {
+            "_id": "inv-a",
+            "amount": 1000,
+            "current_value": 1000,
+            "history": [],
+        },
+        {
+            "_id": "inv-b",
+            "amount": 2000,
+            "current_value": 2000,
+            "history": [],
+            "last_status_refresh_date": "2026-05-13",
+        },
+    ]
+
+    monkeypatch.setattr(main, "pick_daily_investment_change_pct", lambda: 0.02)
+    update_one = AsyncMock()
+    monkeypatch.setattr(main, "investments_col", SimpleNamespace(update_one=update_one))
+
+    refreshed = await main.refresh_user_investments_for_today(investments, now=today)
+
+    assert refreshed[0]["current_value"] == 1020
+    assert refreshed[0]["last_status_refresh_date"] == "2026-05-13"
+    assert refreshed[1]["current_value"] == 2000
+    update_one.assert_awaited_once()
 
 
 @pytest.mark.asyncio
