@@ -35,6 +35,14 @@ import random
 import inspect
 load_dotenv()
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ('1', 'true', 't', 'yes', 'y', 'on')
+
+DEBUG_COMMANDS = _env_flag('DUCKPARADISE_DEBUG_COMMANDS', default=False)
+
 def _running_under_pytest() -> bool:
     return 'PYTEST_CURRENT_TEST' in os.environ or 'pytest' in sys.modules
 
@@ -236,14 +244,14 @@ async def get_prefix(bot, message):
     doc = await settings_col.find_one({'guild': str(message.guild.id)})
     return doc.get('prefix', '?') if doc else '?'
 bot = commands.Bot(command_prefix=get_prefix, intents=intents, allowed_mentions=discord.AllowedMentions(everyone=False, users=True, roles=True))
-print('🔧 Bot initialized with built-in tree')
-print(f'🔧 Bot object: {bot}')
-print(f'🔧 Tree object: {bot.tree}')
-print('📊 Checking registered commands...')
-for cmd in bot.tree.walk_commands():
-    guild_scope = getattr(cmd, 'guild_ids', getattr(cmd, '_guild_ids', None))
-    print(f'📌 Registered command: {cmd.name}, guilds: {guild_scope}')
-print(f'📊 Total commands registered: {len(list(bot.tree.walk_commands()))}')
+
+# Avoid printing every registered command on startup (very noisy). Enable only when debugging.
+if DEBUG_COMMANDS:
+    print('🔧 Bot initialized with built-in tree')
+    print(f'🔧 Bot object: {bot}')
+    print(f'🔧 Tree object: {bot.tree}')
+    cmds = list(bot.tree.walk_commands())
+    print(f'📊 Total app commands registered: {len(cmds)}')
 
 @bot.event
 async def on_guild_join(guild):
@@ -480,8 +488,12 @@ async def on_command_error(ctx, error):
         command_name = ctx.command.name if ctx.command else 'unknown'
         syntax = get_command_syntax(command_name)
         return await ctx.send(f'⚠️ **Too many arguments provided**\n\n**Usage:** {syntax}')
+    elif isinstance(error, commands.CommandOnCooldown):
+        return await ctx.send(f"❌ You are on cooldown. Try again in {error.retry_after:.2f}s")
     else:
         root_error = unwrap_command_error(error)
+        if isinstance(root_error, commands.CommandOnCooldown):
+            return await ctx.send(f"❌ You are on cooldown. Try again in {root_error.retry_after:.2f}s")
         error_msg = f'An unexpected error occurred: {root_error}'
         print(error_msg)
         traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
@@ -489,7 +501,7 @@ async def on_command_error(ctx, error):
         if len(recent_errors) > 5:
             recent_errors.pop(0)
         try:
-            await ctx.send(f'❌ **An unexpected error occurred**\n```py\n{root_error}```\nUse `.debug` for more details.')
+            await ctx.send('❌ **An unexpected error occurred**')
         except Exception:
             pass
 
@@ -514,15 +526,20 @@ async def on_app_command_error(interaction: discord.Interaction, error):
         embed = discord.Embed(title='❌ Permission Denied', description="You don't have permission to use this command.", color=discord.Color.red())
     elif is_discord_service_unavailable_error(error):
         embed = discord.Embed(title='⚠️ Temporary Discord Issue', description=DISCORD_SERVICE_UNAVAILABLE_MESSAGE, color=discord.Color.orange())
+    elif isinstance(error, app_commands.CommandOnCooldown):
+        embed = discord.Embed(title='❌ On Cooldown', description=f'You are on cooldown. Try again in {error.retry_after:.2f}s', color=discord.Color.red())
     else:
         root_error = unwrap_command_error(error)
-        error_msg = f'An unexpected error occurred in app command: {root_error}'
-        print(error_msg)
-        traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
-        recent_errors.append({'command': interaction.command.name if interaction.command else 'unknown', 'error': str(root_error), 'traceback': traceback.format_exc(), 'time': datetime.now()})
-        if len(recent_errors) > 5:
-            recent_errors.pop(0)
-        embed = discord.Embed(title='❌ Command Error', description=f'An unexpected error occurred.\n```py\n{root_error}```', color=discord.Color.red())
+        if isinstance(root_error, app_commands.CommandOnCooldown):
+            embed = discord.Embed(title='❌ On Cooldown', description=f'You are on cooldown. Try again in {root_error.retry_after:.2f}s', color=discord.Color.red())
+        else:
+            error_msg = f'An unexpected error occurred in app command: {root_error}'
+            print(error_msg)
+            traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
+            recent_errors.append({'command': interaction.command.name if interaction.command else 'unknown', 'error': str(root_error), 'traceback': traceback.format_exc(), 'time': datetime.now()})
+            if len(recent_errors) > 5:
+                recent_errors.pop(0)
+            embed = discord.Embed(title='❌ Command Error', description='An unexpected error occurred.', color=discord.Color.red())
     try:
         if interaction.response.is_done():
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -1133,7 +1150,12 @@ async def configure_error(ctx, error):
     elif isinstance(error, commands.CheckFailure):
         await send_hybrid_error(ctx, content='❌ Only staff members can use this command.', delete_after=7)
     else:
-        await send_hybrid_error(ctx, content=f'⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`', delete_after=10)
+        root_error = unwrap_command_error(error)
+        if isinstance(root_error, commands.CommandOnCooldown):
+            return await send_hybrid_error(ctx, content=f"❌ You are on cooldown. Try again in {root_error.retry_after:.2f}s")
+        print(f'[ERROR] configure_error: {root_error}')
+        traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
+        await send_hybrid_error(ctx, content='⚠️ An unexpected error occurred. Please contact thetruck.', delete_after=10)
 
 @bot.command(name='editconfig', aliases=['editconfiguration'])
 @staffperm('config')
@@ -1244,7 +1266,12 @@ async def editconfig_error(ctx, error):
     elif isinstance(error, commands.CheckFailure):
         await send_hybrid_error(ctx, content='❌ Only staff members can use this command.')
     else:
-        await send_hybrid_error(ctx, content=f'⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`')
+        root_error = unwrap_command_error(error)
+        if isinstance(root_error, commands.CommandOnCooldown):
+            return await send_hybrid_error(ctx, content=f"❌ You are on cooldown. Try again in {root_error.retry_after:.2f}s")
+        print(f'[ERROR] editconfig_error: {root_error}')
+        traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
+        await send_hybrid_error(ctx, content='⚠️ An unexpected error occurred. Please contact thetruck.')
 
 @bot.command(name='viewconfig')
 @staffperm('config')
@@ -1291,7 +1318,12 @@ async def viewconfig_error(ctx, error):
     elif isinstance(error, commands.CheckFailure):
         await ctx.send('❌ Only staff members can use this command.')
     else:
-        await ctx.send(f'⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`')
+        root_error = unwrap_command_error(error)
+        if isinstance(root_error, commands.CommandOnCooldown):
+            return await send_hybrid_error(ctx, content=f"❌ You are on cooldown. Try again in {root_error.retry_after:.2f}s")
+        print(f'[ERROR] viewconfig_error: {root_error}')
+        traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
+        await ctx.send('⚠️ An unexpected error occurred. Please contact thetruck.')
 
 @bot.command()
 @staffperm('config')
@@ -2182,9 +2214,11 @@ async def on_ready():
                 print(f'❌ Failed to sync global commands: {e}')
         except Exception as e:
             print(f'❌ Failed to sync global commands: {e}')
-        for cmd in bot.tree.walk_commands():
-            guild_scope = getattr(cmd, 'guild_ids', getattr(cmd, '_guild_ids', None))
-            print(f'📌 Registered command: {cmd.name}, guilds: {guild_scope}')
+
+        if DEBUG_COMMANDS:
+            cmds = list(bot.tree.walk_commands())
+            print(f'📊 Total app commands registered: {len(cmds)}')
+
     asyncio.create_task(sync_hybrid_commands())
 
 async def run_flake8_lint(base_dir):
@@ -4394,7 +4428,8 @@ async def leaderboard(ctx):
     embed = await view.get_money_embed()
     await ctx.send(embed=embed, view=view)
 
-@bot.hybrid_command(name='badges', description='View your earned badges.')
+@bot.hybrid_command(name='badges', description="View your (or someone else's) earned badges.")
+@app_commands.describe(member='User to view badges for (optional)')
 @blacklist_barrier()
 async def badges(ctx, member: discord.Member=None):
     if not await check_channel(ctx, 'economy_channel', 'Economy'):
@@ -4793,7 +4828,7 @@ async def jobstatus(ctx):
     except Exception as e:
         print(f'[jobstatus command error] {type(e).__name__}: {e}')
         traceback.print_exc()
-        await ctx.send(f'⚠️ An unexpected error occurred: `{type(e).__name__} - {e}`\nPlease contact thetruck.')
+        await ctx.send('⚠️ An unexpected error occurred. Please contact thetruck.')
 
 @bot.hybrid_command(name='fish', description='Go fishing to earn coins.')
 @commands.cooldown(1, 3600, commands.BucketType.member)
@@ -4978,7 +5013,12 @@ async def rob_error(ctx, error):
     elif isinstance(error, commands.BadArgument):
         await send_hybrid_error(ctx, content='❌ That’s not a valid user.')
     else:
-        await send_hybrid_error(ctx, content=f'⚠️ An unexpected error occurred: `{type(error).__name__} - {error}`')
+        root_error = unwrap_command_error(error)
+        if isinstance(root_error, commands.CommandOnCooldown):
+            return await send_hybrid_error(ctx, content=f"❌ You are on cooldown. Try again in {root_error.retry_after:.2f}s")
+        print(f'[ERROR] rob_error: {root_error}')
+        traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
+        await send_hybrid_error(ctx, content='⚠️ An unexpected error occurred. Please contact thetruck.')
 
 @bot.hybrid_command(name='crime', description='Attempt a risky crime to earn coins.')
 @blacklist_barrier()
@@ -5043,7 +5083,9 @@ async def crime(ctx, *, choice: str):
             await economy_col.update_one({'_id': f'{ctx.guild.id}-{ctx.author.id}'}, {'$set': {'wallet': new_wallet, 'inventory': inventory}})
             await ctx.send(f'🚓 You were caught during the `{choice}` attempt. Fined **{fine} coins**.{lockpick_break_notice}')
     except Exception as e:
-        await ctx.send(f'⚠️ An unexpected error occurred, please contact thetruck: `{type(e).__name__} - {e}`')
+        print(f'[ERROR] crime command: {type(e).__name__} - {e}')
+        traceback.print_exc()
+        await ctx.send('⚠️ An unexpected error occurred. Please contact thetruck.')
 
 @crime.error
 async def crime_error(ctx, error):
@@ -5055,7 +5097,12 @@ async def crime_error(ctx, error):
     elif isinstance(error, commands.MissingRequiredArgument):
         await send_hybrid_error(ctx, content='❌ You must specify a crime type. Example: `?crime bank`')
     else:
-        await send_hybrid_error(ctx, content=f'⚠️ An unexpected error occurred: `{type(error).__name__} - {error}`\nPlease contact thetruck.')
+        root_error = unwrap_command_error(error)
+        if isinstance(root_error, commands.CommandOnCooldown):
+            return await send_hybrid_error(ctx, content=f"❌ You are on cooldown. Try again in {root_error.retry_after:.2f}s")
+        print(f'[ERROR] crime_error: {root_error}')
+        traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
+        await send_hybrid_error(ctx, content='⚠️ An unexpected error occurred. Please contact thetruck.')
 
 @bot.hybrid_command(name='passive', description='Toggle passive mode. Staff can manage others.')
 @blacklist_barrier()
@@ -5766,7 +5813,12 @@ async def duckquiz_error(ctx, error):
     elif isinstance(error, commands.CheckFailure):
         await send_hybrid_error(ctx, content="❌ You can't use this command right now.")
     else:
-        await send_hybrid_error(ctx, content=f'⚠️ An unexpected error occurred, please contact thetruck: `{type(error).__name__} - {error}`')
+        root_error = unwrap_command_error(error)
+        if isinstance(root_error, commands.CommandOnCooldown):
+            return await send_hybrid_error(ctx, content=f"❌ You are on cooldown. Try again in {root_error.retry_after:.2f}s")
+        print(f'[ERROR] duckquiz_error: {root_error}')
+        traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
+        await send_hybrid_error(ctx, content='⚠️ An unexpected error occurred. Please contact thetruck.')
 
 @bot.hybrid_command(name='quackcount', description="Check the server's total quacks and a user's quacks.")
 async def quackcount(ctx, member: discord.Member | None=None):
@@ -5876,7 +5928,9 @@ async def duckfact(ctx):
     except FileNotFoundError:
         await ctx.send('❌ Could not find `duckfacts.txt`. Please create it in the bot folder.')
     except Exception as e:
-        await ctx.send(f'⚠️ Something went wrong while fetching a duck fact: `{e}`')
+        print(f'[ERROR] duckfact command: {e}')
+        traceback.print_exc()
+        await ctx.send('⚠️ Something went wrong while fetching a duck fact.')
 
 @bot.hybrid_command(name='afk', description='Set your AFK status.')
 async def afk(ctx, *, reason='AFK'):
@@ -5898,7 +5952,9 @@ async def ticket_error(interaction: discord.Interaction, func):
     try:
         return await func()
     except Exception as e:
-        embed = discord.Embed(title='⚠️ Error', description=f'An unexpected error occurred:\n```{str(e)}```', color=discord.Color.red())
+        print(f'[ERROR] ticket_error: {e}')
+        traceback.print_exc()
+        embed = discord.Embed(title='⚠️ Error', description='An unexpected error occurred.', color=discord.Color.red())
         if interaction.response.is_done():
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
@@ -6356,7 +6412,9 @@ async def ticketclose(ctx):
         try:
             return await func()
         except Exception as e:
-            embed = discord.Embed(title='⚠️ Error', description=f'An unexpected error occurred:\n```{str(e)}```', color=discord.Color.red())
+            print(f'[ERROR] ticketclose: {e}')
+            traceback.print_exc()
+            embed = discord.Embed(title='⚠️ Error', description='An unexpected error occurred.', color=discord.Color.red())
             await send_hybrid_error(ctx, embed=embed)
 
     async def inner():
@@ -6379,7 +6437,9 @@ async def ticketforceclose(ctx):
         try:
             return await func()
         except Exception as e:
-            embed = discord.Embed(title='⚠️ Error', description=f'An unexpected error occurred:\n```{str(e)}```', color=discord.Color.red())
+            print(f'[ERROR] ticketforceclose: {e}')
+            traceback.print_exc()
+            embed = discord.Embed(title='⚠️ Error', description='An unexpected error occurred.', color=discord.Color.red())
             await send_hybrid_error(ctx, embed=embed)
 
     async def inner():
@@ -7295,7 +7355,10 @@ async def addmoney_error(ctx, error):
         elif isinstance(error, commands.MissingRequiredArgument):
             return await send_hybrid_error(ctx, content=f'❌ Missing arguments. Usage: `{prefix}addmoney <amount> @user`\nExample: `{prefix}addmoney 100 @User`')
         else:
-            return await send_hybrid_error(ctx, content=f'⚠️ Error running addmoney: `{type(error).__name__}: {error}`')
+            root_error = unwrap_command_error(error)
+            print(f'[ERROR] addmoney_error: {root_error}')
+            traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
+            return await send_hybrid_error(ctx, content='⚠️ An unexpected error occurred.')
     except Exception:
         pass
 
@@ -7506,10 +7569,15 @@ async def say(ctx):
             return await ctx.send(f'⚠️ Failed to send the message: {type(e).__name__}')
         await ctx.send(f'✅ Sent your message to {target.mention}.')
     except Exception as e:
-        await ctx.send(f'⚠️ An unexpected error occurred: {type(e).__name__}')
+        print(f'[ERROR] say command: {e}')
+        traceback.print_exc()
+        await ctx.send('⚠️ An unexpected error occurred.')
 
 @say.error
 async def say_error(ctx, error):
+    root_error = unwrap_command_error(error)
+    print(f'[ERROR] say_error: {root_error}')
+    traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
     try:
         if isinstance(error, commands.CheckFailure):
             return await send_hybrid_error(ctx, content='❌ Only staff members can use this command.')
@@ -7517,7 +7585,7 @@ async def say_error(ctx, error):
             return await send_hybrid_error(ctx, content=DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
         if isinstance(error, commands.CommandInvokeError):
             return await send_hybrid_error(ctx, content='⚠️ Error running say. Please try again shortly.')
-        await send_hybrid_error(ctx, content=f'⚠️ Error: {type(error).__name__}')
+        await send_hybrid_error(ctx, content='⚠️ An unexpected error occurred.')
     except Exception:
         pass
 
@@ -8956,9 +9024,11 @@ async def override(ctx):
         await ctx.send('🚀 Bot unlocked!')
     else:
         await ctx.send("❌ You don't have permission.")
+
 if __name__ == '__main__':
     print('📊 Checking registered commands...')
-    for cmd in bot.tree.walk_commands():
+    # (Disabled) Printing every registered command is extremely noisy.
+    for cmd in ():
         print(f'📌 Registered command: {cmd.name}, guilds: {cmd._guild_ids}')
     print(f'📊 Total commands registered: {len(list(bot.tree.walk_commands()))}')
     print('Starting bot...')
