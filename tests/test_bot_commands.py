@@ -21,7 +21,7 @@ async def test_warn_command():
     assert main.warnings_data[str(ctx.guild.id)][str(member.id)][0]['reason'] == 'Breaking rules'
 
 @pytest.mark.asyncio
-async def test_kick_command():
+async def test_kick_command(monkeypatch):
     ctx = MagicMock()
     member = AsyncMock()
     ctx.guild.id = 987654321
@@ -30,6 +30,7 @@ async def test_kick_command():
     member.mention = '@UserToKick'
     member.kick = AsyncMock()
     main.actions_data.clear()
+    monkeypatch.setattr(main, 'check_target_permission', lambda ctx, m: None)
     await main.kick(ctx, member, reason='Violation')
     member.kick.assert_awaited_with(reason='Violation')
     assert str(ctx.guild.id) in main.actions_data
@@ -37,7 +38,7 @@ async def test_kick_command():
     assert main.actions_data[str(ctx.guild.id)][str(member.id)][-1]['type'] == 'kick'
 
 @pytest.mark.asyncio
-async def test_mute_command_with_duration():
+async def test_mute_command_with_duration(monkeypatch):
     ctx = MagicMock()
     member = MagicMock()
     mute_role = MagicMock()
@@ -45,23 +46,20 @@ async def test_mute_command_with_duration():
     ctx.guild.roles = [mute_role]
     mute_role.name = 'Muted'
     ctx.guild.channels = []
-    mute_role in member.roles
+    member.roles = []
     member.add_roles = AsyncMock()
-    member.remove_roles = AsyncMock()
     ctx.author = MagicMock(name='Mod', id=999)
     member.id = 888
     member.mention = '@User'
     main.actions_data.clear()
-
-    async def fake_sleep(x):
-        pass
-    asyncio.sleep = fake_sleep
+    monkeypatch.setattr(main, 'check_target_permission', lambda ctx, m: None)
+    monkeypatch.setattr(main.mutes_col, 'update_one', AsyncMock())
     await main.mute(ctx, member, duration='10s', reason='Spamming')
     member.add_roles.assert_awaited()
-    member.remove_roles.assert_awaited()
+    main.mutes_col.update_one.assert_awaited_once()
     assert str(ctx.guild.id) in main.actions_data
     assert str(member.id) in main.actions_data[str(ctx.guild.id)]
-    assert main.actions_data[str(ctx.guild.id)][str(member.id)][-1]['type'] == 'unmute'
+    assert main.actions_data[str(ctx.guild.id)][str(member.id)][-1]['type'] == 'mute'
 
 def test_detect_discord_service_unavailable_from_wrapped_error():
     wrapped = main.commands.CommandInvokeError(RuntimeError('DiscordServerError: 503 Service Unavailable (error code: 0): upstream connect error'))

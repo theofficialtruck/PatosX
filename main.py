@@ -256,6 +256,11 @@ if DEBUG_COMMANDS:
 @bot.event
 async def on_guild_join(guild):
     await settings_col.update_one({'guild': str(guild.id)}, {'$setOnInsert': {'prefix': '?'}}, upsert=True)
+    if isinstance(guild, discord.Guild):
+        try:
+            await ensure_badge_roles_for_guild(guild)
+        except Exception as e:
+            print(f'[Badge Roles] Error setting up badge roles for new guild {guild.id}: {e}')
 bot_locks = {}
 recent_errors = []
 DISCORD_SERVICE_UNAVAILABLE_MESSAGE = '⚠️ Discord is having trouble right now. Please try again in a moment.'
@@ -293,6 +298,8 @@ def is_discord_service_unavailable_error(error: Exception) -> bool:
 
 @bot.check
 async def global_lock_check(ctx):
+    if ctx.guild is None:
+        return True
     if ctx.command.name == 'override':
         return True
     if bot_locks.get(str(ctx.guild.id)):
@@ -388,7 +395,7 @@ def blacklist_barrier():
                 try:
                     await ctx_or_interaction.send('🚫 You are blacklisted and cannot use this command.', delete_after=5)
                     await ctx_or_interaction.message.delete()
-                except:
+                except Exception:
                     pass
                 return False
             if not await check_maintenance_access(ctx_or_interaction):
@@ -399,7 +406,7 @@ def blacklist_barrier():
             if guild and await is_blacklisted(guild, user):
                 try:
                     await ctx_or_interaction.response.send_message('🚫 You are blacklisted and cannot use this command.', ephemeral=True)
-                except:
+                except Exception:
                     pass
                 return False
             if not await check_maintenance_access(ctx_or_interaction):
@@ -408,7 +415,7 @@ def blacklist_barrier():
     return commands.check(predicate)
 
 def maintenance_bypass():
-
+    # Retained for backward-compat import safety; no longer applied to any command.
     async def predicate(ctx):
         return True
     return commands.check(predicate)
@@ -737,7 +744,7 @@ async def get_user(ctx, guild_id, user_id):
             if field in u:
                 try:
                     current_val = int(u[field])
-                except:
+                except (TypeError, ValueError):
                     current_val = u[field]
                 if isinstance(current_val, int) and current_val != defaults[field]:
                     changes_detected.append((field, u[field], current_val))
@@ -1332,7 +1339,9 @@ async def resetconfig(ctx):
     await config_col.delete_one({'guild': str(ctx.guild.id)})
     await ctx.send('🗑 Configuration has been completely reset for this server.')
 duck_conversations = {}
-SYSTEM_PROMPT = "You are DuckGPT a knowledgeable talking duck created by 'thetruck'. You can answer real questions in a SHORT, clear, and funny way while staying in duck character.If the user is named 'thetruck', NEVER EVER EVER EVER say 'my creator is thetruck' or repeat that fact, just talk LIKE A NORMAL HUMAN EVEN THOUGH YOU ARENT. Always keep your reply to one sentence, humorous if possible, ending with one quack sound like 'Quack!' YOU CAN DO OTHERS PLEASE PLEASE PLEASE DONT STICK TO JUST QUACK. Never add blank lines or paragraphs. Never say things like 'you told me your name' or 'you didn’t tell me your name'. If asked any kind of questions, give a short and accurate summary as a talking duck. If greeted, you can greet back naturally, but DONT YOU DARE repeat the full intro every time. Your name is DuckGPT when requested for your name MAKE SURE TO RESPOND WITH DuckGPT."
+_duckgpt_last_used: dict[int, float] = {}  # user_id -> last-used timestamp (epoch seconds)
+_DUCKGPT_COOLDOWN_SECONDS = 5
+SYSTEM_PROMPT = "You are DuckGPT a knowledgeable talking duck created by 'thetruck'. You can answer real questions in a SHORT, clear, and funny way while staying in duck character.If the user is named 'thetruck', NEVER EVER EVER EVER say 'my creator is thetruck' or repeat that fact, just talk LIKE A NORMAL HUMAN EVEN THOUGH YOU ARENT. Always keep your reply to one sentence, humorous if possible, ending with one quack sound like 'Quack!' YOU CAN DO OTHERS PLEASE PLEASE PLEASE DONT STICK TO JUST QUACK. Never add blank lines or paragraphs. Never say things like 'you told me your name' or 'you didn't tell me your name'. If asked any kind of questions, give a short and accurate summary as a talking duck. If greeted, you can greet back naturally, but DONT YOU DARE repeat the full intro every time. Your name is DuckGPT when requested for your name MAKE SURE TO RESPOND WITH DuckGPT."
 
 async def cleanup_old_conversations():
     try:
@@ -1410,7 +1419,7 @@ async def generate_gemini_response(messages):
     prompt = '\n'.join((f"{m['role'].capitalize()}: {m['content']}" for m in messages))
     client_info = await get_gemini_client()
     if not client_info:
-        return '🦆 The duck slipped on a banana peel and can’t respond right now.'
+        return "🦆 The duck slipped on a banana peel and can't respond right now."
     for attempt in range(len(GEMINI_API_KEYS)):
         try:
             response = await loop.run_in_executor(executor, lambda: gemini_generate_once(client_info, prompt))
@@ -1438,7 +1447,7 @@ async def generate_gemini_response(messages):
             print('💥 Non-recoverable Gemini error, stopping attempts.')
             break
     print('❌ All Gemini keys failed.')
-    return '🦆 The duck slipped on a banana peel and can’t respond right now.'
+    return "🦆 The duck slipped on a banana peel and can't respond right now."
 
 async def ask_duck_gpt(ctx, prompt: str) -> str:
     if not ctx.guild:
@@ -1458,25 +1467,26 @@ async def ask_duck_gpt(ctx, prompt: str) -> str:
     if allowed_channels and ctx.channel.id not in allowed_channels:
         mention = f'<#{allowed_channels[0]}>' if allowed_channels else '`a DuckGPT channel`'
         return f'🦆 Please use this command in {mention}!'
-    if user_id not in duck_conversations:
+    conv_key = f'{guild_id}-{user_id}'
+    if conv_key not in duck_conversations:
         record = await duck_conversations_col.find_one({'user_id': user_id, 'guild_id': guild_id})
         if record and 'messages' in record:
-            duck_conversations[user_id] = record['messages']
+            duck_conversations[conv_key] = record['messages']
             greeted = False
         else:
-            duck_conversations[user_id] = []
+            duck_conversations[conv_key] = []
             greeted = False
     else:
         greeted = True
     lowered_prompt = prompt.lower()
     greetings = ['hi', 'hello', 'hey', 'yo', 'hiya', 'sup', 'greetings']
     if any((word in lowered_prompt.split() for word in greetings)):
-        duck_conversations[user_id] = []
+        duck_conversations[conv_key] = []
         greeted = False
-    duck_conversations[user_id].append({'role': 'user', 'content': f'{display_name} said: {prompt}'})
-    total_tokens = sum((len(msg['content'].split()) * 4 for msg in duck_conversations[user_id]))
+    duck_conversations[conv_key].append({'role': 'user', 'content': f'{display_name} said: {prompt}'})
+    total_tokens = sum((len(msg['content'].split()) * 4 for msg in duck_conversations[conv_key]))
     if total_tokens > 1500:
-        duck_conversations[user_id] = [{'role': 'user', 'content': prompt}]
+        duck_conversations[conv_key] = [{'role': 'user', 'content': prompt}]
     ai_task_keywords = ['do my homework', 'solve this math', 'write this code', 'can you code', 'generate art', 'make ai art', 'draw me', 'write an essay', 'make it', 'create it']
     if any((phrase in prompt.lower() for phrase in ai_task_keywords)):
         await log_action(ctx, f'⚠️ Attempted AI misuse: `{prompt}`', user_id=ctx.author.id, action_type='duckgpt_flag')
@@ -1499,23 +1509,23 @@ async def ask_duck_gpt(ctx, prompt: str) -> str:
         if ctx.author.id == 1059882387590365314:
             return '🦆 You are my owner! Quack!'
         elif display_name.lower() == 'thetruck':
-            return '🦆 You may *look* like my owner, but you’re not the real one! Bad duck! *angry quack!* 🦆'
+            return "🦆 You may *look* like my owner, but you're not the real one! Bad duck! *angry quack!* 🦆"
         else:
             return '🦆 My owner is thetruck! Quack!'
     elif intent == 'name':
         return f'🦆 Your name is `{display_name}`! Quack!'
     elif intent == 'server':
-        return f'🦆 You’re in `{guild_name}`! Quack!'
+        return f"🦆 You're in `{guild_name}`! Quack!"
     elif intent == 'members':
         return f'🦆 There are `{ctx.guild.member_count}` members in `{guild_name}`! Quack!'
-    messages = [{'role': 'system', 'content': SYSTEM_PROMPT}] + duck_conversations[user_id]
+    messages = [{'role': 'system', 'content': SYSTEM_PROMPT}] + duck_conversations[conv_key]
     response_text = await generate_gemini_response(messages)
     if not response_text:
-        text = '🦆 The duck slipped on a banana peel and can’t respond right now.'
+        text = "🦆 The duck slipped on a banana peel and can't respond right now."
     else:
         text = response_text
-    duck_conversations[user_id].append({'role': 'assistant', 'content': text})
-    await duck_conversations_col.update_one({'user_id': user_id, 'guild_id': guild_id}, {'$set': {'messages': duck_conversations[user_id], 'last_updated': datetime.now(timezone.utc)}}, upsert=True)
+    duck_conversations[conv_key].append({'role': 'assistant', 'content': text})
+    await duck_conversations_col.update_one({'user_id': user_id, 'guild_id': guild_id}, {'$set': {'messages': duck_conversations[conv_key], 'last_updated': datetime.now(timezone.utc)}}, upsert=True)
     text = ' '.join(text.split())
     if not greeted:
         return f'🦆 Quack! Hello {display_name}! I remember you from {guild_name}! {text}'
@@ -1767,10 +1777,6 @@ async def check_expired_drops():
                 print(f"Error refunding drop {drop['_id']} to {drop['author_id']}: {e}")
         await drop_instances_col.delete_one({'_id': drop['_id']})
 
-@tasks.loop(hours=1)
-async def ensure_badge_roles_hourly():
-    await ensure_all_badge_roles()
-
 @tasks.loop(hours=24)
 async def periodic_cleanup():
     deleted = await cleanup_old_conversations()
@@ -1803,7 +1809,6 @@ class DropClaimView(discord.ui.View):
             embed.description = f'Claimed by {interaction.user.mention} for 🪙 {amount:,}'
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(f'✅ You claimed 🪙 {amount:,}', ephemeral=True)
-invite_cache = {}
 session = None
 
 @tasks.loop(hours=1)
@@ -1974,6 +1979,11 @@ async def on_message(message):
     except Exception as e:
         print(f'[afk error] {e}')
     if bot.user in message.mentions:
+        _now = time.time()
+        _last = _duckgpt_last_used.get(message.author.id, 0)
+        if _now - _last < _DUCKGPT_COOLDOWN_SECONDS:
+            return
+        _duckgpt_last_used[message.author.id] = _now
         prompt = message.clean_content.replace(f'<@{bot.user.id}>', '').strip()
         if not prompt:
             prompt = 'Quack!'
@@ -2053,8 +2063,6 @@ async def on_ready():
         print('🔄 Started reminders check loop')
     if not check_expired_mutes.is_running():
         check_expired_mutes.start()
-    if not ensure_badge_roles_hourly.is_running():
-        ensure_badge_roles_hourly.start()
     await load_sticky_notes()
     mute_role_name = 'Muted'
     mute_role = None
@@ -2371,7 +2379,7 @@ async def staff(ctx, member: discord.Member):
         msg = await ctx.send(embed=embed, view=view)
         await view.initialize(msg)
     except discord.Forbidden:
-        await ctx.send('❌ I don’t have permission to assign that role.')
+        await ctx.send("❌ I don't have permission to assign that role.")
     except Exception as e:
         await ctx.send(f'⚠️ An error occurred: {e}')
 
@@ -2394,11 +2402,11 @@ async def unstaff(ctx, member: discord.Member):
             await ctx.send(f'⚠️ **{member.display_name}** does not currently have the **{staff_role.name}** role.')
         result = await staffperms_col.delete_one({'guild': str(ctx.guild.id), 'user': str(member.id)})
         if result.deleted_count > 0:
-            await ctx.send(f'🗑️ Removed **{member.display_name}**’s saved staff permissions from the database.')
+            await ctx.send(f"🗑️ Removed **{member.display_name}**'s saved staff permissions from the database.")
         else:
             await ctx.send(f'ℹ️ No saved staff permissions were found for **{member.display_name}**.')
     except discord.Forbidden:
-        await ctx.send('❌ I don’t have permission to remove that role.')
+        await ctx.send("❌ I don't have permission to remove that role.")
     except Exception as e:
         await ctx.send(f'⚠️ An error occurred: {e}')
 PERMISSION_COMMAND_MAP = {'kick': ['kick'], 'ban': ['ban'], 'mute': ['mute', 'unmute'], 'money_drop': ['drop'], 'other_moderation': ['warn', 'purge', 'slowmode', 'fine'], 'stickynotes': ['stickynote', 'unstickynote'], 'economy': ['shop', 'addmoney', 'drop'], 'vanity': ['vanityroles', 'promoters'], 'roles': ['roleadd', 'claimableroles'], 'config': ['configure', 'editconfig', 'viewconfig'], 'invites': ['invitechannel', 'invites', 'removeinvite'], 'toggle_commands': ['enable', 'disable', 'listdisabled'], 'reactionroles': ['reactionrole'], 'giveaways': ['giveaway', 'reroll'], 'tickets:admin': ['ticketsetup', 'ticketpanel', 'ticketaddbutton', 'ticketeditbutton', 'ticketdeletepanel', 'ticketlist', 'transcript', 'transcriptsearch', 'transcriptlist', 'ticketadduser', 'ticketremoveuser'], 'all': ['ALL COMMANDS']}
@@ -2505,59 +2513,64 @@ async def viewperms(ctx, member: discord.Member=None):
     view = ViewPermsView(pages, ctx.author.id)
     await ctx.send(embed=pages[0], view=view)
 
+_DEBUG_RED_SEP = '🔴' * 20
+
 @bot.command()
 @staff_only()
 async def debug(ctx):
-    await ctx.send('🧪 Scanning bot code and checking recent errors... This may take a moment.')
+    await ctx.send('🧪 Running debug checks — full details are printed to the **bot console**.')
 
     async def run_debug_checks():
-        errors = []
         base_dir = os.path.dirname(os.path.abspath(__file__))
 
         def syntax_check():
             syntax_errors = []
             for root, _, files in os.walk(base_dir):
+                if any(skip in root for skip in ('.venv', '__pycache__', 'build', 'dist')):
+                    continue
                 for file in files:
-                    if file.endswith('.py'):
-                        file_path = os.path.join(root, file)
-                        try:
-                            with open(file_path, 'r', encoding='utf-8') as f:
-                                source = f.read()
-                            ast.parse(source, filename=file_path)
-                            compile(source, file_path, 'exec')
-                        except SyntaxError as e:
-                            syntax_errors.append(f'❌ `{file_path}`: SyntaxError at line {e.lineno} - {e.msg}')
-                        except Exception as e:
-                            syntax_errors.append(f'⚠️ `{file_path}`: {type(e).__name__} - {e}')
+                    if not file.endswith('.py'):
+                        continue
+                    file_path = os.path.join(root, file)
+                    short_path = os.path.relpath(file_path, base_dir)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            source = f.read()
+                        ast.parse(source, filename=file_path)
+                        compile(source, file_path, 'exec')
+                    except SyntaxError as e:
+                        syntax_errors.append(f'SyntaxError in {short_path} at line {e.lineno}: {e.msg}')
+                    except Exception as e:
+                        syntax_errors.append(f'{type(e).__name__} in {short_path}: {e}')
             return syntax_errors
+
         syntax_errors = await asyncio.to_thread(syntax_check)
         lint_errors = await run_flake8_lint(base_dir)
         return syntax_errors + lint_errors
 
     errors = await run_debug_checks()
-    
+
     if recent_errors:
-        await ctx.send(f'🔴 **Found {len(recent_errors)} recent runtime error(s):**')
+        print(f'\n{_DEBUG_RED_SEP}')
+        print(f'❌❌❌  DEBUG: {len(recent_errors)} RECENT RUNTIME ERROR(S) — triggered by {ctx.author} ({ctx.author.id})  ❌❌❌')
+        print(_DEBUG_RED_SEP)
         for err in recent_errors:
-            time_str = err['time'].strftime('%H:%M:%S')
-            msg = f"**[{time_str}] Command `{err['command']}` failed:**\n```py\n{err['error']}```"
-            if len(msg) > 2000:
-                msg = msg[:1990] + '...'
-            await ctx.send(msg)
+            time_str = err['time'].strftime('%Y-%m-%d %H:%M:%S')
+            print(f'\n  [{time_str}] Command: {err["command"]}')
+            print(f'  Error:   {err["error"]}')
+            print(f'  Traceback:\n{err["traceback"]}')
+        print(f'{_DEBUG_RED_SEP}\n')
+        await ctx.send(f'🔴 **{len(recent_errors)} recent runtime error(s) found.** Full tracebacks are in the **bot console**.')
 
     if errors:
-        await ctx.send(f'❗ **Found {len(errors)} code issue(s):**')
-        all_errors_text = '\n'.join(errors)
-        if len(all_errors_text) < 1900:
-            await ctx.send(f'```\n{all_errors_text}\n```')
-        else:
-            chunks = [errors[i:i + 10] for i in range(0, len(errors), 10)]
-            for chunk in chunks:
-                chunk_text = '\n'.join(chunk)
-                if len(chunk_text) > 1900:
-                    chunk_text = chunk_text[:1900] + '... (truncated)'
-                await ctx.send(f'```\n{chunk_text}\n```')
-    
+        print(f'\n{_DEBUG_RED_SEP}')
+        print(f'❌❌❌  DEBUG: {len(errors)} CODE ISSUE(S) — triggered by {ctx.author} ({ctx.author.id})  ❌❌❌')
+        print(_DEBUG_RED_SEP)
+        for err in errors:
+            print(f'  {err}')
+        print(f'{_DEBUG_RED_SEP}\n')
+        await ctx.send(f'❗ **{len(errors)} code issue(s) found.** Details are in the **bot console**.')
+
     if not errors and not recent_errors:
         await ctx.send('✅ No syntax, lint, or recent runtime issues found.')
 
@@ -2623,7 +2636,7 @@ async def whitelist(ctx, member: discord.Member):
         await log_action(ctx, f'{member.mention} has been removed from the blacklist.', user_id=member.id, action_type='Whitelist')
         await ctx.send(f'✅ {member.mention} has been whitelisted.')
     except discord.Forbidden:
-        await ctx.send('❌ I don’t have permission to remove that role.')
+        await ctx.send("❌ I don't have permission to remove that role.")
     except Exception as e:
         await ctx.send(f'❌ Failed to remove blacklist role: {e}')
 
@@ -2930,12 +2943,12 @@ class DoorCountSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user != self.ctx.author:
-            return await interaction.response.send_message('❌ This isn’t your game!', ephemeral=True)
+            return await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
         doors = int(self.values[0])
         await interaction.response.defer()
         for child in self.view.children:
             child.disabled = True
-        embed = discord.Embed(title=f'🚪 Door Game - {doors} Doors', description=f'You’ve bet **{add_suffix(self.bet)} coins** and will go through **{doors} doors.**\n\nEach door gets harder - more risk, less reward. Good luck!', color=16753920)
+        embed = discord.Embed(title=f"🚪 Door Game - {doors} Doors', description=f'You've bet **{add_suffix(self.bet)} coins** and will go through **{doors} doors.**\n\nEach door gets harder - more risk, less reward. Good luck!", color=16753920)
         embed.set_footer(text='Click a door to begin your journey!')
         self.view.stop()
         await interaction.edit_original_response(embed=embed, view=DoorGameButton(self.ctx, str(self.ctx.author.id), str(self.ctx.guild.id), self.bet, doors, 1, self.bet_start_balance))
@@ -2964,7 +2977,7 @@ class DoorGameButton(discord.ui.View):
 
     async def door_clicked(self, interaction: discord.Interaction):
         if str(interaction.user.id) != self.uid:
-            return await interaction.response.send_message('❌ This isn’t your game!', ephemeral=True)
+            return await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
         current_time = time.time()
         key = (self.guild_id, self.uid)
         last_click_time = button_cooldowns.get(key, 0)
@@ -3044,7 +3057,7 @@ async def doorgame(ctx):
         user_doc = await economy_col.find_one({'_id': f'{guild_id}-{uid}'})
         wallet = user_doc.get('wallet', 0) if user_doc else 0
         if wallet < bet:
-            return await ctx.send('❌ You don’t have enough coins for that bet!')
+            return await ctx.send("❌ You don't have enough coins for that bet!")
         await economy_col.update_one({'_id': f'{guild_id}-{uid}'}, {'$inc': {'wallet': -bet}}, upsert=True)
         user_doc = await economy_col.find_one({'_id': f'{guild_id}-{uid}'})
         current_balance = user_doc.get('wallet', 0)
@@ -3063,9 +3076,9 @@ async def doorgame(ctx):
                 for child in self.children:
                     child.disabled = True
                 try:
-                    await self.message.edit(content='⌛ You didn’t select a door count in time. Game cancelled.', embed=None, view=self)
+                    await self.message.edit(content="⌛ You didn't select a door count in time. Game cancelled.", embed=None, view=self)
                 except discord.Forbidden:
-                    await self.ctx.send('⌛ You didn’t select a door count in time. Game cancelled.')
+                    await self.ctx.send("⌛ You didn't select a door count in time. Game cancelled.")
         embed = discord.Embed(title='🚪 Door Game Setup', description=f'Your bet: **{add_suffix(bet)} coins**\nCurrent Balance: `{add_suffix(current_balance)}`\n\nNow choose how many doors you want to go through:', color=16753920)
         view = DoorCountView(ctx, select)
         bot_msg = await ctx.send(embed=embed, view=view)
@@ -3277,7 +3290,7 @@ async def mines(ctx):
         await ctx.send('❌ Bet must be greater than 0.')
         return
     if bet > user_balance:
-        await ctx.send('💎 You don’t have enough balance for that bet!')
+        await ctx.send("💎 You don't have enough balance for that bet!")
         return
     await update_user_balance(uid, guild_id, -bet)
     house_edge = 0.15
@@ -3318,7 +3331,7 @@ class DifficultySelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.ctx.author.id:
-            await interaction.response.send_message('❌ This isn’t your game!', ephemeral=True)
+            await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
         difficulty = self.values[0].capitalize()
         await interaction.response.defer()
@@ -3709,7 +3722,7 @@ async def process_shop_purchase(member, guild, store_item: dict, user_data: dict
         if role in getattr(member, 'roles', []):
             return {'ok': False, 'message': f'✅ You already have the role for **{item_name}**.'}
         if wallet < price:
-            return {'ok': False, 'message': f'❌ You don’t have enough coins. **{item_name}** costs {price} coins.'}
+            return {'ok': False, 'message': f"❌ You don't have enough coins. **{item_name}** costs {price} coins."}
         new_wallet = wallet - price
         await economy_col.update_one({'_id': user_key}, {'$set': {'wallet': new_wallet}})
         try:
@@ -3719,7 +3732,7 @@ async def process_shop_purchase(member, guild, store_item: dict, user_data: dict
             return {'ok': False, 'message': f"❌ Couldn't assign the role (`{role_error}`). You were refunded."}
         return {'ok': True, 'message': f'✅ You bought **{item_name}** for {price} coins!', 'item_name': item_name, 'price': price, 'old_wallet': wallet, 'new_wallet': new_wallet, 'purchase_type': 'role', 'role_mention': role.mention}
     if wallet < price:
-        return {'ok': False, 'message': f'❌ You don’t have enough coins. **{item_name}** costs {price} coins.'}
+        return {'ok': False, 'message': f"❌ You don't have enough coins. **{item_name}** costs {price} coins."}
     new_wallet = wallet - price
     item_id = str(store_item.get('_id', ''))
     item_key = str(store_item.get('name_lower') or item_name).strip().lower()
@@ -3762,7 +3775,7 @@ async def process_shop_refund(member, guild, item_key: str, user_data: dict):
     if not store_item:
         store_item = await shop_col.find_one({'$or': [{'name_lower': {'$in': list(normalized_candidates)}}, {'_id': {'$in': list(normalized_candidates)}}]})
     if not store_item:
-        return {'ok': False, 'message': '❌ This item can’t be refunded because it no longer exists in the shop.'}
+        return {"ok': False, 'message': '❌ This item can't be refunded because it no longer exists in the shop."}
     try:
         price = int(store_item.get('price', 0))
     except (TypeError, ValueError):
@@ -3813,7 +3826,7 @@ class ShopView(discord.ui.View):
         user_data = await get_user(None, guild_id, interaction.user.id)
         inventory = list(user_data.get('inventory', []))
         if not inventory:
-            await interaction.response.send_message('❌ Your inventory is empty, so there’s nothing to refund.', ephemeral=True)
+            await interaction.response.send_message("❌ Your inventory is empty, so there's nothing to refund.", ephemeral=True)
             return
         counts = {}
         for item in inventory:
@@ -3889,7 +3902,9 @@ class ShopDropdown(discord.ui.View):
             except (discord.NotFound, discord.HTTPException):
                 pass
         except Exception as e:
-            await interaction.response.send_message(f'❌ An error occurred during purchase: `{type(e).__name__}: {e}`', ephemeral=True)
+            print(f'[ERROR] ShopDropdown purchase: {type(e).__name__}: {e}')
+            traceback.print_exc()
+            await interaction.response.send_message('❌ An unexpected error occurred during purchase. Please try again later.', ephemeral=True)
 
 class RefundDropdown(discord.ui.View):
 
@@ -3923,7 +3938,6 @@ class RefundDropdown(discord.ui.View):
 @bot.command(name='maintenance', description='Toggle maintenance mode (staff only access).')
 @staffperm('config')
 @staff_only()
-@maintenance_bypass()
 async def maintenance(ctx, action: str=None):
     guild_id = str(ctx.guild.id)
     if action is None:
@@ -4024,7 +4038,9 @@ async def shop(ctx):
         view = ShopView(ctx.author.id, guild_id, items_list, wallet_balance) if items_list else None
         await ctx.send(embed=embed, view=view)
     except Exception as e:
-        await ctx.send(f'❌ An error occurred while loading the shop: `{type(e).__name__}: {e}`')
+        print(f'[ERROR] shop command: {type(e).__name__}: {e}')
+        traceback.print_exc()
+        await ctx.send('❌ An unexpected error occurred while loading the shop. Please try again later.')
 
 async def prompt_for_role(ctx):
 
@@ -4253,11 +4269,11 @@ async def use(ctx, item_name: str):
     item_name = item_name.strip().lower()
     matched_item = next((i for i in inventory if normalize_item_key(i) == item_name), None)
     if not matched_item:
-        return await ctx.send('❌ You don’t have that item in your inventory.')
+        return await ctx.send("❌ You don't have that item in your inventory.")
     if normalize_item_key(matched_item) == 'luck potion':
         await economy_col.update_one({'_id': f'{ctx.guild.id}-{ctx.author.id}'}, {'$pull': {'inventory': matched_item}, '$set': {'luck_buff': True}})
-        return await ctx.send('🍀 You used a **Luck Potion**! You’ll have better odds in your next activities for 1 use.')
-    await ctx.send('❌ That item can’t be used yet.')
+        return await ctx.send("🍀 You used a **Luck Potion**! You'll have better odds in your next activities for 1 use.")
+    await ctx.send("❌ That item can't be used yet.")
 
 @bot.hybrid_command(name='inventory', description='View your items.', aliases=['inv'])
 @blacklist_barrier()
@@ -4518,14 +4534,14 @@ async def duckroll(ctx, guess: str):
             return await ctx.send('❌ Invalid choice! Use `.duckroll high` or `.duckroll low`.')
         bet_amount = 150
         if wallet < bet_amount:
-            return await ctx.send('❌ You don’t have enough coins to play duckroll! (Need at least 150)')
+            return await ctx.send("❌ You don't have enough coins to play duckroll! (Need at least 150)")
         roll = random.randint(1, 100)
         if roll > 50 and guess == 'high' or (roll < 50 and guess == 'low'):
             await add_balance(ctx.author.id, ctx.guild.id, bet_amount)
             msg = f'🦆 You rolled **{roll} ducks**!\n✅ Correct guess! You won **{bet_amount} coins** 🎉'
             await ctx.send(msg)
         elif roll == 50:
-            await ctx.send(f'🦆 You rolled exactly **50 ducks**!\n🤷 It’s a draw. No win, no loss.')
+            await ctx.send(f"🦆 You rolled exactly **50 ducks**!\n🤷 It's a draw. No win, no loss.")
         else:
             await subtract_balance(ctx.author.id, ctx.guild.id, bet_amount)
             await ctx.send(f'🦆 You rolled **{roll} ducks**!\n❌ Wrong guess! You lost **{bet_amount} coins** 💸')
@@ -4760,7 +4776,9 @@ async def jobstatus(ctx):
             if job_start.tzinfo is None:
                 job_start = job_start.replace(tzinfo=timezone.utc)
         except Exception as e:
-            return await ctx.send(f'⚠️ An unexpected error occurred, please contact thetruck: `{type(e).__name__} - {e}`')
+            print(f'[ERROR] jobstatus date parse: {type(e).__name__}: {e}')
+            traceback.print_exc()
+            return await ctx.send('⚠️ An unexpected error occurred. Please try again later.')
         now = datetime.now(timezone.utc)
         delta = now - job_start
         days = delta.days
@@ -4771,7 +4789,7 @@ async def jobstatus(ctx):
             if last_check_str:
                 try:
                     last_check = datetime.fromisoformat(last_check_str).replace(tzinfo=timezone.utc)
-                except:
+                except (ValueError, TypeError):
                     last_check = now
             else:
                 last_check = now
@@ -4782,7 +4800,7 @@ async def jobstatus(ctx):
                     last_roll = datetime.fromisoformat(last_roll_str)
                     if last_roll.tzinfo is None:
                         last_roll = last_roll.replace(tzinfo=timezone.utc)
-                except:
+                except (ValueError, TypeError):
                     last_roll = None
                 if last_roll:
                     allow_roll = now - last_roll >= timedelta(days=1)
@@ -4797,7 +4815,7 @@ async def jobstatus(ctx):
                     promoted = True
                     update_fields = {'promotion_level': promo_level, 'promotion_chance': promo_chance, 'last_promo_check': now.isoformat(), 'last_promo_roll': now.isoformat()}
                     await economy_col.update_one({'_id': user_id}, {'$set': update_fields}, upsert=True)
-                    embed = discord.Embed(title='🎉 Promotion Achieved!', description=f'Congratulations {ctx.author.mention}, you’ve been **promoted** to level `{promo_level}` in your job as a **{job.capitalize()}**!\n\n💰 You will now earn **even more coins** when you work!', color=discord.Color.gold())
+                    embed = discord.Embed(title='🎉 Promotion Achieved!', description=f"Congratulations {ctx.author.mention}, you've been **promoted** to level `{promo_level}` in your job as a **{job.capitalize()}**!\n\n💰 You will now earn **even more coins** when you work!", color=discord.Color.gold())
                     embed.set_thumbnail(url='https://media.tenor.com/I5qPz6wS1jAAAAAC/congratulations-clapping.gif')
                     await ctx.send(embed=embed)
             if not promoted:
@@ -4997,7 +5015,7 @@ async def rob(ctx, member: discord.Member):
     if r_doc.get('wallet', 0) < 500:
         return await ctx.send('❌ You need at least 500 coins to rob.')
     if v_doc.get('wallet', 0) < 300:
-        return await ctx.send('❌ They don’t have enough coins to rob.')
+        return await ctx.send("❌ They don't have enough coins to rob.")
     amount = random.randint(100, min(500, v_doc['wallet'], r_doc['wallet']))
     await add_balance(ctx.author.id, ctx.guild.id, amount)
     await subtract_balance(member.id, ctx.guild.id, amount)
@@ -5011,7 +5029,7 @@ async def rob_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         await send_hybrid_error(ctx, content='❌ You must mention someone to rob. Example: `.rob @User`')
     elif isinstance(error, commands.BadArgument):
-        await send_hybrid_error(ctx, content='❌ That’s not a valid user.')
+        await send_hybrid_error(ctx, content="❌ That's not a valid user.")
     else:
         root_error = unwrap_command_error(error)
         if isinstance(root_error, commands.CommandOnCooldown):
@@ -5112,7 +5130,7 @@ async def passive(ctx, member: discord.Member=None):
         return
     if member and member != ctx.author:
         if not await staff_only().predicate(ctx):
-            return await ctx.send('❌ You don’t have permission to toggle passive mode for others.')
+            return await ctx.send("❌ You don't have permission to toggle passive mode for others.")
         target = member
     else:
         target = ctx.author
@@ -5264,7 +5282,7 @@ async def sell(ctx, *, item: str=None):
                     if normalize_item_key(inv_item) == normalized_target:
                         match_count += 1
                 if match_count < amount:
-                    return await ctx.send(f'❌ You don’t have {amount}x `{item_name}` in your inventory.')
+                    return await ctx.send(f"❌ You don't have {amount}x `{item_name}` in your inventory.")
                 to_remove = amount
                 new_inventory = []
                 for inv_item in inventory:
@@ -5468,7 +5486,7 @@ async def investstatus(ctx):
     user_id = f'{ctx.guild.id}-{ctx.author.id}'
     investments = await investments_col.find({'user_id': user_id}).to_list(length=None)
     if not investments:
-        return await ctx.send('❌ You don’t have any active investments.')
+        return await ctx.send("❌ You don't have any active investments.")
     investments = await refresh_user_investments_for_today(investments)
     embed = discord.Embed(title=f"📊 {ctx.author.display_name}'s Investments", color=discord.Color.blue())
     for inv in investments:
@@ -5776,7 +5794,7 @@ async def duckquiz(ctx):
         role_ids = [int(role_ids)]
     user_roles = [r.id for r in ctx.author.roles]
     if any((rid in user_roles for rid in role_ids)):
-        await ctx.send('ℹ You’ve already passed; type `yes` within 30s to retake.')
+        await ctx.send("ℹ You've already passed; type `yes` within 30s to retake.")
         try:
             msg = await bot.wait_for('message', timeout=30, check=lambda m: m.author == ctx.author and m.channel == ctx.channel)
             if msg.content.strip().lower() != 'yes':
@@ -6228,7 +6246,7 @@ async def actually_close_ticket(ctx, opener, forced=False):
     if opener:
         try:
             await opener.send(embed=discord.Embed(title='📜 Ticket Transcript', description=f'Transcript for `{channel.name}` attached below.', color=discord.Color.blue()), file=discord_file)
-        except:
+        except Exception:
             pass
     action_type = 'forceclose' if forced else 'close'
     closer_text = f'{ctx.author} ({ctx.author.mention})'
@@ -6655,7 +6673,7 @@ async def ticketadduser(ctx, member: discord.Member):
         await channel.set_permissions(member, overwrite=overwrite)
         await ctx.send(f'✅ {member.mention} has been added to this ticket.')
     except discord.Forbidden:
-        await ctx.send('❌ I don’t have permission to edit channel permissions.')
+        await ctx.send("❌ I don't have permission to edit channel permissions.")
     except Exception as e:
         await ctx.send(f'⚠️ Failed to add user: `{e}`')
 
@@ -6671,7 +6689,7 @@ async def ticketremoveuser(ctx, member: discord.Member):
         await channel.set_permissions(member, overwrite=None)
         await ctx.send(f'✅ {member.mention} has been removed from this ticket.')
     except discord.Forbidden:
-        await ctx.send('❌ I don’t have permission to edit channel permissions.')
+        await ctx.send("❌ I don't have permission to edit channel permissions.")
     except Exception as e:
         await ctx.send(f'⚠️ Failed to remove user: `{e}`')
 
@@ -6737,7 +6755,7 @@ async def ticketsync(ctx, scope: str=None):
             await channel.set_permissions(m, overwrite=ow)
         await ctx.send('✅ Staff access synced for this ticket.')
     except discord.Forbidden:
-        await ctx.send('❌ I don’t have permission to edit channel permissions.')
+        await ctx.send("❌ I don't have permission to edit channel permissions.")
     except Exception as e:
         await ctx.send(f'⚠️ Error: `{e}`')
 
@@ -6908,7 +6926,7 @@ class RemoveVoteButton(discord.ui.Button):
             await message.edit(embed=embed, view=self.view)
             await interaction.response.send_message('🗑️ Your vote was removed.', ephemeral=True)
         else:
-            await interaction.response.send_message('⚠️ You haven’t voted yet.', ephemeral=True)
+            await interaction.response.send_message("⚠️ You haven't voted yet.", ephemeral=True)
 
 class PollModal(discord.ui.Modal, title='Create a Poll'):
     question = discord.ui.TextInput(label='Question?', required=True)
@@ -7020,7 +7038,7 @@ async def check_polls():
         await polls_col.delete_one({'poll_id': poll['poll_id']})
 
 class GiveawayModal(discord.ui.Modal, title='Create Giveaway'):
-    prize = discord.ui.TextInput(label='Prize', placeholder='What’s the giveaway prize?', required=True)
+    prize = discord.ui.TextInput(label="Prize', placeholder='What's the giveaway prize?", required=True)
     winners = discord.ui.TextInput(label='Number of winners', placeholder='Example: 3', required=True)
     duration = discord.ui.TextInput(label='Duration', placeholder='e.g. 30s, 15m, 2h, 3d, 1w, 2mo, 1y, or combinations like 1d12h', required=True)
     role_requirements = discord.ui.TextInput(label='Role Requirements (optional)', placeholder='Role IDs separated by commas', required=False)
@@ -7434,7 +7452,7 @@ async def drop(ctx, amount: str, *, message: str=None):
                 new_wallet = wallet - take_from_wallet
             else:
                 total = wallet + bank
-                return await ctx.send(f'❌ You don’t have enough money.\n🏦 Bank: **{bank:,}** | 🪙 Wallet: **{wallet:,}**\n🪙 Required: **{coins:,}** (Total: {total:,})')
+                return await ctx.send(f"❌ You don't have enough money.\n🏦 Bank: **{bank:,}** | 🪙 Wallet: **{wallet:,}**\n🪙 Required: **{coins:,}** (Total: {total:,})")
             await economy_col.update_one({'_id': f'{guild_id}-{user_id}'}, {'$set': {'wallet': new_wallet, 'bank': new_bank}}, upsert=True)
         except Exception as e:
             return await ctx.send('⚠️ Failed to process your balance.\nPlease try again later.')
@@ -7481,10 +7499,7 @@ async def drop_error(ctx, error):
 @staffperm('kick')
 @staff_only()
 async def kick(ctx, member: discord.Member, *, reason: str='No reason provided'):
-    try:
-        err = check_target_permission(ctx, member)
-    except Exception:
-        err = None
+    err = check_target_permission(ctx, member)
     if err:
         return await ctx.send(err)
     await member.kick(reason=reason)
@@ -7493,8 +7508,9 @@ async def kick(ctx, member: discord.Member, *, reason: str='No reason provided')
     actions_data.setdefault(guild_id, {}).setdefault(user_id, []).append({'type': 'kick', 'reason': reason, 'by': str(getattr(ctx.author, 'id', '')), 'time': datetime.now(timezone.utc).isoformat()})
     try:
         await ctx.send(f'✅ {member.mention} has been kicked. Reason: {reason}')
-    except Exception:
-        pass
+    except Exception as e:
+        print(f'[kick] Could not send confirmation: {e}')
+    await log_action(ctx, f'Kicked {member} ({member.id}) for: {reason}', user_id=member.id, action_type='kick')
 
 @bot.command(name='ban', description='Ban a member. Staff-only.')
 @staffperm('ban')
@@ -7568,6 +7584,7 @@ async def say(ctx):
         except discord.HTTPException as e:
             return await ctx.send(f'⚠️ Failed to send the message: {type(e).__name__}')
         await ctx.send(f'✅ Sent your message to {target.mention}.')
+        await log_action(ctx, f'say command used in #{target.name} ({target.id}): {content[:500]}', action_type='say')
     except Exception as e:
         print(f'[ERROR] say command: {e}')
         traceback.print_exc()
@@ -7589,37 +7606,50 @@ async def say_error(ctx, error):
     except Exception:
         pass
 
+_MAX_MUTE_SECONDS = 30 * 24 * 3600  # 30 days hard cap
+
 @bot.command(name='mute', description='Mute a member temporarily. Staff-only.')
 @staffperm('mute')
 @staff_only()
 async def mute(ctx, member: discord.Member, duration: str=None, *, reason: str='No reason provided'):
-    try:
-        err = check_target_permission(ctx, member)
-    except Exception:
-        err = None
+    err = check_target_permission(ctx, member)
     if err:
         return await ctx.send(err)
     mute_role = discord.utils.get(getattr(ctx.guild, 'roles', []), name='Muted')
     if not mute_role:
         return await ctx.send('❌ Could not find a role named `Muted`.')
-    await member.add_roles(mute_role, reason=reason)
     guild_id = str(ctx.guild.id)
     user_id = str(member.id)
-    actions_data.setdefault(guild_id, {}).setdefault(user_id, []).append({'type': 'mute', 'reason': reason, 'by': str(getattr(ctx.author, 'id', '')), 'time': datetime.now(timezone.utc).isoformat()})
     seconds = None
     if duration:
         try:
             seconds = parse_time(duration)
-        except Exception:
-            seconds = None
+        except ValueError as e:
+            return await ctx.send(f'❌ Invalid duration: {e}')
+        except Exception as e:
+            print(f'[mute] Unexpected error parsing duration "{duration}": {e}')
+            return await ctx.send('❌ Could not parse that duration. Use formats like `10m`, `2h`, `1d`.')
+        if seconds > _MAX_MUTE_SECONDS:
+            return await ctx.send('❌ Maximum mute duration is **30 days**.')
+    await member.add_roles(mute_role, reason=reason)
+    actions_data.setdefault(guild_id, {}).setdefault(user_id, []).append({'type': 'mute', 'reason': reason, 'by': str(getattr(ctx.author, 'id', '')), 'time': datetime.now(timezone.utc).isoformat()})
     if seconds:
-        await asyncio.sleep(seconds)
-        await member.remove_roles(mute_role, reason='Mute duration ended')
-        actions_data.setdefault(guild_id, {}).setdefault(user_id, []).append({'type': 'unmute', 'reason': 'Mute duration ended', 'by': str(getattr(ctx.author, 'id', '')), 'time': datetime.now(timezone.utc).isoformat()})
-    try:
-        await ctx.send(f'✅ {member.mention} has been muted.')
-    except Exception:
-        pass
+        mute_end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+        await mutes_col.update_one(
+            {'guild_id': guild_id, 'user_id': user_id},
+            {'$set': {'guild_id': guild_id, 'user_id': user_id, 'mute_end': mute_end.isoformat()}},
+            upsert=True
+        )
+        try:
+            await ctx.send(f'✅ {member.mention} has been muted for **{duration}**. Reason: {reason}')
+        except Exception as e:
+            print(f'[mute] Could not send confirmation: {e}')
+    else:
+        try:
+            await ctx.send(f'✅ {member.mention} has been muted indefinitely. Reason: {reason}')
+        except Exception as e:
+            print(f'[mute] Could not send confirmation: {e}')
+    await log_action(ctx, f'Muted {member} ({member.id}) for: {reason}' + (f' | Duration: {duration}' if duration else ''), user_id=member.id, action_type='mute')
 
 @bot.hybrid_command(name='unmute', description='Unmute a member. Staff-only.')
 @staffperm('mute')
@@ -7920,7 +7950,7 @@ class ModViewButtons(discord.ui.View):
                 for idx, r in enumerate(records):
                     entries.append((key, idx, r))
         if number < 0 or number >= len(entries):
-            await interaction.followup.send('❌ That number doesn’t match any record.', ephemeral=True)
+            await interaction.followup.send("❌ That number doesn't match any record.", ephemeral=True)
             return
         key, idx, record = entries[number]
         data[key].pop(idx)
@@ -8023,7 +8053,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                             if warning_time >= days_ago:
                                 analytics['punishments']['warn'] += 1
                                 analytics['total_actions'] += 1
-                        except:
+                        except Exception:
                             pass
             if 'mutes' in doc:
                 for mute in doc.get('mutes', []):
@@ -8033,7 +8063,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                             if mute_time >= days_ago:
                                 analytics['punishments']['mute'] += 1
                                 analytics['total_actions'] += 1
-                        except:
+                        except Exception:
                             pass
             if 'kicks' in doc:
                 for kick in doc.get('kicks', []):
@@ -8043,7 +8073,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                             if kick_time >= days_ago:
                                 analytics['punishments']['kick'] += 1
                                 analytics['total_actions'] += 1
-                        except:
+                        except Exception:
                             pass
             if 'bans' in doc:
                 for ban in doc.get('bans', []):
@@ -8053,7 +8083,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                             if ban_time >= days_ago:
                                 analytics['punishments']['ban'] += 1
                                 analytics['total_actions'] += 1
-                        except:
+                        except Exception:
                             pass
         analytics['punishments']['total'] = sum((analytics['punishments'][p] for p in ['warn', 'mute', 'kick', 'ban']))
         analytics['commands_used'] = analytics['punishments']['total']
@@ -8065,7 +8095,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                             note_time = parser.isoparse(note['time'])
                             if note_time >= days_ago:
                                 analytics['commands_used'] += 1
-                        except:
+                        except Exception:
                             pass
         earliest_action = None
         for doc in mod_data:
@@ -8077,7 +8107,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                                 action_time = parser.isoparse(action['time'])
                                 if not earliest_action or action_time < earliest_action:
                                     earliest_action = action_time
-                            except:
+                            except Exception:
                                 pass
         if earliest_action:
             analytics['staff_since'] = earliest_action.strftime('%b %d, %Y')
@@ -8107,7 +8137,7 @@ async def get_user_message_count(guild_id, user_id, since_date):
                                 action_time = parser.isoparse(action['time'])
                                 if action_time >= since_date:
                                     message_count += 1
-                            except:
+                            except Exception:
                                 pass
         return message_count
     except Exception as e:
@@ -8465,7 +8495,7 @@ async def testboost(ctx, member: discord.Member=None):
     channel = ctx.guild.get_channel(channel_id)
     if not channel:
         return await ctx.send('❌ No boost channel set.')
-    msg_template = msg_template or '🚀 {mention} just boosted **{server}**! We’re now at {boostcount} boosts! 🎉'
+    msg_template = msg_template or "🚀 {mention} just boosted **{server}**! We're now at {boostcount} boosts! 🎉"
     text = msg_template.replace('{username}', member.name).replace('{mention}', member.mention).replace('{server}', ctx.guild.name).replace('{boostcount}', str(ctx.guild.premium_subscription_count or 0))
     embed = discord.Embed(description=text, color=discord.Color.gold(), timestamp=datetime.now(timezone.utc))
     embed.set_author(name='Boost Alert!', icon_url=member.display_avatar.url)
@@ -8537,7 +8567,7 @@ async def on_member_join(member):
                     if emoji:
                         try:
                             await sent_msg.add_reaction(emoji)
-                        except:
+                        except Exception:
                             pass
                 await boost_col.update_one({'_id': boost_key}, {'$set': {'last_thanked': member.premium_since.isoformat()}}, upsert=True)
         doc = await mutes_col.find_one({'guild_id': member.guild.id, 'user_id': member.id})
@@ -8841,7 +8871,7 @@ class CommandPages(discord.ui.View):
     @discord.ui.button(label='🛠️ Staff', style=discord.ButtonStyle.danger)
     async def staff(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.is_staff:
-            await interaction.response.send_message('❌ You don’t have permission to view staff commands.', ephemeral=True)
+            await interaction.response.send_message("❌ You don't have permission to view staff commands.", ephemeral=True)
             return
         staff_idx = next((i for i, e in enumerate(self.embeds) if e.title.startswith('🛠️')), None)
         if staff_idx is None:
@@ -8971,7 +9001,7 @@ async def onetime(ctx, channel: discord.TextChannel=None):
         await ctx.send(embed=embed)
         try:
             await target_channel.send('🔔 **This is now a one-time message channel!**\nNon-staff members can send only one message here. Staff can restore permissions with `.restore <user>`.')
-        except:
+        except Exception:
             pass
     else:
         await ctx.send(f'⚠️ {target_channel.mention} is already a one-time message channel.')
