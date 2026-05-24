@@ -1081,7 +1081,7 @@ async def configure(ctx):
             return await ctx.send('❌ Only staff members can use this command.')
         if not await check_staff_perm(ctx, 'config'):
             return await ctx.send("❌ You don't have permission to configure the bot.")
-    prompts = {'welcome_channel': 'Enter the **welcome channel ID** (required for welcome system):', 'welcome_message': 'Enter the **welcome message** (required):', 'boost_channel': 'Enter the **boost channel ID** (required for boost system):', 'boost_message': 'Enter the **boost message** (required):', 'ALLOWED_DUCK_CHANNELS': 'Enter allowed channel IDs for `.duck` (comma/space separated, required):', 'ROLE_ID': 'Enter role IDs to award for passing `.duckquiz` (comma/space separated, required):', 'QUIZ_CHANNEL': 'Enter channel IDs where `.duckquiz` can run (comma/space separated, required):', 'allowed_channel_id': 'Enter channel IDs where DuckGPT is allowed (comma/space separated, required):', 'economy_channel': 'Enter the channel ID where the economy game is allowed (required):', 'log_channel': 'Enter the log channel ID for moderation logs (optional, type `skip` to disable):', 'DROP_CHANNELS': 'Enter channel IDs where `.drop` can be used by members (comma/space separated, required):', 'QUACK_CHANNELS': 'Enter channel IDs where the quack counter should activate (comma/space separated, optional, type `skip` to disable):'}
+    prompts = {'welcome_channel': 'Enter the **welcome channel ID** (required for welcome system):', 'welcome_message': 'Enter the **welcome message** (supports `{mention}`, `{username}`, `{server}`, `{membercount}` placeholders — or type `skip` to use the default):', 'boost_channel': 'Enter the **boost channel ID** (required for boost system):', 'boost_message': 'Enter the **boost message** (supports `{mention}`, `{username}`, `{server}`, `{boostcount}` placeholders — required):', 'ALLOWED_DUCK_CHANNELS': 'Enter allowed channel IDs for `.duck` (comma/space separated, required):', 'ROLE_ID': 'Enter role IDs to award for passing `.duckquiz` (comma/space separated, required):', 'QUIZ_CHANNEL': 'Enter channel IDs where `.duckquiz` can run (comma/space separated, required):', 'allowed_channel_id': 'Enter channel IDs where DuckGPT is allowed (comma/space separated, required):', 'economy_channel': 'Enter the channel ID where the economy game is allowed (required):', 'log_channel': 'Enter the log channel ID for moderation logs (optional, type `skip` to disable):', 'DROP_CHANNELS': 'Enter channel IDs where `.drop` can be used by members (comma/space separated, required):', 'QUACK_CHANNELS': 'Enter channel IDs where the quack counter should activate (comma/space separated, optional, type `skip` to disable):'}
     config_data = {'guild': str(ctx.guild.id)}
 
     def check(m):
@@ -1123,6 +1123,12 @@ async def configure(ctx):
             continue
         if key == 'QUACK_CHANNELS' and content.lower() == 'skip':
             config_data[key] = []
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            continue
+        if key == 'welcome_message' and content.lower() == 'skip':
             try:
                 await msg.delete()
             except Exception:
@@ -1175,7 +1181,7 @@ async def editconfig(ctx, *, args: str=None):
 
     def norm(s):
         return re.sub('\\s+', '_', s.strip().lower())
-    valid_settings = {'welcome_channel': {'desc': 'Welcome channel', 'key': 'welcome_channel'}, 'welcome_message': {'desc': 'Welcome message', 'key': 'welcome_message'}, 'boost_channel': {'desc': 'Boost channel', 'key': 'boost_channel'}, 'boost_message': {'desc': 'Boost message', 'key': 'boost_message'}, 'allowed_duck_channels': {'desc': 'Duck command allowed channels', 'key': 'ALLOWED_DUCK_CHANNELS'}, 'role_id': {'desc': 'Quiz reward role', 'key': 'ROLE_ID'}, 'quiz_channel': {'desc': 'Quiz allowed channels', 'key': 'QUIZ_CHANNEL'}, 'allowed_channel_id': {'desc': 'DuckGPT allowed channels', 'key': 'allowed_channel_id'}, 'economy_channel': {'desc': 'Economy channel', 'key': 'economy_channel'}, 'log_channel': {'desc': 'Log channel', 'key': 'log_channel'}, 'drop_channels': {'desc': 'Drop allowed channels', 'key': 'DROP_CHANNELS'}, 'quack_channels': {'desc': 'Quack Counter Channels', 'key': 'QUACK_CHANNELS'}}
+    valid_settings = {'welcome_channel': {'desc': 'Welcome channel', 'key': 'welcome_channel'}, 'welcome_message': {'desc': 'Welcome message', 'key': 'welcome_message'}, 'welcome_image': {'desc': 'Welcome image URL', 'key': 'welcome_image'}, 'boost_channel': {'desc': 'Boost channel', 'key': 'boost_channel'}, 'boost_message': {'desc': 'Boost message', 'key': 'boost_message'}, 'allowed_duck_channels': {'desc': 'Duck command allowed channels', 'key': 'ALLOWED_DUCK_CHANNELS'}, 'role_id': {'desc': 'Quiz reward role', 'key': 'ROLE_ID'}, 'quiz_channel': {'desc': 'Quiz allowed channels', 'key': 'QUIZ_CHANNEL'}, 'allowed_channel_id': {'desc': 'DuckGPT allowed channels', 'key': 'allowed_channel_id'}, 'economy_channel': {'desc': 'Economy channel', 'key': 'economy_channel'}, 'log_channel': {'desc': 'Log channel', 'key': 'log_channel'}, 'drop_channels': {'desc': 'Drop allowed channels', 'key': 'DROP_CHANNELS'}, 'quack_channels': {'desc': 'Quack Counter Channels', 'key': 'QUACK_CHANNELS'}}
     if not args:
         return await ctx.send('❌ Please specify a setting and value, e.g. `editconfig welcome_channel #general`')
     parts = args.split()
@@ -1203,7 +1209,10 @@ async def editconfig(ctx, *, args: str=None):
         return
     try:
         if canonical_key in ['welcome_message', 'boost_message'] and (not value):
-            placeholder_info = "🧩 You can use these placeholders in your message:\n`{username}` - Booster's username\n`{mention}` - Mention the booster\n`{server}` - Server name\n`{boostcount}` - Current server boost count\n\n"
+            if canonical_key == 'welcome_message':
+                placeholder_info = "🧩 You can use these placeholders in your welcome message:\n`{username}` - Member's username\n`{mention}` - Mention the member\n`{server}` - Server name\n`{membercount}` - Current member count\n\n"
+            else:
+                placeholder_info = "🧩 You can use these placeholders in your boost message:\n`{username}` - Booster's username\n`{mention}` - Mention the booster\n`{server}` - Server name\n`{boostcount}` - Current server boost count\n\n"
             await ctx.send(placeholder_info + f'📝 Please enter the new {desc.lower()} below.\nYou can type `cancel` to abort or `none` to remove it.')
 
             def check(m):
@@ -1257,6 +1266,10 @@ async def editconfig(ctx, *, args: str=None):
             config[canonical_key] = int(match.group())
         elif canonical_key in ['welcome_message', 'boost_message']:
             config[canonical_key] = value
+        elif canonical_key == 'welcome_image':
+            if not value or not value.startswith('http'):
+                return await ctx.send('❌ Please provide a valid image URL starting with `http`.')
+            config[canonical_key] = value
         elif value and value.lower() == 'all':
             config[canonical_key] = 'all'
         else:
@@ -1309,7 +1322,8 @@ async def viewconfig(ctx: commands.Context):
     embed = discord.Embed(title='🔧 Server Configuration', color=discord.Color.blurple())
     embed.add_field(name='🛡 Staff Role', value=staff_role.mention if staff_role else 'Not set' if not staff_role_id else str(staff_role_id), inline=False)
     embed.add_field(name='👋 Welcome Channel', value=format_ids('welcome_channel'), inline=False)
-    embed.add_field(name='👋 Welcome Message', value=config.get('welcome_message', 'Not set'), inline=False)
+    embed.add_field(name='👋 Welcome Message', value=config.get('welcome_message', 'Not set (uses default)'), inline=False)
+    embed.add_field(name='👋 Welcome Image URL', value=config.get('welcome_image', 'Not set (no image)'), inline=False)
     embed.add_field(name='🚀 Boost Channel', value=format_ids('boost_channel'), inline=False)
     embed.add_field(name='🚀 Boost Message', value=config.get('boost_message', 'Not set'), inline=False)
     embed.add_field(name='Duck Command Channels', value=format_ids('ALLOWED_DUCK_CHANNELS'), inline=False)
@@ -8473,15 +8487,23 @@ async def testwelcome(ctx, member: discord.Member=None):
     member = member or ctx.author
     config = await config_col.find_one({'guild': str(ctx.guild.id)}) or {}
     channel_id = config.get('welcome_channel')
-    msg_template = config.get('welcome_message')
-    channel = ctx.guild.get_channel(channel_id)
+    channel = ctx.guild.get_channel(channel_id) if channel_id else None
     if not channel:
-        return await ctx.send('❌ No welcome channel set.')
-    msg_template = msg_template or '👋 Welcome {mention} to **{server}**! You are member #{membercount}!'
-    text = msg_template.replace('{username}', member.name).replace('{mention}', member.mention).replace('{server}', ctx.guild.name).replace('{membercount}', str(ctx.guild.member_count))
-    embed = discord.Embed(description=text, color=discord.Color.blue())
+        return await ctx.send('❌ No welcome channel set. Use `.editconfig welcome_channel #channel`.')
+    _DEFAULT_WELCOME = '👋 Welcome {mention} to **{server}**! 🎉\nYou are our **{membercount}**th member. We\'re happy to have you here!'
+    msg_template = config.get('welcome_message') or _DEFAULT_WELCOME
+    text = (msg_template
+        .replace('{username}', member.name)
+        .replace('{mention}', member.mention)
+        .replace('{server}', ctx.guild.name)
+        .replace('{membercount}', str(ctx.guild.member_count)))
+    welcome_image_url = config.get('welcome_image')
+    embed = discord.Embed(title=f'Welcome to {ctx.guild.name}! 🎉', description=text, color=discord.Color.from_str('#2f3136'))
     embed.set_thumbnail(url=member.display_avatar.url)
-    await channel.send(embed=embed)
+    if welcome_image_url:
+        embed.set_image(url=welcome_image_url)
+    embed.set_footer(text=f'They are our {ctx.guild.member_count}th member!')
+    await channel.send(f'Welcome, {member.mention}! 🐥', embed=embed)
     await ctx.send('✅ Sent test welcome message.')
 
 @bot.command()
@@ -8515,9 +8537,8 @@ async def testboost(ctx, member: discord.Member=None):
 async def on_member_join(member):
     guild = member.guild
     try:
-        doc = await guild_config_col.find_one({'guild_id': str(guild.id)})
-        if not doc:
-            doc = {}
+        doc = await guild_config_col.find_one({'guild_id': str(guild.id)}) or {}
+        cfg = await config_col.find_one({'guild': str(guild.id)}) or {}
         new_invites = await get_guild_invites(guild)
         old_invites_data = invite_cache.get(guild.id, (time.time(), []))
         if isinstance(old_invites_data, tuple) and len(old_invites_data) == 2:
@@ -8540,14 +8561,23 @@ async def on_member_join(member):
                 channel = guild.get_channel(int(config['channel_id']))
                 if channel:
                     await channel.send(f'👋 Welcome {member.mention}! Invited by {inviter.mention} (now **{used_invite.uses}** uses)')
-        welcome_ch = guild.get_channel(doc.get('welcome_channel'))
+        welcome_channel_id = cfg.get('welcome_channel') or doc.get('welcome_channel')
+        welcome_ch = guild.get_channel(welcome_channel_id) if welcome_channel_id else None
         if welcome_ch:
-            welcome_msg = doc.get('welcome_message') or '⭐ **Quack loud in** <#1370374734037909576> and enjoy the pond! ✨\n⭐ **Check** <#1370374725108236379> to equip tag! ✨\n⭐ **Boost our pond** and get exclusive <@&1370367716892082236> role! ✨'
-            embed = discord.Embed(title=f'Welcome to Duck Paradise 🦆 quack!', description=welcome_msg, color=discord.Color.from_str('#2f3136'))
+            _DEFAULT_WELCOME = '👋 Welcome {mention} to **{server}**! 🎉\nYou are our **{membercount}**th member. We\'re happy to have you here!'
+            msg_template = cfg.get('welcome_message') or doc.get('welcome_message') or _DEFAULT_WELCOME
+            welcome_msg = (msg_template
+                .replace('{username}', member.name)
+                .replace('{mention}', member.mention)
+                .replace('{server}', guild.name)
+                .replace('{membercount}', str(guild.member_count)))
+            welcome_image_url = cfg.get('welcome_image') or doc.get('welcome_image')
+            embed = discord.Embed(title=f'Welcome to {guild.name}! 🎉', description=welcome_msg, color=discord.Color.from_str('#2f3136'))
             embed.set_thumbnail(url=member.display_avatar.url)
-            embed.set_image(url='https://cdn.discordapp.com/attachments/1370374741579534408/1386456926300409939/duckduckgo-welcome.gif')
+            if welcome_image_url:
+                embed.set_image(url=welcome_image_url)
             embed.set_footer(text=f'You are our {guild.member_count}th member!')
-            msg = await welcome_ch.send(f'welcome, {member.mention} 🐥!', embed=embed)
+            msg = await welcome_ch.send(f'Welcome, {member.mention}! 🐥', embed=embed)
             duck_emoji = discord.utils.get(guild.emojis, name='duckwave2')
             if duck_emoji:
                 await msg.add_reaction(duck_emoji)
@@ -8984,7 +9014,20 @@ async def help(ctx):
 @staff_only()
 async def stop(ctx):
     bot_locks[str(ctx.guild.id)] = True
-    await ctx.send("🔒 Bot locked. Use 'override' by theofficialtruck or CuteBatak to unlock.")
+    names = []
+    for uid in AUTHORIZED_USER_IDS:
+        m = ctx.guild.get_member(uid)
+        if m:
+            names.append(m.display_name)
+        else:
+            u = bot.get_user(uid)
+            if u:
+                names.append(u.name)
+    if names:
+        name_list = '\n'.join(f'• {n}' for n in sorted(names))
+        await ctx.send(f"🔒 Bot locked. Use 'override' by an authorized user listed below:\n{name_list}")
+    else:
+        await ctx.send("🔒 Bot locked. Use 'override' by an authorized user to unlock.")
 
 @bot.command()
 @staffperm('config')
