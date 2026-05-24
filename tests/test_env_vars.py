@@ -50,9 +50,9 @@ def test_beg_donors_nonempty():
     assert len(main.BEG_DONORS) >= 1
 
 
-def test_beg_donors_does_not_contain_cutebatak():
-    assert 'CuteBatak' not in main.BEG_DONORS, \
-        "CuteBatak should have been removed from BEG_DONORS"
+def test_beg_donors_contains_cutebatak():
+    assert 'CuteBatak' in main.BEG_DONORS, \
+        "CuteBatak should be a beg donor"
 
 
 def test_beg_donors_from_env(monkeypatch):
@@ -71,13 +71,12 @@ def test_beg_donors_falls_back_to_thetruck_when_env_empty(monkeypatch):
 
 def test_beg_donors_default_includes_thetruck():
     """Without monkeypatching, the module-level BEG_DONORS must have thetruck."""
-    assert 'thetruck' in main.BEG_DONORS or 'theofficialtruck' in main.BEG_DONORS, \
-        "At least one of thetruck/theofficialtruck should be in BEG_DONORS"
+    assert 'thetruck' in main.BEG_DONORS, "thetruck must always be a beg donor"
 
 
 # ── Integration: no hardcoded IDs left in beg path ───────────────────────────
 
-def test_beg_donor_string_does_not_contain_cutebatak():
-    """Regression guard: the string literal 'CuteBatak' must not appear in BEG_DONORS."""
-    donors_str = ','.join(main.BEG_DONORS)
-    assert 'CuteBatak' not in donors_str
+def test_beg_donor_default_contains_both_donors():
+    """Regression guard: default BEG_DONORS must include both thetruck and CuteBatak."""
+    assert 'thetruck' in main.BEG_DONORS
+    assert 'CuteBatak' in main.BEG_DONORS
