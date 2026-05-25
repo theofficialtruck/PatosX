@@ -1,7 +1,7 @@
 """Tests for the drop command: no XP, always-public embed."""
 import inspect
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock
 import main
 
 
