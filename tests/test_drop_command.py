@@ -1,4 +1,5 @@
 """Tests for the drop command: no XP, always-public embed."""
+
 import inspect
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -7,25 +8,27 @@ import main
 
 # ── Decorator checks (static) ─────────────────────────────────────────────────
 
+
 def test_drop_command_has_no_xp_earn_decorator():
     """@xp_earn must not appear in the drop command source."""
     src = inspect.getsource(main.drop.callback)
-    assert 'xp_earn' not in src, "drop command must not use @xp_earn"
+    assert "xp_earn" not in src, "drop command must not use @xp_earn"
 
 
 def test_drop_command_uses_channel_send():
     """The drop embed must be sent via ctx.channel.send, not ctx.send."""
     src = inspect.getsource(main.drop.callback)
-    assert 'ctx.channel.send' in src, "drop embed must use ctx.channel.send for public visibility"
+    assert "ctx.channel.send" in src, "drop embed must use ctx.channel.send for public visibility"
 
 
 def test_drop_xp_earn_not_in_decorators():
     """Confirm @xp_earn is not in the command's decorator chain."""
-    for wrapper in getattr(main.drop, '__wrapped__', []):
-        assert 'xp_earn' not in str(wrapper)
+    for wrapper in getattr(main.drop, "__wrapped__", []):
+        assert "xp_earn" not in str(wrapper)
 
 
 # ── Prefix path: drop embed is sent publicly ──────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_drop_prefix_sends_embed_to_channel(monkeypatch):
@@ -33,18 +36,18 @@ async def test_drop_prefix_sends_embed_to_channel(monkeypatch):
     ctx.guild = MagicMock()
     ctx.guild.id = 1111
     ctx.author.id = 2222
-    ctx.author.__str__ = lambda self: 'thetruck'
-    ctx.author.display_avatar.url = 'https://example.com/avatar.png'
+    ctx.author.__str__ = lambda self: "thetruck"
+    ctx.author.display_avatar.url = "https://example.com/avatar.png"
     ctx.channel.send = AsyncMock(return_value=MagicMock(id=9999))
     ctx.send = AsyncMock()
     ctx.interaction = None  # prefix command
     ctx.message.delete = AsyncMock()
 
-    monkeypatch.setattr(main, 'staffperm', lambda perm: MagicMock(predicate=AsyncMock(return_value=True)))
-    monkeypatch.setattr(main, 'drops_col', MagicMock(find_one=AsyncMock(return_value=None)))
-    monkeypatch.setattr(main, 'drop_instances_col', MagicMock(update_one=AsyncMock()))
+    monkeypatch.setattr(main, "staffperm", lambda perm: MagicMock(predicate=AsyncMock(return_value=True)))
+    monkeypatch.setattr(main, "drops_col", MagicMock(find_one=AsyncMock(return_value=None)))
+    monkeypatch.setattr(main, "drop_instances_col", MagicMock(update_one=AsyncMock()))
 
-    await main.drop.callback(ctx, '100')
+    await main.drop.callback(ctx, "100")
 
     ctx.channel.send.assert_awaited_once()
     ctx.send.assert_not_awaited()  # no fallback to ctx.send for main embed
@@ -56,8 +59,8 @@ async def test_drop_slash_sends_embed_to_channel_not_interaction(monkeypatch):
     ctx.guild = MagicMock()
     ctx.guild.id = 3333
     ctx.author.id = 4444
-    ctx.author.__str__ = lambda self: 'thetruck'
-    ctx.author.display_avatar.url = 'https://example.com/avatar.png'
+    ctx.author.__str__ = lambda self: "thetruck"
+    ctx.author.display_avatar.url = "https://example.com/avatar.png"
     ctx.channel.send = AsyncMock(return_value=MagicMock(id=8888))
     ctx.send = AsyncMock()
     ctx.message.delete = AsyncMock()
@@ -67,18 +70,18 @@ async def test_drop_slash_sends_embed_to_channel_not_interaction(monkeypatch):
     ctx.interaction.response.is_done.return_value = False
     ctx.interaction.response.send_message = AsyncMock()
 
-    monkeypatch.setattr(main, 'staffperm', lambda perm: MagicMock(predicate=AsyncMock(return_value=True)))
-    monkeypatch.setattr(main, 'drops_col', MagicMock(find_one=AsyncMock(return_value=None)))
-    monkeypatch.setattr(main, 'drop_instances_col', MagicMock(update_one=AsyncMock()))
+    monkeypatch.setattr(main, "staffperm", lambda perm: MagicMock(predicate=AsyncMock(return_value=True)))
+    monkeypatch.setattr(main, "drops_col", MagicMock(find_one=AsyncMock(return_value=None)))
+    monkeypatch.setattr(main, "drop_instances_col", MagicMock(update_one=AsyncMock()))
 
-    await main.drop.callback(ctx, '100')
+    await main.drop.callback(ctx, "100")
 
     # Embed must go to channel (public)
     ctx.channel.send.assert_awaited_once()
     # Slash interaction acknowledged ephemerally
     ctx.interaction.response.send_message.assert_awaited_once()
     kwargs = ctx.interaction.response.send_message.call_args[1]
-    assert kwargs.get('ephemeral') is True
+    assert kwargs.get("ephemeral") is True
 
 
 @pytest.mark.asyncio
@@ -88,8 +91,8 @@ async def test_drop_slash_acknowledgment_is_ephemeral(monkeypatch):
     ctx.guild = MagicMock()
     ctx.guild.id = 5555
     ctx.author.id = 6666
-    ctx.author.__str__ = lambda self: 'thetruck'
-    ctx.author.display_avatar.url = 'https://example.com/avatar.png'
+    ctx.author.__str__ = lambda self: "thetruck"
+    ctx.author.display_avatar.url = "https://example.com/avatar.png"
     ctx.channel.send = AsyncMock(return_value=MagicMock(id=7777))
     ctx.send = AsyncMock()
     ctx.message.delete = AsyncMock()
@@ -98,14 +101,14 @@ async def test_drop_slash_acknowledgment_is_ephemeral(monkeypatch):
     ctx.interaction.response.is_done.return_value = False
     ctx.interaction.response.send_message = AsyncMock()
 
-    monkeypatch.setattr(main, 'staffperm', lambda perm: MagicMock(predicate=AsyncMock(return_value=True)))
-    monkeypatch.setattr(main, 'drops_col', MagicMock(find_one=AsyncMock(return_value=None)))
-    monkeypatch.setattr(main, 'drop_instances_col', MagicMock(update_one=AsyncMock()))
+    monkeypatch.setattr(main, "staffperm", lambda perm: MagicMock(predicate=AsyncMock(return_value=True)))
+    monkeypatch.setattr(main, "drops_col", MagicMock(find_one=AsyncMock(return_value=None)))
+    monkeypatch.setattr(main, "drop_instances_col", MagicMock(update_one=AsyncMock()))
 
-    await main.drop.callback(ctx, '500')
+    await main.drop.callback(ctx, "500")
 
     ack_kwargs = ctx.interaction.response.send_message.call_args[1]
-    assert ack_kwargs.get('ephemeral') is True, "Slash ack must be ephemeral"
+    assert ack_kwargs.get("ephemeral") is True, "Slash ack must be ephemeral"
 
 
 @pytest.mark.asyncio
@@ -115,18 +118,18 @@ async def test_drop_no_xp_message_sent(monkeypatch):
     ctx.guild = MagicMock()
     ctx.guild.id = 1234
     ctx.author.id = 5678
-    ctx.author.__str__ = lambda self: 'thetruck'
-    ctx.author.display_avatar.url = 'https://example.com/avatar.png'
+    ctx.author.__str__ = lambda self: "thetruck"
+    ctx.author.display_avatar.url = "https://example.com/avatar.png"
     ctx.channel.send = AsyncMock(return_value=MagicMock(id=1000))
     ctx.send = AsyncMock()
     ctx.message.delete = AsyncMock()
     ctx.interaction = None
 
-    monkeypatch.setattr(main, 'staffperm', lambda perm: MagicMock(predicate=AsyncMock(return_value=True)))
-    monkeypatch.setattr(main, 'drops_col', MagicMock(find_one=AsyncMock(return_value=None)))
-    monkeypatch.setattr(main, 'drop_instances_col', MagicMock(update_one=AsyncMock()))
+    monkeypatch.setattr(main, "staffperm", lambda perm: MagicMock(predicate=AsyncMock(return_value=True)))
+    monkeypatch.setattr(main, "drops_col", MagicMock(find_one=AsyncMock(return_value=None)))
+    monkeypatch.setattr(main, "drop_instances_col", MagicMock(update_one=AsyncMock()))
 
-    await main.drop.callback(ctx, '200')
+    await main.drop.callback(ctx, "200")
 
     # ctx.send should not have been called at all (no XP message, no error)
     ctx.send.assert_not_awaited()
@@ -134,30 +137,31 @@ async def test_drop_no_xp_message_sent(monkeypatch):
 
 # ── Member drop: balance deducted and refunded on failure ─────────────────────
 
+
 @pytest.mark.asyncio
 async def test_drop_member_refunds_on_channel_send_failure(monkeypatch):
     ctx = MagicMock()
     ctx.guild = MagicMock()
     ctx.guild.id = 111
     ctx.author.id = 222
-    ctx.author.__str__ = lambda self: 'user'
-    ctx.author.display_avatar.url = 'https://example.com/avatar.png'
-    ctx.channel.send = AsyncMock(side_effect=Exception('network error'))
+    ctx.author.__str__ = lambda self: "user"
+    ctx.author.display_avatar.url = "https://example.com/avatar.png"
+    ctx.channel.send = AsyncMock(side_effect=Exception("network error"))
     ctx.send = AsyncMock()
     ctx.interaction = None
     ctx.message.delete = AsyncMock()
 
-    monkeypatch.setattr(main, 'staffperm', lambda perm: MagicMock(predicate=AsyncMock(side_effect=Exception)))
-    monkeypatch.setattr(main, 'check_channel', AsyncMock(return_value=True))
+    monkeypatch.setattr(main, "staffperm", lambda perm: MagicMock(predicate=AsyncMock(side_effect=Exception)))
+    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
     mock_economy = MagicMock()
-    mock_economy.find_one = AsyncMock(return_value={'_id': '111-222', 'wallet': 500, 'bank': 0})
+    mock_economy.find_one = AsyncMock(return_value={"_id": "111-222", "wallet": 500, "bank": 0})
     mock_economy.update_one = AsyncMock()
-    monkeypatch.setattr(main, 'economy_col', mock_economy)
+    monkeypatch.setattr(main, "economy_col", mock_economy)
 
-    await main.drop.callback(ctx, '300')
+    await main.drop.callback(ctx, "300")
 
     # Should have attempted a refund
     assert mock_economy.update_one.await_count >= 2  # deduct + refund
     # Error message sent to user
     ctx.send.assert_awaited()
-    assert '❌' in ctx.send.call_args[0][0]
+    assert "❌" in ctx.send.call_args[0][0]
