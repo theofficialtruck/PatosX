@@ -1,3 +1,4 @@
+# ruff: noqa: E402 -- sys.modules["audioop"] patch must precede all discord imports (audioop removed in Py 3.13)
 import sys
 import types
 

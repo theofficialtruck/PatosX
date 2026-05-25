@@ -34,6 +34,9 @@ jobs:
           VALIDATE_BIOME_LINT: "false"
           # Checkov scans IaC files; our CI is a simple workflow, not IaC.
           VALIDATE_CHECKOV: "false"
+          # JSCPD: super-linter passes --threshold 0 internally, ignoring .jscpd.json;
+          # test files naturally have repetitive mock setup so duplication is expected.
+          VALIDATE_JSCPD: "false"
           # zizmor requires SHA-pinned action refs and explicit permissions blocks;
           # those add maintenance overhead for a hobbyist bot that changes frequently.
           VALIDATE_GITHUB_ACTIONS_ZIZMOR: "false"
