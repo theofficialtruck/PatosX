@@ -43,7 +43,28 @@ jobs:
           # Prettier YAML/Markdown formatting is not enforced — ruff handles Python
           # style and the project does not use a Prettier config for prose files.
           VALIDATE_YAML_PRETTIER: "false"
+          VALIDATE_YAML: "false"
           VALIDATE_MARKDOWN_PRETTIER: "false"
+          # Disable spell checker (cspell)
+          VALIDATE_SPELL: "false"
+          # Disable Markdown structure linting (not just Prettier)
+          VALIDATE_MARKDOWN: "false"
+          VALIDATE_MARKDOWN_LINK_CHECK: "false"
+          # Disable TOML linting (you don’t use pyproject.toml for Ruff)
+          VALIDATE_TOML: "false"
+          # Disable XML linting (Super‑Linter runs this even if you have no XML files)
+          VALIDATE_XML: "false"
+          # Disable Dockerfile linting unless you containerize your bot
+          VALIDATE_DOCKERFILE_HADOLINT: "false"
+          # Disable Ansible, Terraform, CloudFormation, ARM (IaC tools)
+          VALIDATE_TERRAFORM: "false"
+          VALIDATE_ANSIBLE: "false"
+          VALIDATE_ARM: "false"
+          VALIDATE_CLOUDFORMATION: "false"
+          # Don't need to validate shell scripts
+          VALIDATE_EDITORCONFIG: "false"
+          VALIDATE_BASH: "false"
+
 
   # Job 2: Secret Scanning
   secret-scan:
