@@ -60,6 +60,7 @@ if [[ ! -d venv ]]; then
   "$PYTHON_BIN" -m venv venv
 fi
 
+# shellcheck source=/dev/null
 source venv/bin/activate
 
 python -m pip install --upgrade pip

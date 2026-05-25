@@ -4,8 +4,8 @@ name: CI pipeline
 
 on:
   pull_request:
-    branches: [ "main" ]
-    
+    branches: ["main"]
+
 jobs:
   # Job 1: Linting code
   run-lint:
@@ -22,6 +22,28 @@ jobs:
           VALIDATE_ALL_CODEBASE: true
           DEFAULT_BRANCH: "main"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Ruff is the project's sole Python linter/formatter — disable the
+          # conflicting tools so they don't produce spurious failures.
+          VALIDATE_PYTHON_BLACK: "false"
+          VALIDATE_PYTHON_FLAKE8: "false"
+          VALIDATE_PYTHON_ISORT: "false"
+          VALIDATE_PYTHON_MYPY: "false"
+          VALIDATE_PYTHON_PYLINT: "false"
+          # Biome is a JS/TS tool — not used in this pure-Python project.
+          VALIDATE_BIOME_FORMAT: "false"
+          VALIDATE_BIOME_LINT: "false"
+          # Checkov scans IaC files; our CI is a simple workflow, not IaC.
+          VALIDATE_CHECKOV: "false"
+          # JSCPD: super-linter passes --threshold 0 internally, ignoring .jscpd.json;
+          # test files naturally have repetitive mock setup so duplication is expected.
+          VALIDATE_JSCPD: "false"
+          # zizmor requires SHA-pinned action refs and explicit permissions blocks;
+          # those add maintenance overhead for a hobbyist bot that changes frequently.
+          VALIDATE_GITHUB_ACTIONS_ZIZMOR: "false"
+          # Prettier YAML/Markdown formatting is not enforced — ruff handles Python
+          # style and the project does not use a Prettier config for prose files.
+          VALIDATE_YAML_PRETTIER: "false"
+          VALIDATE_MARKDOWN_PRETTIER: "false"
 
   # Job 2: Secret Scanning
   secret-scan:
@@ -30,7 +52,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
+          fetch-depth: 0
 
       - name: TruffleHog OSS
         uses: trufflesecurity/trufflehog@v3.95.3
@@ -49,8 +71,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-          cache: 'pip'
+          python-version: "3.12"
+          cache: "pip"
 
       - name: Install Dependencies
         run: |
@@ -59,10 +81,15 @@ jobs:
 
       - name: Run Bandit Security Scan
         run: |
-          bandit -r . -v
+          # Production code — skip B311 (random is fine for game logic, not crypto)
+          # and B608 (embed description strings are not SQL queries).
+          bandit -r . --exclude ./tests,./.venv,./env -s B311,B608 -v
+          # Test code — additionally skip B101 (assert is correct in pytest),
+          # B404/B603 (subprocess is used intentionally to run quality tools).
+          bandit -r ./tests -s B101,B311,B608,B404,B603 -v
 
       - name: Run Pytest Unit Tests
         env:
-            PYTHONPATH: .
+          PYTHONPATH: .
         run: |
           pytest
