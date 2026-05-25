@@ -7432,7 +7432,6 @@ async def removemoney(ctx, amount: str, user: discord.Member):
 
 @bot.hybrid_command(name='drop', description='Create a money drop (staff spawns money, members pay).')
 @app_commands.describe(amount='Amount to drop', message='Optional message to include')
-@xp_earn(8, 16)
 async def drop(ctx, amount: str, *, message: str=None):
     if not ctx.guild:
         return await ctx.send('❌ This command can only be used in a server.')
@@ -7489,10 +7488,15 @@ async def drop(ctx, amount: str, *, message: str=None):
     view = DropClaimView()
     role_ping = f'<@&{role_id}>' if is_staff and role_id else ''
     try:
-        msg = await ctx.send(content=role_ping, embed=embed, view=view)
+        msg = await ctx.channel.send(content=role_ping or None, embed=embed, view=view)
+        if not is_prefix(ctx) and ctx.interaction and not ctx.interaction.response.is_done():
+            try:
+                await ctx.interaction.response.send_message('✅ Drop created!', ephemeral=True, delete_after=4)
+            except Exception:
+                pass
     except Exception:
         if not is_staff:
-            await economy_col.update_one({'_id': user_id}, {'$inc': {'balance': coins}}, upsert=True)
+            await economy_col.update_one({'_id': f'{guild_id}-{user_id}'}, {'$set': {'wallet': wallet, 'bank': bank}}, upsert=True)
         return await ctx.send('❌ Failed to send the drop message. You have been refunded.')
     try:
         await drop_instances_col.update_one({'message_id': str(msg.id)}, {'$set': {'message_id': str(msg.id), 'channel_id': str(ctx.channel.id), 'guild_id': str(guild_id), 'amount': int(coins), 'author_id': str(user_id), 'claimed': False, 'created_at': datetime.now(timezone.utc).isoformat(), 'staff_drop': is_staff}}, upsert=True)
