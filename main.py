@@ -1711,17 +1711,27 @@ async def schedule_unmute(guild, member, remaining):
         print(f'[schedule_unmute error] {e}')
 
 async def check_and_use_food_item(user_id, guild_id, item_id):
+    normalized_id = item_id.replace('_', ' ').strip().lower()
     user_data = await get_user(None, guild_id, user_id)
     inventory = user_data.get('inventory', [])
     item_found = False
     for i, item in enumerate(inventory):
-        if isinstance(item, str) and item == item_id:
+        if normalize_item_key(item) == normalized_id:
             inventory.pop(i)
             item_found = True
             break
     if item_found:
         await economy_col.update_one({'_id': f'{guild_id}-{user_id}'}, {'$set': {'inventory': inventory}}, upsert=True)
         return True
+    return False
+
+def pop_food_item(inventory: list, item_id: str) -> bool:
+    """Remove one instance of item_id from inventory in-place. Returns True if found."""
+    normalized_id = item_id.replace('_', ' ').strip().lower()
+    for i, item in enumerate(inventory):
+        if normalize_item_key(item) == normalized_id:
+            inventory.pop(i)
+            return True
     return False
 
 async def get_work_cooldown_reduction(user_id, guild_id):
@@ -3620,8 +3630,9 @@ async def beg(ctx):
             except Exception as e:
                 print(f'[BEG] Failed to parse timestamp: {e}')
         amount = random.randint(50, 200)
-        earnings_multiplier = await get_earnings_multiplier(ctx.author.id, ctx.guild.id)
         inventory = data.get('inventory', [])
+        has_cookie = pop_food_item(inventory, 'lucky_cookie')
+        earnings_multiplier = 2.0 if has_cookie else 1.0
         duck_used = False
         for i, item in enumerate(inventory):
             if isinstance(item, dict) and item.get('_id') == 'pet_duck':
@@ -3631,13 +3642,13 @@ async def beg(ctx):
                 duck_used = True
                 break
         amount = int(amount * earnings_multiplier)
-        if duck_used:
+        if duck_used or has_cookie:
             await economy_col.update_one({'_id': f'{ctx.guild.id}-{ctx.author.id}'}, {'$set': {'inventory': inventory}}, upsert=True)
         donor = random.choice(['thetruck', 'CuteBatak'])
         await add_balance(ctx.author.id, ctx.guild.id, amount)
         await economy_col.update_one({'_id': f'{ctx.guild.id}-{ctx.author.id}'}, {'$set': {'last_beg': now.isoformat(timespec='seconds')}})
         msg = f'🙇 {donor} was kind enough to donate **{amount} coins** to you!'
-        if earnings_multiplier > 1.0:
+        if has_cookie:
             msg += '\n🍪 **Lucky Cookie consumed!** Earnings doubled!'
         await ctx.send(msg)
     except Exception as e:
@@ -4657,14 +4668,14 @@ async def work(ctx):
             return await ctx.send('⚠️ You have an invalid job. Please use `?choosejob` to pick a valid one.')
         cooldown_key = f'work_cooldown_{ctx.guild.id}-{ctx.author.id}'
         cooldown_data = await economy_col.find_one({'_id': cooldown_key})
+        energy_drink_in_inv = any(normalize_item_key(i) == 'energy drink' for i in inventory)
         if cooldown_data:
             last_work = cooldown_data.get('timestamp')
             if last_work:
                 time_since = datetime.now(timezone.utc) - parser.isoparse(last_work)
                 cooldown_duration = 43200
-                cooldown_reduction = await get_work_cooldown_reduction(ctx.author.id, ctx.guild.id)
-                if cooldown_reduction < 1.0:
-                    cooldown_duration = int(cooldown_duration * cooldown_reduction)
+                if energy_drink_in_inv:
+                    cooldown_duration = int(cooldown_duration * 0.5)
                 if time_since.total_seconds() < cooldown_duration:
                     remaining = int(cooldown_duration - time_since.total_seconds())
                     hours, remainder = divmod(remaining, 3600)
@@ -4674,10 +4685,11 @@ async def work(ctx):
                     else:
                         return await ctx.send(f"⏰ You're on cooldown! Try again in {minutes}m {int(remainder % 60)}s.")
         promo_level = data.get('promotion_level', 0)
-        cooldown_reduction = await get_work_cooldown_reduction(ctx.author.id, ctx.guild.id)
-        earnings_multiplier = await get_earnings_multiplier(ctx.author.id, ctx.guild.id)
-        inventory = data.get('inventory', [])
-        inventory_dirty = False
+        has_drink = pop_food_item(inventory, 'energy_drink')
+        cooldown_reduction = 0.5 if has_drink else 1.0
+        has_cookie = pop_food_item(inventory, 'lucky_cookie')
+        earnings_multiplier = 2.0 if has_cookie else 1.0
+        inventory_dirty = has_drink or has_cookie
         tool_break_notice = ''
         if job == 'developer':
             consumed, broke, _ = consume_tool_use(inventory, 'laptop')
@@ -4701,10 +4713,7 @@ async def work(ctx):
             inventory_dirty = True
         if inventory_dirty:
             await economy_col.update_one({'_id': f'{ctx.guild.id}-{ctx.author.id}'}, {'$set': {'inventory': inventory}}, upsert=True)
-        if cooldown_reduction < 1.0:
-            ctx.command.reset_cooldown(ctx)
-            new_cooldown = 43200 * cooldown_reduction
-            ctx.command._buckets._cache[ctx.author].cooldown = new_cooldown
+        if has_drink:
             await ctx.send('⚡ **Energy Drink consumed!** Work cooldown reduced by 50%!')
         base_payouts = {'developer': (300, 600), 'duck': (200, 500)}
         descriptions = {'developer': 'You wrote some killer code 💻', 'duck': 'You danced and quacked around the duck pond 🦆'}
@@ -4717,7 +4726,7 @@ async def work(ctx):
         await add_balance(ctx.author.id, ctx.guild.id, earned)
         await economy_col.update_one({'_id': cooldown_key}, {'$set': {'timestamp': datetime.now(timezone.utc).isoformat()}}, upsert=True)
         msg = f"🧾 {descriptions.get(job, 'You worked hard!')}\n💰 You earned **{earned} coins** as a level `{promo_level}` {job}!"
-        if earnings_multiplier > 1.0:
+        if has_cookie:
             msg += '\n🍪 **Lucky Cookie consumed!** Earnings doubled!'
         if tool_break_notice:
             msg += tool_break_notice
@@ -5086,9 +5095,10 @@ async def crime(ctx, *, choice: str):
                     inventory.pop(i)
                     await ctx.send('💔 One of your Pet Ducks has left after 3 uses.')
                 break
-        coffee_bonus = await get_crime_bonus(ctx.author.id, ctx.guild.id)
-        if coffee_bonus > 0:
-            await ctx.send('☕ **Coffee consumed!** Crime success chance increased by 25%!')
+        coffee_used = pop_food_item(inventory, 'coffee_cup')
+        coffee_bonus = 0.25 if coffee_used else 0.0
+        if coffee_used:
+            await ctx.send('☕ **Coffee Cup consumed!** Crime success chance increased by 25%!')
         adjusted_chance = min(conf['chance'] + luck_buff + coffee_bonus, 1.0)
         success = random.random() < adjusted_chance
         if success:
