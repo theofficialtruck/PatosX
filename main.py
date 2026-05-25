@@ -104,6 +104,10 @@ TENOR_API_KEY = env_vars.get('TENOR_API_KEY', '')
 OPENROUTER_API_KEY = env_vars.get('OPENROUTER_API_KEY', '')
 GEMINI_API_KEYS = os.getenv('GEMINI_API_KEYS', '').split(',')
 GEMINI_API_KEYS = [k.strip() for k in GEMINI_API_KEYS if k.strip()]
+_AUTH_IDS_RAW = os.getenv('AUTHORIZED_USER_IDS', '')
+AUTHORIZED_USER_IDS: set = {int(uid.strip()) for uid in _AUTH_IDS_RAW.split(',') if uid.strip().isdigit()}
+_BEG_DONORS_RAW = os.getenv('BEG_DONORS', 'thetruck,CuteBatak')
+BEG_DONORS: list = [d.strip() for d in _BEG_DONORS_RAW.split(',') if d.strip()] or ['thetruck', 'CuteBatak']
 db = mongo['discord_bot'] if mongo is not None else _DummyDB()
 settings_col = db['guild_settings']
 config_col = db['configuration']
@@ -320,7 +324,7 @@ def staff_only():
     return commands.check(predicate)
 
 async def check_staff_perm(ctx, perm_name: str):
-    if ctx.author == ctx.guild.owner or ctx.author.id == 1059882387590365314:
+    if ctx.author == ctx.guild.owner or ctx.author.id in AUTHORIZED_USER_IDS:
         return True
     if ctx.author.guild_permissions.administrator:
         return True
@@ -2373,9 +2377,8 @@ async def staff(ctx, member: discord.Member):
     staff_role = ctx.guild.get_role(staff_role_id)
     if not staff_role:
         return await ctx.send('⚠️ The saved staff role no longer exists on this server.')
-    authorized_ids = [1059882387590365314, 903123014420406302]
-    if ctx.author != ctx.guild.owner and ctx.author.id not in authorized_ids:
-        return await ctx.send('❌ Only the server owner and thetruck (for debugging purposes) can assign the staff role.')
+    if ctx.author != ctx.guild.owner and ctx.author.id not in AUTHORIZED_USER_IDS:
+        return await ctx.send('❌ Only the server owner and authorized users (for debugging purposes) can assign the staff role.')
     try:
         await member.add_roles(staff_role)
         await ctx.send(f'✅ {member.mention} has been given the {staff_role.mention} role!', allowed_mentions=AllowedMentions.none())
@@ -2398,8 +2401,8 @@ async def unstaff(ctx, member: discord.Member):
     staff_role = ctx.guild.get_role(staff_role_id)
     if not staff_role:
         return await ctx.send('⚠️ The saved staff role no longer exists on this server.')
-    if ctx.author != ctx.guild.owner and ctx.author.id != 1059882387590365314:
-        return await ctx.send('❌ Only the server owner and thetruck (for debugging purposes) can remove the staff role.')
+    if ctx.author != ctx.guild.owner and ctx.author.id not in AUTHORIZED_USER_IDS:
+        return await ctx.send('❌ Only the server owner and authorized users (for debugging purposes) can remove the staff role.')
     try:
         if staff_role in member.roles:
             await member.remove_roles(staff_role)
@@ -3644,7 +3647,7 @@ async def beg(ctx):
         amount = int(amount * earnings_multiplier)
         if duck_used or has_cookie:
             await economy_col.update_one({'_id': f'{ctx.guild.id}-{ctx.author.id}'}, {'$set': {'inventory': inventory}}, upsert=True)
-        donor = random.choice(['thetruck', 'CuteBatak'])
+        donor = random.choice(BEG_DONORS)
         await add_balance(ctx.author.id, ctx.guild.id, amount)
         await economy_col.update_one({'_id': f'{ctx.guild.id}-{ctx.author.id}'}, {'$set': {'last_beg': now.isoformat(timespec='seconds')}})
         msg = f'🙇 {donor} was kind enough to donate **{amount} coins** to you!'
@@ -7356,8 +7359,7 @@ async def roleremove(ctx: commands.Context, role: discord.Role):
 @staffperm('economy')
 @xp_earn(4, 8)
 async def addmoney(ctx, amount: str, user: discord.Member):
-    authorized_ids = [1059882387590365314, 903123014420406302, 447235867485143057, 723609072297050193, ctx.guild.owner_id]
-    if ctx.author.id not in authorized_ids:
+    if ctx.author.id not in (AUTHORIZED_USER_IDS | {ctx.guild.owner_id}):
         return await ctx.send('❌ You are not authorized to use this command.')
     try:
         coins = parse_amount(amount)
@@ -7399,8 +7401,7 @@ async def addmoney_error(ctx, error):
 @staffperm('economy')
 @xp_earn(4, 8)
 async def removemoney(ctx, amount: str, user: discord.Member):
-    authorized_ids = [1059882387590365314, 903123014420406302, 447235867485143057, ctx.guild.owner_id]
-    if ctx.author.id not in authorized_ids:
+    if ctx.author.id not in (AUTHORIZED_USER_IDS | {ctx.guild.owner_id}):
         return await ctx.send('❌ You are not authorized to use this command.')
     try:
         coins = parse_amount(amount)
@@ -9001,7 +9002,20 @@ async def help(ctx):
 @staff_only()
 async def stop(ctx):
     bot_locks[str(ctx.guild.id)] = True
-    await ctx.send("🔒 Bot locked. Use 'override' by theofficialtruck or CuteBatak to unlock.")
+    names = []
+    for uid in AUTHORIZED_USER_IDS:
+        m = ctx.guild.get_member(uid)
+        if m:
+            names.append(m.display_name)
+        else:
+            u = bot.get_user(uid)
+            if u:
+                names.append(u.name)
+    if names:
+        name_list = '\n'.join(f'• {n}' for n in sorted(names))
+        await ctx.send(f"🔒 Bot locked. Use 'override' by an authorized user listed below:\n{name_list}")
+    else:
+        await ctx.send("🔒 Bot locked. Use 'override' by an authorized user to unlock.")
 
 @bot.command()
 @staffperm('config')
@@ -9067,7 +9081,7 @@ async def disableonetime(ctx, channel: discord.TextChannel=None):
 
 @bot.command()
 async def override(ctx):
-    if ctx.author.id == 1059882387590365314 or ctx.author.id == 903123014420406302:
+    if ctx.author.id in AUTHORIZED_USER_IDS:
         bot_locks[str(ctx.guild.id)] = False
         await ctx.send('🚀 Bot unlocked!')
     else:
