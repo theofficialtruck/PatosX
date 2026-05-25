@@ -21,6 +21,7 @@ def _run(*args, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(  # nosec B603 — args are built from sys.executable + hard-coded tool flags
         args,
         capture_output=True,
+        stdin=subprocess.DEVNULL,  # avoid inheriting an invalid stdin handle on Windows
         text=True,
         encoding="utf-8",
         errors="replace",

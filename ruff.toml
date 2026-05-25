@@ -4,7 +4,7 @@
 # Default line length (ruff default is 88)
 line-length = 120
 
-[lint]
+[lint.per-file-ignores]
 # E402: main.py must patch sys.modules['audioop'] before discord imports (audioop removed in Py3.13)
-# This makes all subsequent imports appear "after non-import code" — that's intentional.
-per-file-ignores = { "main.py" = ["E402"] }
+# This makes all subsequent imports appear "after non-import code" — that is intentional.
+"main.py" = ["E402"]

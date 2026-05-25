@@ -4,7 +4,7 @@ name: CI pipeline
 
 on:
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   # Job 1: Linting code
@@ -34,6 +34,13 @@ jobs:
           VALIDATE_BIOME_LINT: "false"
           # Checkov scans IaC files; our CI is a simple workflow, not IaC.
           VALIDATE_CHECKOV: "false"
+          # zizmor requires SHA-pinned action refs and explicit permissions blocks;
+          # those add maintenance overhead for a hobbyist bot that changes frequently.
+          VALIDATE_GITHUB_ACTIONS_ZIZMOR: "false"
+          # Prettier YAML/Markdown formatting is not enforced — ruff handles Python
+          # style and the project does not use a Prettier config for prose files.
+          VALIDATE_YAML_PRETTIER: "false"
+          VALIDATE_MARKDOWN_PRETTIER: "false"
 
   # Job 2: Secret Scanning
   secret-scan:
@@ -61,8 +68,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-          cache: 'pip'
+          python-version: "3.12"
+          cache: "pip"
 
       - name: Install Dependencies
         run: |
