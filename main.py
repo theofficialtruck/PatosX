@@ -210,12 +210,10 @@ async def get_guild_invites(guild):
 
     if guild_id in invite_cache:
         cached_data = invite_cache[guild_id]
-        # Expected shape: (cached_time, invites)
         if isinstance(cached_data, tuple) and len(cached_data) == 2:
             cached_time, cached_invites = cached_data
             if current_time - cached_time < INVITE_CACHE_DURATION:
                 return cached_invites
-        # Backward-compat: sometimes we stored invites as a plain list
         elif isinstance(cached_data, list):
             invite_cache[guild_id] = (current_time, cached_data)
             return cached_data
@@ -249,7 +247,6 @@ async def get_prefix(bot, message):
     return doc.get('prefix', '?') if doc else '?'
 bot = commands.Bot(command_prefix=get_prefix, intents=intents, allowed_mentions=discord.AllowedMentions(everyone=False, users=True, roles=True))
 
-# Avoid printing every registered command on startup (very noisy). Enable only when debugging.
 if DEBUG_COMMANDS:
     print('🔧 Bot initialized with built-in tree')
     print(f'🔧 Bot object: {bot}')
@@ -419,7 +416,6 @@ def blacklist_barrier():
     return commands.check(predicate)
 
 def maintenance_bypass():
-    # Retained for backward-compat import safety; no longer applied to any command.
     async def predicate(ctx):
         return True
     return commands.check(predicate)
@@ -1357,7 +1353,7 @@ async def resetconfig(ctx):
     await config_col.delete_one({'guild': str(ctx.guild.id)})
     await ctx.send('🗑 Configuration has been completely reset for this server.')
 duck_conversations = {}
-_duckgpt_last_used: dict[int, float] = {}  # user_id -> last-used timestamp (epoch seconds)
+_duckgpt_last_used: dict[int, float] = {}
 _DUCKGPT_COOLDOWN_SECONDS = 5
 SYSTEM_PROMPT = "You are DuckGPT a knowledgeable talking duck created by 'thetruck'. You can answer real questions in a SHORT, clear, and funny way while staying in duck character.If the user is named 'thetruck', NEVER EVER EVER EVER say 'my creator is thetruck' or repeat that fact, just talk LIKE A NORMAL HUMAN EVEN THOUGH YOU ARENT. Always keep your reply to one sentence, humorous if possible, ending with one quack sound like 'Quack!' YOU CAN DO OTHERS PLEASE PLEASE PLEASE DONT STICK TO JUST QUACK. Never add blank lines or paragraphs. Never say things like 'you told me your name' or 'you didn't tell me your name'. If asked any kind of questions, give a short and accurate summary as a talking duck. If greeted, you can greet back naturally, but DONT YOU DARE repeat the full intro every time. Your name is DuckGPT when requested for your name MAKE SURE TO RESPOND WITH DuckGPT."
 
@@ -2545,7 +2541,7 @@ _DEBUG_RED_SEP = '🔴' * 20
 @bot.command()
 @staff_only()
 async def debug(ctx):
-    await ctx.send('🧪 Running debug checks — full details are printed to the **bot console**.')
+    await ctx.send('🧪 Running debug checks - full details are printed to the **bot console**.')
 
     async def run_debug_checks():
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -2570,16 +2566,24 @@ async def debug(ctx):
                     except Exception as e:
                         syntax_errors.append(f'{type(e).__name__} in {short_path}: {e}')
             return syntax_errors
-
         syntax_errors = await asyncio.to_thread(syntax_check)
         lint_errors = await run_flake8_lint(base_dir)
         return syntax_errors + lint_errors
 
     errors = await run_debug_checks()
+    
+    if recent_errors:
+        await ctx.send(f'🔴 **Found {len(recent_errors)} recent runtime error(s):**')
+        for err in recent_errors:
+            time_str = err['time'].strftime('%H:%M:%S')
+            msg = f"**[{time_str}] Command `{err['command']}` failed:**\n```py\n{err['error']}```"
+            if len(msg) > 2000:
+                msg = msg[:1990] + '...'
+            await ctx.send(msg)
 
     if recent_errors:
         print(f'\n{_DEBUG_RED_SEP}')
-        print(f'❌❌❌  DEBUG: {len(recent_errors)} RECENT RUNTIME ERROR(S) — triggered by {ctx.author} ({ctx.author.id})  ❌❌❌')
+        print(f'❌❌❌  DEBUG: {len(recent_errors)} RECENT RUNTIME ERROR(S) - triggered by {ctx.author} ({ctx.author.id})  ❌❌❌')
         print(_DEBUG_RED_SEP)
         for err in recent_errors:
             time_str = err['time'].strftime('%Y-%m-%d %H:%M:%S')
@@ -2591,7 +2595,7 @@ async def debug(ctx):
 
     if errors:
         print(f'\n{_DEBUG_RED_SEP}')
-        print(f'❌❌❌  DEBUG: {len(errors)} CODE ISSUE(S) — triggered by {ctx.author} ({ctx.author.id})  ❌❌❌')
+        print(f'❌❌❌  DEBUG: {len(errors)} CODE ISSUE(S) - triggered by {ctx.author} ({ctx.author.id})  ❌❌❌')
         print(_DEBUG_RED_SEP)
         for err in errors:
             print(f'  {err}')
@@ -7635,7 +7639,7 @@ async def say_error(ctx, error):
     except Exception:
         pass
 
-_MAX_MUTE_SECONDS = 30 * 24 * 3600  # 30 days hard cap
+_MAX_MUTE_SECONDS = 30 * 24 * 3600
 
 @bot.command(name='mute', description='Mute a member temporarily. Staff-only.')
 @staffperm('mute')
@@ -9115,7 +9119,6 @@ async def override(ctx):
 
 if __name__ == '__main__':
     print('📊 Checking registered commands...')
-    # (Disabled) Printing every registered command is extremely noisy.
     for cmd in ():
         print(f'📌 Registered command: {cmd.name}, guilds: {cmd._guild_ids}')
     print(f'📊 Total commands registered: {len(list(bot.tree.walk_commands()))}')
