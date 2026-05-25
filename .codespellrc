@@ -1,0 +1,3 @@
+[codespell]
+# "ore" is a legitimate in-game item name (iron ore, gold ore) — not a misspelling of "or"
+ignore-words-list = ore

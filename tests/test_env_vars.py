@@ -1,7 +1,5 @@
 """Tests for AUTHORIZED_USER_IDS and BEG_DONORS env variable behaviour."""
 import os
-import importlib
-import pytest
 import main
 
 

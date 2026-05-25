@@ -1,7 +1,6 @@
 """Tests for coffee cup, energy drink, and lucky cookie buffs."""
-import inspect
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 import main
 
 
@@ -203,8 +202,6 @@ async def test_work_energy_drink_allows_work_after_half_cooldown(monkeypatch):
 @pytest.mark.asyncio
 async def test_work_lucky_cookie_doubles_earnings(monkeypatch):
     """lucky_cookie in inventory doubles work earnings and is removed."""
-    import random as _random
-
     ctx = MagicMock()
     ctx.guild.id = 100
     ctx.author.id = 200

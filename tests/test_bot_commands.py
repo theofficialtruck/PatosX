@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -11,6 +10,7 @@ async def test_warn_command():
     member = MagicMock()
     ctx.guild.id = 123456789
     ctx.author = MagicMock(name='Moderator', id=111)
+    ctx.send = AsyncMock()  # must be AsyncMock — warn calls await ctx.send(...)
     member.id = 222
     member.mention = '@TestUser'
     member.send = AsyncMock()

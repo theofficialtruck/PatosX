@@ -63,6 +63,6 @@ jobs:
 
       - name: Run Pytest Unit Tests
         env:
-            PYTHONPATH: .
+          PYTHONPATH: .
         run: |
           pytest

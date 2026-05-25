@@ -1,7 +1,8 @@
 import sys
 import types
 sys.modules['audioop'] = types.ModuleType('audioop')
-import os, asyncio
+import os
+import asyncio
 from datetime import datetime, timedelta, timezone
 from motor.motor_asyncio import AsyncIOMotorClient
 from duckquiz_questions import questions
@@ -396,7 +397,7 @@ def blacklist_barrier():
                 try:
                     await ctx_or_interaction.send('🚫 You are blacklisted and cannot use this command.', delete_after=5)
                     await ctx_or_interaction.message.delete()
-                except Exception:
+                except (discord.HTTPException, discord.Forbidden):
                     pass
                 return False
             if not await check_maintenance_access(ctx_or_interaction):
@@ -407,7 +408,7 @@ def blacklist_barrier():
             if guild and await is_blacklisted(guild, user):
                 try:
                     await ctx_or_interaction.response.send_message('🚫 You are blacklisted and cannot use this command.', ephemeral=True)
-                except Exception:
+                except (discord.HTTPException, discord.Forbidden):
                     pass
                 return False
             if not await check_maintenance_access(ctx_or_interaction):
@@ -509,7 +510,7 @@ async def on_command_error(ctx, error):
             recent_errors.pop(0)
         try:
             await ctx.send('❌ **An unexpected error occurred**')
-        except Exception:
+        except (discord.HTTPException, discord.Forbidden):
             pass
 
 @bot.event
@@ -627,8 +628,8 @@ async def check_and_award_badges(ctx_or_channel, guild: discord.Guild, member: d
             try:
                 if badge['check'](economy_data, xp, extra):
                     newly_earned.append(badge_id)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f'[badge check] {e}')
         if not newly_earned:
             return
         earned_ids.update(newly_earned)
@@ -841,48 +842,6 @@ def consume_tool_use(inventory, tool_name):
         inventory[idx] = {'_id': tool_key, 'uses_left': uses_left}
         return (True, False, uses_left)
     return (False, False, None)
-
-async def prompt_for_role(ctx):
-
-    def check(m):
-        return m.author == ctx.author and m.channel == ctx.channel
-    messages_to_delete = []
-    while True:
-        bot_msg = await ctx.send('📌 Please enter the **role ID or role name** (or type `cancel` to skip):')
-        messages_to_delete.append(bot_msg)
-        try:
-            msg = await bot.wait_for('message', check=check, timeout=60)
-            messages_to_delete.append(msg)
-        except asyncio.TimeoutError:
-            timeout_msg = await ctx.send('⌛ Cancelled due to timeout.')
-            messages_to_delete.append(timeout_msg)
-            await asyncio.sleep(3)
-            await ctx.channel.delete_messages(messages_to_delete)
-            return None
-        content = msg.content.strip()
-        if content.lower() == 'cancel':
-            cancel_msg = await ctx.send('❌ Role linking cancelled.')
-            messages_to_delete.append(cancel_msg)
-            await asyncio.sleep(3)
-            await ctx.channel.delete_messages(messages_to_delete)
-            return None
-        role = None
-        try:
-            role_id = int(content)
-            role = ctx.guild.get_role(role_id)
-        except ValueError:
-            role = discord.utils.get(ctx.guild.roles, name=content)
-            if not role:
-                role = discord.utils.find(lambda r: r.name.lower() == content.lower(), ctx.guild.roles)
-        if not role:
-            err_msg = await ctx.send('❌ No role found with that ID or name. Please try again.')
-            messages_to_delete.append(err_msg)
-            continue
-        success_msg = await ctx.send(f'✅ Linked role: {role.mention}')
-        messages_to_delete.append(success_msg)
-        await asyncio.sleep(3)
-        await ctx.channel.delete_messages(messages_to_delete)
-        return role.id
 
 def check_target_permission(ctx, member: discord.Member):
     if member == ctx.author:
@@ -1100,7 +1059,7 @@ async def configure(ctx):
     await settings_col.update_one({'guild': str(ctx.guild.id)}, {'$set': {'staff_role': staff_role.id}}, upsert=True)
     try:
         await msg.delete()
-    except Exception:
+    except discord.HTTPException:
         pass
     for key, question in prompts.items():
         await ctx.send(question)
@@ -1114,20 +1073,20 @@ async def configure(ctx):
         if key == 'log_channel' and content.lower() == 'skip':
             try:
                 await msg.delete()
-            except Exception:
+            except discord.HTTPException:
                 pass
             continue
         if key == 'QUACK_CHANNELS' and content.lower() == 'skip':
             config_data[key] = []
             try:
                 await msg.delete()
-            except Exception:
+            except discord.HTTPException:
                 pass
             continue
         if key == 'welcome_message' and content.lower() == 'skip':
             try:
                 await msg.delete()
-            except Exception:
+            except discord.HTTPException:
                 pass
             continue
         if not content:
@@ -1150,7 +1109,7 @@ async def configure(ctx):
             return await ctx.send(f"❌ Couldn't parse IDs for `{key}`.")
         try:
             await msg.delete()
-        except Exception:
+        except discord.HTTPException:
             pass
     await config_col.update_one({'guild': config_data['guild']}, {'$set': config_data}, upsert=True)
     await ctx.send(f'✅ Configuration saved successfully! Staff role set to {staff_role.mention}.', delete_after=7)
@@ -1233,7 +1192,7 @@ async def editconfig(ctx, *, args: str=None):
                 def emoji_check(reaction, user):
                     return user == ctx.author and reaction.message.channel == ctx.channel
                 try:
-                    emoji_msg = await ctx.send('⏳ Waiting for your emoji reaction or text reply...')
+                    await ctx.send('⏳ Waiting for your emoji reaction or text reply...')
                     reaction_task = asyncio.create_task(bot.wait_for('reaction_add', timeout=30, check=emoji_check))
                     message_task = asyncio.create_task(bot.wait_for('message', timeout=30, check=check))
                     done, pending = await asyncio.wait([reaction_task, message_task], return_when=asyncio.FIRST_COMPLETED)
@@ -1623,7 +1582,7 @@ async def get_invites_count(guild_id: int, user_id: int):
     async for code_doc in invites_col.find({'guild_id': str(guild_id), 'inviter_id': str(user_id)}):
         try:
             total_uses += int(code_doc.get('uses', 0))
-        except Exception:
+        except (TypeError, ValueError):
             pass
     return total_uses
 
@@ -1929,7 +1888,7 @@ async def on_message(message):
                         if emoji:
                             try:
                                 await sent.add_reaction(emoji)
-                            except Exception:
+                            except (discord.HTTPException, discord.Forbidden):
                                 pass
                     except Exception as e:
                         print(f'⚠️ Error sending boost thank-you in {guild.name}: {e}')
@@ -2350,7 +2309,7 @@ class StaffPermissionSelect(ui.Select):
         if message:
             try:
                 await message.edit(view=self.parent_view)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def callback(self, interaction: discord.Interaction):
@@ -2922,7 +2881,7 @@ async def inviteleaderboard(ctx, limit: int=10):
             continue
         try:
             totals[inviter_id] = totals.get(inviter_id, 0) + int(code_doc.get('uses', 0))
-        except Exception:
+        except (TypeError, ValueError):
             pass
     if not totals:
         return await ctx.send('❌ No invite data found yet.')
@@ -2959,7 +2918,7 @@ async def resetinvites(ctx):
         current_invites = await get_guild_invites(ctx.guild)
         for invite in current_invites:
             await invites_col.update_one({'guild_id': guild_id, 'code': invite.code}, {'$set': {'inviter_id': str(invite.inviter.id) if invite.inviter else None, 'uses': invite.uses}}, upsert=True)
-    except Exception:
+    except discord.HTTPException:
         pass
     await ctx.send(f'✅ Reset invites for this server.\nCleared {stats_res.deleted_count} inviter records and refreshed {upd_res.modified_count} invite codes.')
 
@@ -3036,7 +2995,6 @@ class DoorGameButton(discord.ui.View):
         else:
             result_text = f'💀 **Door {chosen_door} took your bet!**\nYou now have `{add_suffix(max(self.current_balance - self.bet, 0))}` coins.'
             color = 16739179
-            new_balance = max(self.current_balance - self.bet, 0)
             embed = discord.Embed(title=f'🚪 Door {self.current_door}/{self.total_doors} Result', description=result_text, color=color)
             embed.add_field(name='Final Result', value='💀 You lost your bet! Game over!', inline=False)
             embed.set_footer(text=f'Played by {interaction.user.name}')
@@ -4183,7 +4141,7 @@ async def edititem(ctx, *, name: str):
             new_desc = desc_msg.content.strip()
     except asyncio.TimeoutError:
         return await ctx.send('⌛ Edit cancelled due to timeout.')
-    await ctx.send(f'🔗 Do you want to change the linked role? (yes/no)')
+    await ctx.send('🔗 Do you want to change the linked role? (yes/no)')
     try:
         choice_msg = await bot.wait_for('message', check=check, timeout=60)
         choice = choice_msg.content.lower()
@@ -4387,7 +4345,6 @@ async def give(ctx, member_name: str, amount: str):
     if member == ctx.author:
         return await ctx.send('❌ You cannot give coins to yourself.')
     sender = await get_user(ctx, ctx.guild.id, ctx.author.id)
-    receiver = await get_user(ctx, ctx.guild.id, member.id)
     if amount.lower() == 'all':
         amount = sender['wallet']
         if amount <= 0:
@@ -4573,7 +4530,7 @@ async def duckroll(ctx, guess: str):
             msg = f'🦆 You rolled **{roll} ducks**!\n✅ Correct guess! You won **{bet_amount} coins** 🎉'
             await ctx.send(msg)
         elif roll == 50:
-            await ctx.send(f"🦆 You rolled exactly **50 ducks**!\n🤷 It's a draw. No win, no loss.")
+            await ctx.send("🦆 You rolled exactly **50 ducks**!\n🤷 It's a draw. No win, no loss.")
         else:
             await subtract_balance(ctx.author.id, ctx.guild.id, bet_amount)
             await ctx.send(f'🦆 You rolled **{roll} ducks**!\n❌ Wrong guess! You lost **{bet_amount} coins** 💸')
@@ -4741,7 +4698,9 @@ async def work(ctx):
         high = int(high * multiplier)
         earned = random.randint(low, high)
         await add_balance(ctx.author.id, ctx.guild.id, earned)
-        await economy_col.update_one({'_id': cooldown_key}, {'$set': {'timestamp': datetime.now(timezone.utc).isoformat()}}, upsert=True)
+        # Energy drink reduces next cooldown by 50%: shift timestamp back by saved seconds
+        effective_ts = datetime.now(timezone.utc) - timedelta(seconds=int(3600 * (1 - cooldown_reduction)))
+        await economy_col.update_one({'_id': cooldown_key}, {'$set': {'timestamp': effective_ts.isoformat()}}, upsert=True)
         msg = f"🧾 {descriptions.get(job, 'You worked hard!')}\n💰 You earned **{earned} coins** as a level `{promo_level}` {job}!"
         if has_cookie:
             msg += '\n🍪 **Lucky Cookie consumed!** Earnings doubled!'
@@ -6196,7 +6155,6 @@ class TicketCategoryButton(discord.ui.Button):
         staff_role_id = data.get('staff_role') if data else None
         if not staff_role_id:
             return await interaction.followup.send(embed=discord.Embed(title='❌ Staff Role Not Set', description='Use `.configure` first.', color=discord.Color.red()), ephemeral=True)
-        staff_role = guild.get_role(int(staff_role_id))
         category = discord.utils.get(guild.categories, name='Tickets') or await guild.create_category('Tickets')
         for c in category.channels:
             if c.name.lower() == ticket_name.lower():
@@ -6277,7 +6235,7 @@ async def actually_close_ticket(ctx, opener, forced=False):
     if opener:
         try:
             await opener.send(embed=discord.Embed(title='📜 Ticket Transcript', description=f'Transcript for `{channel.name}` attached below.', color=discord.Color.blue()), file=discord_file)
-        except Exception:
+        except (discord.HTTPException, discord.Forbidden):
             pass
     action_type = 'forceclose' if forced else 'close'
     closer_text = f'{ctx.author} ({ctx.author.mention})'
@@ -6421,7 +6379,7 @@ async def ticketdeletepanel(ctx, panel_name: str):
             await ctx.interaction.response.send_message(msg, ephemeral=True)
         else:
             await ctx.send(msg)
-    except Exception as e:
+    except Exception:
         print('ticketdeletepanel ERROR:', traceback.format_exc())
 
 @bot.hybrid_command(name='ticketlist', description='List all saved ticket panels. Staff-only.')
@@ -6444,7 +6402,7 @@ async def ticketlist(ctx):
             await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             await ctx.send(embed=embed)
-    except Exception as e:
+    except Exception:
         print('ticketlist ERROR:', traceback.format_exc())
 
 @bot.hybrid_command(name='ticketclose', description='Request to close the current ticket.')
@@ -6545,7 +6503,7 @@ async def transcript(ctx, ticket_id: str):
             await ctx.interaction.response.send_message(embed=embed, file=discord_file, ephemeral=True)
         else:
             await ctx.send(embed=embed, file=discord_file)
-    except Exception as e:
+    except Exception:
         print('transcript ERROR:', traceback.format_exc())
 
 @bot.hybrid_command(name='transcriptsearch', description='Search tickets by username. Staff-only.')
@@ -6569,7 +6527,7 @@ async def transcriptsearch(ctx, username: str):
             await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             await ctx.send(embed=embed)
-    except Exception as e:
+    except Exception:
         print('transcriptsearch ERROR:', traceback.format_exc())
 
 class TranscriptPaginationView(discord.ui.View):
@@ -6838,11 +6796,11 @@ class GiveawayView(discord.ui.View):
             if user:
                 names.append(f'{user} - {entries} ticket(s)')
         names_str = '\n'.join(names)
-        if len(names) > 1900:
-            file = discord.File(io.BytesIO(names.encode()), filename='participants.txt')
+        if len(names_str) > 1900:
+            file = discord.File(io.BytesIO(names_str.encode()), filename='participants.txt')
             await interaction.response.send_message("📄 Too many participants to display! Here's the list:", file=file, ephemeral=True)
         else:
-            await interaction.response.send_message(f'**Participants:**\n{names}', ephemeral=True)
+            await interaction.response.send_message(f'**Participants:**\n{names_str}', ephemeral=True)
 
     async def end_giveaway(self):
         embed = self.embed_message.embeds[0]
@@ -7407,8 +7365,8 @@ async def addmoney_error(ctx, error):
             print(f'[ERROR] addmoney_error: {root_error}')
             traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
             return await send_hybrid_error(ctx, content='⚠️ An unexpected error occurred.')
-    except Exception:
-        pass
+    except Exception as e:
+        print(f'[addmoney_error] {e}')
 
 @bot.hybrid_command(name='removemoney', description='Remove money from a user (economy admin only).')
 @app_commands.describe(amount='Amount to remove (supports k, m, b suffixes)', user='User to take money from')
@@ -7482,7 +7440,7 @@ async def drop(ctx, amount: str, *, message: str=None):
                 total = wallet + bank
                 return await ctx.send(f"❌ You don't have enough money.\n🏦 Bank: **{bank:,}** | 🪙 Wallet: **{wallet:,}**\n🪙 Required: **{coins:,}** (Total: {total:,})")
             await economy_col.update_one({'_id': f'{guild_id}-{user_id}'}, {'$set': {'wallet': new_wallet, 'bank': new_bank}}, upsert=True)
-        except Exception as e:
+        except Exception:
             return await ctx.send('⚠️ Failed to process your balance.\nPlease try again later.')
     role_id = None
     if is_staff:
@@ -7493,7 +7451,7 @@ async def drop(ctx, amount: str, *, message: str=None):
             role_id = None
     try:
         await ctx.message.delete()
-    except Exception:
+    except discord.HTTPException:
         pass
     embed = discord.Embed(title='💰 Money Drop!', description=f'Someone dropped **🪙 {coins:,}**!\n\nClick the button below to claim it!', color=discord.Color.gold())
     if message:
@@ -7506,7 +7464,7 @@ async def drop(ctx, amount: str, *, message: str=None):
         if not is_prefix(ctx) and ctx.interaction and not ctx.interaction.response.is_done():
             try:
                 await ctx.interaction.response.send_message('✅ Drop created!', ephemeral=True, delete_after=4)
-            except Exception:
+            except discord.HTTPException:
                 pass
     except Exception:
         if not is_staff:
@@ -7514,8 +7472,8 @@ async def drop(ctx, amount: str, *, message: str=None):
         return await ctx.send('❌ Failed to send the drop message. You have been refunded.')
     try:
         await drop_instances_col.update_one({'message_id': str(msg.id)}, {'$set': {'message_id': str(msg.id), 'channel_id': str(ctx.channel.id), 'guild_id': str(guild_id), 'amount': int(coins), 'author_id': str(user_id), 'claimed': False, 'created_at': datetime.now(timezone.utc).isoformat(), 'staff_drop': is_staff}}, upsert=True)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f'[drop] Failed to save drop instance: {e}')
 
 @drop.error
 async def drop_error(ctx, error):
@@ -7568,7 +7526,7 @@ async def unban(ctx, *, user_id: int):
         await ctx.guild.unban(user)
         await ctx.send(f'✅ {user.mention} has been unbanned.')
         await log_action(ctx, f'Unbanned {user}', user_id=user.id, action_type='unban')
-    except Exception as e:
+    except Exception:
         await ctx.send('❌ Failed to unban that user.')
 
 @bot.hybrid_command(name='say', description='Make the bot say a message in a chosen channel.')
@@ -7636,8 +7594,8 @@ async def say_error(ctx, error):
         if isinstance(error, commands.CommandInvokeError):
             return await send_hybrid_error(ctx, content='⚠️ Error running say. Please try again shortly.')
         await send_hybrid_error(ctx, content='⚠️ An unexpected error occurred.')
-    except Exception:
-        pass
+    except Exception as e:
+        print(f'[say_error] {e}')
 
 _MAX_MUTE_SECONDS = 30 * 24 * 3600
 
@@ -7708,8 +7666,8 @@ async def warn(ctx, member: discord.Member, *, reason='No reason provided'):
     if not (_running_under_pytest() and _looks_like_motor_collection(mod_col)):
         try:
             await mod_col.update_one({'guild': guild_id, 'user': user_id}, {'$push': {'warnings': {'by': str(ctx.author), 'reason': reason, 'time': datetime.now(timezone.utc).isoformat()}}}, upsert=True)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f'[warn] mod_col update failed: {e}')
     try:
         guild_name = getattr(ctx.guild, 'name', 'this server')
         author_mention = getattr(ctx.author, 'mention', '')
@@ -7717,16 +7675,16 @@ async def warn(ctx, member: discord.Member, *, reason='No reason provided'):
     except discord.Forbidden:
         try:
             await ctx.send(f'⚠️ Could not DM {member.mention} - they might have DMs disabled.')
-        except Exception:
+        except discord.HTTPException:
             pass
     try:
         await ctx.send(f'⚠️ {member.mention} has been warned: {reason}')
-    except Exception:
+    except discord.HTTPException:
         pass
     try:
         await log_action(ctx, f'Warned {member} for: {reason}', user_id=member.id, action_type='warn')
-    except Exception:
-        pass
+    except Exception as e:
+        print(f'[warn] log_action failed: {e}')
 
 @bot.hybrid_command(name='clearwarns', description='Clear all warnings. Staff-only.')
 @staffperm('other_moderation')
@@ -7920,7 +7878,7 @@ class ModViewButtons(discord.ui.View):
         if interaction.user != self.ctx.author:
             try:
                 await interaction.response.send_message('❌ This modview belongs to another moderator.', ephemeral=True)
-            except Exception:
+            except discord.HTTPException:
                 pass
             return False
         return True
@@ -8086,7 +8044,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                             if warning_time >= days_ago:
                                 analytics['punishments']['warn'] += 1
                                 analytics['total_actions'] += 1
-                        except Exception:
+                        except ValueError:
                             pass
             if 'mutes' in doc:
                 for mute in doc.get('mutes', []):
@@ -8096,7 +8054,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                             if mute_time >= days_ago:
                                 analytics['punishments']['mute'] += 1
                                 analytics['total_actions'] += 1
-                        except Exception:
+                        except ValueError:
                             pass
             if 'kicks' in doc:
                 for kick in doc.get('kicks', []):
@@ -8106,7 +8064,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                             if kick_time >= days_ago:
                                 analytics['punishments']['kick'] += 1
                                 analytics['total_actions'] += 1
-                        except Exception:
+                        except ValueError:
                             pass
             if 'bans' in doc:
                 for ban in doc.get('bans', []):
@@ -8116,7 +8074,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                             if ban_time >= days_ago:
                                 analytics['punishments']['ban'] += 1
                                 analytics['total_actions'] += 1
-                        except Exception:
+                        except ValueError:
                             pass
         analytics['punishments']['total'] = sum((analytics['punishments'][p] for p in ['warn', 'mute', 'kick', 'ban']))
         analytics['commands_used'] = analytics['punishments']['total']
@@ -8128,7 +8086,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                             note_time = parser.isoparse(note['time'])
                             if note_time >= days_ago:
                                 analytics['commands_used'] += 1
-                        except Exception:
+                        except ValueError:
                             pass
         earliest_action = None
         for doc in mod_data:
@@ -8140,7 +8098,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                                 action_time = parser.isoparse(action['time'])
                                 if not earliest_action or action_time < earliest_action:
                                     earliest_action = action_time
-                            except Exception:
+                            except ValueError:
                                 pass
         if earliest_action:
             analytics['staff_since'] = earliest_action.strftime('%b %d, %Y')
@@ -8170,7 +8128,7 @@ async def get_user_message_count(guild_id, user_id, since_date):
                                 action_time = parser.isoparse(action['time'])
                                 if action_time >= since_date:
                                     message_count += 1
-                            except Exception:
+                            except ValueError:
                                 pass
         return message_count
     except Exception as e:
@@ -8198,7 +8156,7 @@ async def performance(ctx, days: int=30):
             return await ctx.send('❌ No staff members found.')
         embed = discord.Embed(title='📊 Staff Performance Review', description=f'Select a staff member from the dropdown below to view their performance analytics.\n\n**Total Staff Members:** {len(staff_members)}\n**Review Period:** Last {days} days', color=discord.Color.blue())
         embed.add_field(name='📊 Available Analytics', value='• Total moderation actions\n• Punishment breakdown\n• Activity patterns\n• Efficiency rating', inline=False)
-        embed.set_footer(text=f'Review period can be adjusted with .performance <days> (1-365)')
+        embed.set_footer(text='Review period can be adjusted with .performance <days> (1-365)')
         view = PerformanceView(ctx.guild.id, staff_members, days)
         await ctx.send(embed=embed, view=view)
     except Exception as e:
@@ -8340,7 +8298,6 @@ async def modview(ctx, member: discord.Member):
     mod_perms = format_permissions(member)
     roles = format_roles(member)
     flags = format_flags(member)
-    activity = format_activity(member)
     nick = member.nick or 'None'
     pending = '✅ Yes' if member.pending else '❌ No'
     bot_flag = '🤖 Yes' if member.bot else '👤 No'
@@ -8616,7 +8573,7 @@ async def on_member_join(member):
                     if emoji:
                         try:
                             await sent_msg.add_reaction(emoji)
-                        except Exception:
+                        except (discord.HTTPException, discord.Forbidden):
                             pass
                 await boost_col.update_one({'_id': boost_key}, {'$set': {'last_thanked': member.premium_since.isoformat()}}, upsert=True)
         doc = await mutes_col.find_one({'guild_id': member.guild.id, 'user_id': member.id})
@@ -8799,7 +8756,6 @@ class TutorialPages(discord.ui.View):
 async def tutorial(ctx):
     settings = await settings_col.find_one({'guild': str(ctx.guild.id)}) or {}
     config = await config_col.find_one({'guild': str(ctx.guild.id)}) or {}
-    guild_cfg = await guild_config_col.find_one({'guild': str(ctx.guild.id)}) or {}
     invite_cfg = await invite_config_col.find_one({'guild': str(ctx.guild.id)}) or {}
     prefix = settings.get('prefix', '?') if settings else '?'
     staff_role = settings.get('staff_role') if settings else None
@@ -8958,8 +8914,8 @@ class CommandPages(discord.ui.View):
             await interaction.response.send_message(f'❌ An error occurred: `{type(exception).__name__}: {exception}`', ephemeral=True)
         except discord.InteractionResponded:
             await interaction.followup.send(f'❌ An error occurred: `{type(exception).__name__}: {exception}`', ephemeral=True)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f'[app_command_error] fallback failed: {e}')
 bot.remove_command('help')
 
 @bot.hybrid_command(name='help', description='View bot commands.', aliases=['commands', 'cmds'])
@@ -9063,7 +9019,7 @@ async def onetime(ctx, channel: discord.TextChannel=None):
         await ctx.send(embed=embed)
         try:
             await target_channel.send('🔔 **This is now a one-time message channel!**\nNon-staff members can send only one message here. Staff can restore permissions with `.restore <user>`.')
-        except Exception:
+        except (discord.HTTPException, discord.Forbidden):
             pass
     else:
         await ctx.send(f'⚠️ {target_channel.mention} is already a one-time message channel.')

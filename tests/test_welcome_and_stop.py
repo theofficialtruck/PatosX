@@ -1,7 +1,6 @@
 """Tests for welcome message customisation and stop command authorized-user listing."""
-import os
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 import main
 
 
