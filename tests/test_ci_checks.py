@@ -167,18 +167,16 @@ def test_ruff_no_errors_tests():
 
 def test_codespell_no_spelling_errors():
     """codespell must not find spelling errors in Python source files."""
-    result = _run(
-        sys.executable,
-        "-m",
-        "codespell",
-        "--config",
-        ".codespellrc",
-        "main.py",
-        "tests/",
-        "--quiet-level",
-        "2",
-    )
-    if result.returncode == 127 or "No module named" in result.stderr:
+    common_args = ("--config", ".codespellrc", "main.py", "tests/", "--quiet-level", "2")
+    # The importable module name varies by install: 'codespell' on Linux/Mac,
+    # 'codespell_lib' on some Windows installs.  Try both before giving up.
+    result = None
+    for module in ("codespell", "codespell_lib"):
+        result = _run(sys.executable, "-m", module, *common_args)
+        if "No module named" not in result.stderr:
+            break
+
+    if result is None or result.returncode == 127 or "No module named" in result.stderr:
         import pytest
 
         pytest.skip("codespell not installed — skipping spelling check")

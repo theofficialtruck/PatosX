@@ -1,4 +1,3 @@
-# ruff: noqa: E402 -- sys.modules["audioop"] patch must precede all discord imports (audioop removed in Py 3.13)
 import sys
 import types
 
@@ -127,6 +126,7 @@ GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "").split(",")
 GEMINI_API_KEYS = [k.strip() for k in GEMINI_API_KEYS if k.strip()]
 _AUTH_IDS_RAW = os.getenv("AUTHORIZED_USER_IDS", "")
 AUTHORIZED_USER_IDS: set = {int(uid.strip()) for uid in _AUTH_IDS_RAW.split(",") if uid.strip().isdigit()}
+BOT_ADMIN_NAME = os.getenv("BOT_ADMIN_NAME", "the bot administrator")
 _BEG_DONORS_RAW = os.getenv("BEG_DONORS", "thetruck,CuteBatak")
 BEG_DONORS: list = [d.strip() for d in _BEG_DONORS_RAW.split(",") if d.strip()] or ["thetruck", "CuteBatak"]
 db = mongo["discord_bot"] if mongo is not None else _DummyDB()
@@ -366,7 +366,7 @@ async def global_lock_check(ctx):
     if ctx.command.name == "override":
         return True
     if bot_locks.get(str(ctx.guild.id)):
-        await ctx.send("🔒 The bot is locked - only `override` by theofficialtruck works.")
+        await ctx.send(f"🔒 The bot is locked - only `override` by **{BOT_ADMIN_NAME}** works.")
         return False
     return True
 
@@ -1612,7 +1612,7 @@ async def configure_error(ctx, error):
         print(f"[ERROR] configure_error: {root_error}")
         traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
         await send_hybrid_error(
-            ctx, content="⚠️ An unexpected error occurred. Please contact thetruck.", delete_after=10
+            ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".", delete_after=10
         )
 
 
@@ -1774,7 +1774,7 @@ async def editconfig_error(ctx, error):
             )
         print(f"[ERROR] editconfig_error: {root_error}")
         traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
-        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.command(name="viewconfig")
@@ -1838,7 +1838,7 @@ async def viewconfig_error(ctx, error):
             )
         print(f"[ERROR] viewconfig_error: {root_error}")
         traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
-        await ctx.send("⚠️ An unexpected error occurred. Please contact thetruck.")
+        await ctx.send("⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.command()
@@ -1852,7 +1852,7 @@ async def resetconfig(ctx):
 duck_conversations = {}
 _duckgpt_last_used: dict[int, float] = {}
 _DUCKGPT_COOLDOWN_SECONDS = 5
-SYSTEM_PROMPT = "You are DuckGPT a knowledgeable talking duck created by 'thetruck'. You can answer real questions in a SHORT, clear, and funny way while staying in duck character.If the user is named 'thetruck', NEVER EVER EVER EVER say 'my creator is thetruck' or repeat that fact, just talk LIKE A NORMAL HUMAN EVEN THOUGH YOU ARENT. Always keep your reply to one sentence, humorous if possible, ending with one quack sound like 'Quack!' YOU CAN DO OTHERS PLEASE PLEASE PLEASE DONT STICK TO JUST QUACK. Never add blank lines or paragraphs. Never say things like 'you told me your name' or 'you didn't tell me your name'. If asked any kind of questions, give a short and accurate summary as a talking duck. If greeted, you can greet back naturally, but DONT YOU DARE repeat the full intro every time. Your name is DuckGPT when requested for your name MAKE SURE TO RESPOND WITH DuckGPT."
+SYSTEM_PROMPT = f"You are DuckGPT a knowledgeable talking duck created by '{BOT_ADMIN_NAME}'. You can answer real questions in a SHORT, clear, and funny way while staying in duck character.If the user is named '{BOT_ADMIN_NAME}', NEVER EVER EVER EVER say 'my creator is {BOT_ADMIN_NAME}' or repeat that fact, just talk LIKE A NORMAL HUMAN EVEN THOUGH YOU ARENT. Always keep your reply to one sentence, humorous if possible, ending with one quack sound like 'Quack!' YOU CAN DO OTHERS PLEASE PLEASE PLEASE DONT STICK TO JUST QUACK. Never add blank lines or paragraphs. Never say things like 'you told me your name' or 'you didn't tell me your name'. If asked any kind of questions, give a short and accurate summary as a talking duck. If greeted, you can greet back naturally, but DONT YOU DARE repeat the full intro every time. Your name is DuckGPT when requested for your name MAKE SURE TO RESPOND WITH DuckGPT."
 
 
 async def cleanup_old_conversations():
@@ -2041,10 +2041,10 @@ async def ask_duck_gpt(ctx, prompt: str) -> str:
     if intent == "owner":
         if ctx.author.id in AUTHORIZED_USER_IDS:
             return "🦆 You are my owner! Quack!"
-        elif display_name.lower() == "thetruck":
+        elif display_name.lower() == BOT_ADMIN_NAME.lower():
             return "🦆 You may *look* like my owner, but you're not the real one! Bad duck! *angry quack!* 🦆"
         else:
-            return "🦆 My owner is thetruck! Quack!"
+            return f"🦆 My owner is {BOT_ADMIN_NAME}! Quack!"
     elif intent == "name":
         return f"🦆 Your name is `{display_name}`! Quack!"
     elif intent == "server":
@@ -2936,7 +2936,7 @@ async def on_ready():
             invite_cache[guild.id] = (0, [])
             print(f"❌ Failed to fetch invites for guild {guild}: {e}")
     print("✅ Invite cache synced with MongoDB.")
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name="thetruck"))
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=BOT_ADMIN_NAME))
     if session is None:
         session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
     panels = await ticket_panels_col.find({}).to_list(length=None)
@@ -3468,15 +3468,6 @@ async def debug(ctx):
         return syntax_errors + lint_errors
 
     errors = await run_debug_checks()
-
-    if recent_errors:
-        await ctx.send(f"🔴 **Found {len(recent_errors)} recent runtime error(s):**")
-        for err in recent_errors:
-            time_str = err["time"].strftime("%H:%M:%S")
-            msg = f"**[{time_str}] Command `{err['command']}` failed:**\n```py\n{err['error']}```"
-            if len(msg) > 2000:
-                msg = msg[:1990] + "..."
-            await ctx.send(msg)
 
     if recent_errors:
         print(f"\n{_DEBUG_RED_SEP}")
@@ -4136,7 +4127,7 @@ async def doorgame(ctx):
         bot_msg = await ctx.send(embed=embed, view=view)
         view.message = bot_msg
     except Exception as e:
-        await ctx.send("⚠️ Something went wrong while setting up the game. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while setting up the game. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] doorgame setup: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -4645,7 +4636,7 @@ async def balance(ctx, member_name: str = None):
                 embed.add_field(name="🛡️ Passive Mode", value=f"Active for {rem.days}d {hours}h {mins}m", inline=False)
         await ctx.send(embed=embed)
     except Exception as e:
-        await ctx.send("⚠️ Something went wrong while fetching balance. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while fetching balance. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] balance command: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -4722,7 +4713,7 @@ async def daily(ctx):
     except Exception as e:
         print(f"[ERROR] daily command: {type(e).__name__} - {e}")
         traceback.print_exc()
-        await ctx.send("⚠️ Something went wrong while collecting your daily. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while collecting your daily. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.hybrid_command(name="beg", description="Beg for coins.")
@@ -4777,7 +4768,7 @@ async def beg(ctx):
     except Exception as e:
         print(f"[ERROR] beg command: {type(e).__name__} - {e}")
         traceback.print_exc()
-        await ctx.send("⚠️ Something went wrong while begging. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while begging. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.hybrid_command(name="deposit", description="Deposit to bank.", aliases=["dep"])
@@ -4811,7 +4802,7 @@ async def deposit(ctx, amount: str):
             f"🏦 You deposited {deposit_amount} coins.\n💸 After 5% tax, you received {taxed_amount} coins in your bank."
         )
     except Exception as e:
-        await ctx.send("⚠️ Something went wrong while processing your deposit. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while processing your deposit. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] deposit command: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -4844,7 +4835,7 @@ async def withdraw(ctx, amount: str):
         )
         await ctx.send(f"💰 You withdrew {withdraw_amount} coins.")
     except Exception as e:
-        await ctx.send("⚠️ Something went wrong while processing your withdrawal. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while processing your withdrawal. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] withdraw command: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -5138,7 +5129,7 @@ class ShopDropdown(discord.ui.View):
             print(f"[ERROR] ShopDropdown purchase: {type(e).__name__}: {e}")
             traceback.print_exc()
             await interaction.response.send_message(
-                "❌ An unexpected error occurred during purchase. Please try again later.", ephemeral=True
+                "❌ An unexpected error occurred during purchase. Please contact " + BOT_ADMIN_NAME + ".", ephemeral=True
             )
 
 
@@ -5327,7 +5318,7 @@ async def shop(ctx):
     except Exception as e:
         print(f"[ERROR] shop command: {type(e).__name__}: {e}")
         traceback.print_exc()
-        await ctx.send("❌ An unexpected error occurred while loading the shop. Please try again later.")
+        await ctx.send("❌ An unexpected error occurred while loading the shop. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 async def prompt_for_role(ctx):
@@ -5867,7 +5858,7 @@ async def coinflip_error(ctx, error):
     elif is_discord_service_unavailable_error(error):
         await send_hybrid_error(ctx, content=DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
     else:
-        await send_hybrid_error(ctx, content="⚠️ Error, contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.hybrid_command(name="duckroll", description="Guess if the ducks are higher or lower than 50!")
@@ -5896,7 +5887,7 @@ async def duckroll(ctx, guess: str):
             await subtract_balance(ctx.author.id, ctx.guild.id, bet_amount)
             await ctx.send(f"🦆 You rolled **{roll} ducks**!\n❌ Wrong guess! You lost **{bet_amount} coins** 💸")
     except Exception as e:
-        await ctx.send("⚠️ Something went wrong while processing your duckroll. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while processing your duckroll. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] duckroll command: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -6082,7 +6073,6 @@ async def work(ctx):
         high = int(high * multiplier)
         earned = random.randint(low, high)
         await add_balance(ctx.author.id, ctx.guild.id, earned)
-        # Energy drink reduces next cooldown by 50%: shift timestamp back by saved seconds
         effective_ts = datetime.now(timezone.utc) - timedelta(seconds=int(3600 * (1 - cooldown_reduction)))
         await economy_col.update_one(
             {"_id": cooldown_key}, {"$set": {"timestamp": effective_ts.isoformat()}}, upsert=True
@@ -6094,7 +6084,7 @@ async def work(ctx):
             msg += tool_break_notice
         await ctx.send(msg)
     except Exception as e:
-        await ctx.send("⚠️ Something went wrong while processing your work. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while processing your work. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] work command: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -6114,11 +6104,12 @@ async def work_error(ctx, error):
         else:
             return await send_hybrid_error(ctx, content=f"⏰ You're on cooldown! Try again in {seconds}s.")
     elif isinstance(error, commands.CommandError):
-        await send_hybrid_error(ctx, content="⚠️ Something went wrong while processing your work. Contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ Something went wrong while processing your work. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] work command: {type(error).__name__} - {error}")
 
 
 @bot.command()
+@staffperm("economy")
 @staff_only()
 @xp_earn(3, 6)
 async def reseteconomy(ctx):
@@ -6154,8 +6145,9 @@ async def jobstatus(ctx):
         last_check_str = user_data.get("last_promo_check")
         last_roll_str = user_data.get("last_promo_roll")
         if not job or not job_start_str:
+            prefix = await get_prefix(bot, ctx.message)
             return await ctx.send(
-                "💼 You don't currently have a job. Choose one with your server's prefix like `?choosejob`."
+                f"💼 You don't currently have a job. Choose one with `{prefix}choosejob`."
             )
         try:
             job_start = datetime.fromisoformat(job_start_str)
@@ -6164,7 +6156,7 @@ async def jobstatus(ctx):
         except Exception as e:
             print(f"[ERROR] jobstatus date parse: {type(e).__name__}: {e}")
             traceback.print_exc()
-            return await ctx.send("⚠️ An unexpected error occurred. Please try again later.")
+            return await ctx.send("⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
         now = datetime.now(timezone.utc)
         delta = now - job_start
         days = delta.days
@@ -6247,7 +6239,7 @@ async def jobstatus(ctx):
     except Exception as e:
         print(f"[jobstatus command error] {type(e).__name__}: {e}")
         traceback.print_exc()
-        await ctx.send("⚠️ An unexpected error occurred. Please contact thetruck.")
+        await ctx.send("⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.hybrid_command(name="fish", description="Go fishing to earn coins.")
@@ -6302,7 +6294,7 @@ async def fish(ctx):
         ctx.command.reset_cooldown(ctx)
         print(f"[ERROR] fish command: {type(e).__name__} - {e}")
         traceback.print_exc()
-        await ctx.send("⚠️ Something went wrong while fishing. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while fishing. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @fish.error
@@ -6312,7 +6304,7 @@ async def fish_error(ctx, error):
         minutes = total_seconds // 60
         return await send_hybrid_error(ctx, content=f"🕒 You can fish again in {minutes} minutes.")
     else:
-        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.hybrid_command(name="swim", description="Swim into the deep ocean to find exotic fish.")
@@ -6366,7 +6358,7 @@ async def swim(ctx):
         ctx.command.reset_cooldown(ctx)
         print(f"[ERROR] swim command: {type(e).__name__} - {e}")
         traceback.print_exc()
-        await ctx.send("⚠️ Something went wrong while swimming. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while swimming. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @swim.error
@@ -6376,7 +6368,7 @@ async def swim_error(ctx, error):
         minutes = total_seconds // 60
         return await send_hybrid_error(ctx, content=f"🕒 You can swim again in {minutes} minutes.")
     else:
-        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.hybrid_command(name="rob", description="Attempt to rob another user.", aliases=["steal"])
@@ -6451,7 +6443,7 @@ async def rob_error(ctx, error):
             )
         print(f"[ERROR] rob_error: {root_error}")
         traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
-        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.hybrid_command(name="crime", description="Attempt a risky crime to earn coins.")
@@ -6531,7 +6523,7 @@ async def crime(ctx, *, choice: str):
     except Exception as e:
         print(f"[ERROR] crime command: {type(e).__name__} - {e}")
         traceback.print_exc()
-        await ctx.send("⚠️ An unexpected error occurred. Please contact thetruck.")
+        await ctx.send("⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @crime.error
@@ -6551,7 +6543,7 @@ async def crime_error(ctx, error):
             )
         print(f"[ERROR] crime_error: {root_error}")
         traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
-        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.hybrid_command(name="passive", description="Toggle passive mode. Staff can manage others.")
@@ -7047,7 +7039,7 @@ async def hunt(ctx):
         await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
     except Exception as e:
         ctx.command.reset_cooldown(ctx)
-        await ctx.send("⚠️ Something went wrong while hunting. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while hunting. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] hunt command: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -7089,7 +7081,7 @@ async def mine(ctx):
         await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
     except Exception as e:
         ctx.command.reset_cooldown(ctx)
-        await ctx.send("⚠️ Something went wrong while mining. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while mining. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] mine command: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -7129,7 +7121,7 @@ async def dig(ctx):
         await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
     except Exception as e:
         ctx.command.reset_cooldown(ctx)
-        await ctx.send("⚠️ Something went wrong while digging. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while digging. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] dig command: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -7182,7 +7174,7 @@ async def bugcatch(ctx):
         await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
     except Exception as e:
         ctx.command.reset_cooldown(ctx)
-        await ctx.send("⚠️ Something went wrong while bug catching. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while bug catching. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[ERROR] bugcatch command: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -7395,7 +7387,7 @@ async def duckquiz_error(ctx, error):
             )
         print(f"[ERROR] duckquiz_error: {root_error}")
         traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
-        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact thetruck.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.hybrid_command(name="quackcount", description="Check the server's total quacks and a user's quacks.")
@@ -10315,7 +10307,8 @@ async def performance(ctx, days: int = 30):
         view = PerformanceView(ctx.guild.id, staff_members, days)
         await ctx.send(embed=embed, view=view)
     except Exception as e:
-        await ctx.send(f"❌ An error occurred: `{type(e).__name__}: {e}`")
+        print(f"[ERROR] performance command: {type(e).__name__}: {e}")
+        await ctx.send("❌ An unexpected error occurred while loading performance data.")
 
 
 class ModerationConfirmView(discord.ui.View):
@@ -10576,9 +10569,9 @@ async def modview_error(ctx: commands.Context, error: commands.CommandError):
     elif is_discord_service_unavailable_error(error):
         await send_hybrid_error(ctx, content=DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
     elif isinstance(error, commands.CommandInvokeError):
-        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please try again later.")
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
     else:
-        await send_hybrid_error(ctx, content="⚠️ An error occurred. Please try again later.")
+        await send_hybrid_error(ctx, content="⚠️ An error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
 @bot.event
@@ -10974,7 +10967,7 @@ async def quote(ctx):
         )
         await ctx.send(embed=embed)
     except Exception as e:
-        await ctx.send("⚠️ Something went wrong while fetching a quote. Contact thetruck.")
+        await ctx.send("⚠️ Something went wrong while fetching a quote. Please contact " + BOT_ADMIN_NAME + ".")
         print(f"[QUOTE ERROR] {type(e).__name__} - {e}")
 
 
@@ -11429,7 +11422,8 @@ async def restore(ctx, member: discord.Member, channel: discord.TextChannel = No
         )
         await ctx.send(embed=embed)
     except Exception as e:
-        await ctx.send(f"❌ Failed to restore permissions: `{e}`")
+        print(f"[ERROR] restore command: {type(e).__name__}: {e}")
+        await ctx.send("❌ Failed to restore permissions. Please try again.")
 
 
 @bot.command()
@@ -11455,7 +11449,8 @@ async def disableonetime(ctx, channel: discord.TextChannel = None):
         )
         await ctx.send(embed=embed)
     except Exception as e:
-        await ctx.send(f"❌ Failed to disable one-time restrictions: `{e}`")
+        print(f"[ERROR] disableonetime command: {type(e).__name__}: {e}")
+        await ctx.send("❌ Failed to disable one-time restrictions. Please try again.")
 
 
 @bot.command()

@@ -1,5 +1,5 @@
 [codespell]
-# "ore" is a legitimate in-game item name (iron ore, gold ore) — not a misspelling of "or"
-# "panting" is the act of breathing rapidly (ducks pant to cool down) — not "painting"
-# "arent" is informal all-caps shorthand in the bot chat prompt — not "aren't"
+# "ore" is a legitimate in game item name (iron ore, gold ore), not a misspelling of "or"
+# "panting" is the act of breathing rapidly (ducks pant to cool down), not "painting"
+# "arent" is informal all-caps shorthand in the bot chat prompt, not "aren't"
 ignore-words-list = ore,panting,arent
