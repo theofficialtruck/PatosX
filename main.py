@@ -1,7 +1,5 @@
 import sys
 import types
-
-sys.modules["audioop"] = types.ModuleType("audioop")
 import os
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -46,6 +44,8 @@ from itertools import cycle
 import math
 import random
 import inspect
+
+sys.modules["audioop"] = types.ModuleType("audioop")
 
 load_dotenv()
 
