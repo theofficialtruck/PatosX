@@ -1060,7 +1060,9 @@ def xp_earn(min_xp: int, max_xp: int):
 
             def looks_like_failure_message(content: str) -> bool:
                 text = content.strip().lower()
-                if text.startswith(("❌", "⚠️", "⏰", "🕒")):
+                if text.startswith(("❌", "⚠️", "⏰", "🕒", "🚫")):
+                    # 🚫 covers wrong-channel rejections ("can only be used in #…")
+                    # and blacklist blocks — neither should award XP.
                     return True
                 failure_markers = (
                     " on cooldown",
@@ -11466,10 +11468,31 @@ async def override(ctx):
         await ctx.send("❌ You don't have permission.")
 
 
+@bot.event
+async def on_close():
+    """Called by discord.py whenever the bot's websocket connection is closing.
+    Flush any open HTTP session so no ResourceWarning is raised on exit."""
+    global session
+    print("🛑 Bot connection closing — cleaning up resources...")
+    if session is not None and not session.closed:
+        await session.close()
+        print("✅ aiohttp session closed.")
+
+
+async def _main() -> None:
+    """Async entry-point.  Using ``async with bot`` guarantees bot.close() is
+    called even if start() raises, which triggers on_close() for clean-up."""
+    async with bot:
+        await bot.start(TOKEN)
+
+
 if __name__ == "__main__":
     print("📊 Checking registered commands...")
     for cmd in ():
         print(f"📌 Registered command: {cmd.name}, guilds: {cmd._guild_ids}")
     print(f"📊 Total commands registered: {len(list(bot.tree.walk_commands()))}")
-    print("Starting bot...")
-    bot.run(TOKEN)
+    print("Starting bot...  (press Ctrl+C to shut down gracefully)")
+    try:
+        asyncio.run(_main())
+    except KeyboardInterrupt:
+        print("\n🛑 Shutdown complete.")
