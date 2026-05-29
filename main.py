@@ -34,16 +34,16 @@ import io
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+import math
+import random
+import inspect
+from itertools import cycle
 
 try:
     import google.genai as genai_new
 except Exception:
     genai_new = None
 genai_old = None
-from itertools import cycle
-import math
-import random
-import inspect
 
 sys.modules["audioop"] = types.ModuleType("audioop")
 
