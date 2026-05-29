@@ -4836,7 +4836,9 @@ async def withdraw(ctx, amount: str):
         )
         await ctx.send(f"💰 You withdrew {withdraw_amount} coins.")
     except Exception as e:
-        await ctx.send("⚠️ Something went wrong while processing your withdrawal. Please contact " + BOT_ADMIN_NAME + ".")
+        await ctx.send(
+            "⚠️ Something went wrong while processing your withdrawal. Please contact " + BOT_ADMIN_NAME + "."
+        )
         print(f"[ERROR] withdraw command: {type(e).__name__} - {e}")
         traceback.print_exc()
 
@@ -5130,7 +5132,8 @@ class ShopDropdown(discord.ui.View):
             print(f"[ERROR] ShopDropdown purchase: {type(e).__name__}: {e}")
             traceback.print_exc()
             await interaction.response.send_message(
-                "❌ An unexpected error occurred during purchase. Please contact " + BOT_ADMIN_NAME + ".", ephemeral=True
+                "❌ An unexpected error occurred during purchase. Please contact " + BOT_ADMIN_NAME + ".",
+                ephemeral=True,
             )
 
 
@@ -6105,7 +6108,9 @@ async def work_error(ctx, error):
         else:
             return await send_hybrid_error(ctx, content=f"⏰ You're on cooldown! Try again in {seconds}s.")
     elif isinstance(error, commands.CommandError):
-        await send_hybrid_error(ctx, content="⚠️ Something went wrong while processing your work. Please contact " + BOT_ADMIN_NAME + ".")
+        await send_hybrid_error(
+            ctx, content="⚠️ Something went wrong while processing your work. Please contact " + BOT_ADMIN_NAME + "."
+        )
         print(f"[ERROR] work command: {type(error).__name__} - {error}")
 
 
@@ -6147,9 +6152,7 @@ async def jobstatus(ctx):
         last_roll_str = user_data.get("last_promo_roll")
         if not job or not job_start_str:
             prefix = await get_prefix(bot, ctx.message)
-            return await ctx.send(
-                f"💼 You don't currently have a job. Choose one with `{prefix}choosejob`."
-            )
+            return await ctx.send(f"💼 You don't currently have a job. Choose one with `{prefix}choosejob`.")
         try:
             job_start = datetime.fromisoformat(job_start_str)
             if job_start.tzinfo is None:
