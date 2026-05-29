@@ -57,7 +57,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
 
-DEBUG_COMMANDS = _env_flag("DUCKPARADISE_DEBUG_COMMANDS", default=False)
+DEBUG_COMMANDS = _env_flag("PATOSX_DEBUG_COMMANDS", default=False)
 
 
 def _running_under_pytest() -> bool:
@@ -5678,7 +5678,7 @@ async def inventory(ctx):
 async def give(ctx, member_name: str, amount: str):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
-    if member_name.lower() == "duckparadise":
+    if member_name.lower() == "patosx":
         return await ctx.send("🦆 I don't need coins, but thanks for the thought! Quack!")
     member = None
     if member_name.startswith("<@") and member_name.endswith(">"):
