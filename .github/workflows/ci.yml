@@ -5,6 +5,10 @@ name: CI pipeline
 on:
   pull_request:
     branches: ["main"]
+    
+permissions:
+  contents: read
+  statuses: write
 
 jobs:
   # Job 1: Linting code
