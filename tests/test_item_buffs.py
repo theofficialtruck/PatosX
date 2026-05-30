@@ -1,3 +1,19 @@
+# PatosX, a multipurpose Discord bot (moderation, economy, AI, fun)
+# Copyright (C) 2025 theofficialtruck
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 """Tests for coffee cup, energy drink, and lucky cookie buffs."""
 
 import pytest
@@ -5,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 import main
 
 
-# ── pop_food_item helper ──────────────────────────────────────────────────────
+# === pop_food_item helpers ================================================================
 
 
 def test_pop_food_item_finds_space_key():
@@ -54,7 +70,7 @@ def test_pop_food_item_dict_with_space_name_lower():
     assert inv == ["laptop"]
 
 
-# ── check_and_use_food_item key normalization ─────────────────────────────────
+# === check_and_use_food_item key normalization ================================
 
 
 @pytest.mark.asyncio
@@ -90,7 +106,7 @@ async def test_check_and_use_food_item_returns_false_when_not_found(monkeypatch)
     mock_col.update_one.assert_not_awaited()
 
 
-# ── Work command: energy drink ────────────────────────────────────────────────
+# === work command: energy drink ================================================================
 
 
 @pytest.mark.asyncio
@@ -149,7 +165,7 @@ async def test_work_energy_drink_not_consumed_when_still_on_cooldown(monkeypatch
         "job": "duck",
         "promotion_level": 0,
     }
-    # Last worked 2h ago — with 50% reduction cooldown is 6h, still 4h remaining
+    # Last worked 2h ago, with 50% reduction cooldown is 6h, still 4h remaining
     two_hours_ago = (dt_module.datetime.now(dt_module.timezone.utc) - dt_module.timedelta(hours=2)).isoformat()
     cooldown_data = {"_id": "work_cooldown_100-200", "timestamp": two_hours_ago}
 
@@ -190,7 +206,7 @@ async def test_work_energy_drink_allows_work_after_half_cooldown(monkeypatch):
         "job": "duck",
         "promotion_level": 0,
     }
-    # Worked 7h ago — normally 5h remaining, but with drink cooldown is 6h so 1h elapsed past threshold
+    # Worked 7h ago, normally 5h remaining, but with drink cooldown is 6h so 1h elapsed past threshold
     seven_hours_ago = (dt_module.datetime.now(dt_module.timezone.utc) - dt_module.timedelta(hours=7)).isoformat()
     cooldown_data = {"_id": "work_cooldown_100-200", "timestamp": seven_hours_ago}
 
@@ -214,7 +230,7 @@ async def test_work_energy_drink_allows_work_after_half_cooldown(monkeypatch):
     assert any("Energy Drink consumed" in t for t in sent_texts), "Should confirm energy drink was consumed"
 
 
-# ── Work command: lucky cookie ────────────────────────────────────────────────
+# === work command: lucky cookie ================================================================
 
 
 @pytest.mark.asyncio
@@ -289,7 +305,7 @@ async def test_work_no_buffs_when_inventory_empty(monkeypatch):
     assert not any("Lucky Cookie" in t for t in sent_texts)
 
 
-# ── Beg command: lucky cookie ─────────────────────────────────────────────────
+# === beg command: lucky cookie ================================================================
 
 
 @pytest.mark.asyncio
@@ -397,7 +413,7 @@ async def test_beg_no_cookie_message_without_item(monkeypatch):
     assert not any("Lucky Cookie" in t for t in sent_texts)
 
 
-# ── Crime command: coffee cup ─────────────────────────────────────────────────
+# === crime command: coffee cup ================================================================
 
 
 @pytest.mark.asyncio
@@ -543,7 +559,7 @@ async def test_crime_coffee_cup_increases_success_chance(monkeypatch):
     monkeypatch.setattr(main, "add_balance", AsyncMock())
     monkeypatch.setattr(main, "subtract_balance", AsyncMock())
 
-    # Use random.random = 0.74 → should succeed with coffee (adjusted 0.75) but fail without (0.50)
+    # Use random.random = 0.74: should succeed with coffee (adjusted 0.75) but fail without (0.50)
     monkeypatch.setattr(_random, "random", lambda: 0.74)
 
     await main.crime.callback(ctx, choice="shoplift")

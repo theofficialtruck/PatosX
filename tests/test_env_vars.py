@@ -1,10 +1,26 @@
-"""Tests for AUTHORIZED_USER_IDS and BEG_DONORS env variable behaviour."""
+# PatosX, a multipurpose Discord bot (moderation, economy, AI, fun)
+# Copyright (C) 2025 theofficialtruck
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+"""Tests for AUTHORIZED_USER_IDS and BEG_DONORS env variable behavior."""
 
 import os
 import main
 
 
-# ── AUTHORIZED_USER_IDS ──────────────────────────────────────────────────────
+# === AUTHORIZED_USER_IDS ================================================================
 
 
 def test_authorized_user_ids_is_a_set():
@@ -40,7 +56,7 @@ def test_authorized_user_ids_empty_when_env_empty(monkeypatch):
     assert ids == set()
 
 
-# ── BEG_DONORS ───────────────────────────────────────────────────────────────
+# === BEG_DONORS ================================================================
 
 
 def test_beg_donors_is_a_list():
@@ -74,7 +90,7 @@ def test_beg_donors_default_includes_thetruck():
     assert "thetruck" in main.BEG_DONORS, "thetruck must always be a beg donor"
 
 
-# ── Integration: no hardcoded IDs left in beg path ───────────────────────────
+# === integration: no hardcoded IDs left in beg path ===========================
 
 
 def test_beg_donor_default_contains_both_donors():

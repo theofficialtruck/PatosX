@@ -1,3 +1,8 @@
+# Copyright (C) 2025 theofficialtruck
+# This file is part of PatosX and is licensed under the GNU Affero General Public License v3.0 or later.
+# See the LICENSE file in the project root for details.
+
+
 # This workflow executes linting, credential scanning, security analysis, and unit tests
 # whenever a pull request is opened against the main branch.
 name: CI pipeline
@@ -5,7 +10,7 @@ name: CI pipeline
 on:
   pull_request:
     branches: ["main"]
-    
+
 permissions:
   contents: read
   statuses: write

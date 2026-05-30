@@ -1,3 +1,19 @@
+# PatosX, a multipurpose Discord bot (moderation, economy, AI, fun)
+# Copyright (C) 2025 theofficialtruck
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 """Tests for welcome message customisation and stop command authorized-user listing."""
 
 import pytest
@@ -5,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 import main
 
 
-# ── Welcome message template substitution ────────────────────────────────────
+# === welcome message template substitution ===================================
 
 
 def _make_member(name="TestUser", mention="<@123>", guild_name="Test Server", member_count=42):
@@ -79,7 +95,7 @@ def test_welcome_default_message_uses_template_vars():
     assert "{membercount}" not in result
 
 
-# ── on_member_join: no hardcoded server-specific strings remain ──────────────
+# === on_member_join: no hardcoded server-specific strings remain ===================
 
 
 def test_no_hardcoded_channel_ids_in_on_member_join():
@@ -99,7 +115,7 @@ def test_no_hardcoded_cdn_url_in_on_member_join():
     assert "1386456926300409939" not in source, "Hardcoded CDN attachment URL should not appear in on_member_join"
 
 
-# ── stop command: no hardcoded username strings remain ───────────────────────
+# === stop command: no hardcoded username strings remain =========================
 
 
 def test_stop_command_source_has_no_cutebatak():
@@ -117,7 +133,7 @@ def test_stop_command_source_has_no_hardcoded_ids():
     assert "903123014420406302" not in source
 
 
-# ── stop command: lists authorized user names from guild ─────────────────────
+# === stop command: lists authorized user names from guild =============================
 
 
 @pytest.mark.asyncio

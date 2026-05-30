@@ -1,2 +1,6 @@
+# Copyright (C) 2025 theofficialtruck
+# This file is part of Patos and is licensed under the GNU Affero General Public License v3.0 or later.
+# See the LICENSE file in the project root for details.
+
 # Normalize line endings: all text files use LF in the repository and on checkout
 * text=auto eol=lf
