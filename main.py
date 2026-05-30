@@ -14,77 +14,111 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+# sys and types are imported first because the audioop stub below must exist
+# before discord.py is loaded. audioop was removed in Python 3.13, but older
+# versions of discord.py reference it at import time for optional voice support.
+# Inserting a dummy module prevents an ImportError on modern Python versions.
 import sys
 import types
-import os
-import asyncio
-from datetime import datetime, timedelta, timezone
-from motor.motor_asyncio import AsyncIOMotorClient
-from duckquiz_questions import questions
-import discord
-from discord.ext import commands, tasks
-from discord.ui import View, Button, Select
-from discord import (
-    ButtonStyle,
-    ui,
-    NotFound,
-    app_commands,
-    SelectOption,
-    VerificationLevel,
-    AllowedMentions,
-    Embed,
-    File,
-)
-from typing import Union
-import aiohttp
-from discord.ext.commands import cooldown, BucketType
-from pytz import UTC
-from collections import defaultdict
-import time
-from dateutil import parser
-import traceback
-import re
+
+sys.modules["audioop"] = types.ModuleType("audioop")
+
+# Standard library
 import ast
-from dotenv import load_dotenv
+import asyncio
+import inspect
 import io
 import json
-import uuid
-from concurrent.futures import ThreadPoolExecutor
 import math
+import os
 import random
-import inspect
+import re
+import traceback
+import time
+import uuid
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from itertools import cycle
+from typing import Union
 
+# Third-party libraries
+import aiohttp
+from dateutil import parser
+from dotenv import load_dotenv
+from motor.motor_asyncio import AsyncIOMotorClient
+from pytz import UTC
+
+# Discord.py core and UI components
+import discord
+from discord import (
+    AllowedMentions,
+    ButtonStyle,
+    Embed,
+    File,
+    NotFound,
+    SelectOption,
+    VerificationLevel,
+    app_commands,
+    ui,
+)
+from discord.ext import commands, tasks
+from discord.ext.commands import BucketType, cooldown
+from discord.ui import Button, Select, View
+
+# Local data module, quiz questions loaded at startup
+from duckquiz_questions import questions
+
+# Google Gemini AI SDK. The newer google.genai package is preferred.
+# If it is not installed the bot falls back to the older google.generativeai package,
+# which is attempted later only when an AI response is actually needed.
 try:
     import google.genai as genai_new
 except Exception:
     genai_new = None
 genai_old = None
 
-sys.modules["audioop"] = types.ModuleType("audioop")
-
+# Load environment variables from the .env file into os.environ
 load_dotenv()
 
 
+# ============================================================
+# Runtime helpers and test detection
+# ============================================================
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
+    """Read a boolean environment variable. Accepts 1, true, t, yes, y, on (case insensitive)."""
     raw = os.getenv(name)
     if raw is None:
         return default
     return raw.strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
 
+# Verbose startup logging, disabled by default, set PATOSX_DEBUG_COMMANDS=true to enable
 DEBUG_COMMANDS = _env_flag("PATOSX_DEBUG_COMMANDS", default=False)
 
 
 def _running_under_pytest() -> bool:
+    """Return True when the process is being driven by pytest.
+    Used to skip real database calls and token validation during tests."""
     return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
 
 
 def _looks_like_motor_collection(obj) -> bool:
+    """Return True if obj is a real Motor MongoDB collection rather than the test stub."""
     return type(obj).__module__.startswith("motor.")
 
 
+# ============================================================
+# Test stubs for MongoDB, used when running under pytest
+# so no live database connection is required
+# ============================================================
+
+
 class _DummyAsyncCursor:
+    """Async iterator that immediately signals end of results, standing in for a real Motor cursor."""
+
     def __aiter__(self):
         return self
 
@@ -93,6 +127,9 @@ class _DummyAsyncCursor:
 
 
 class _DummyAsyncCollection:
+    """No-op MongoDB collection used during test runs.
+    Every write returns a success-shaped namespace, every read returns None or zero."""
+
     def __init__(self, name: str = ""):
         self._name = name
 
@@ -119,70 +156,104 @@ class _DummyAsyncCollection:
 
 
 class _DummyDB:
+    """Minimal database stand-in that returns a _DummyAsyncCollection for every attribute access."""
+
     def __getitem__(self, name: str):
         return _DummyAsyncCollection(name)
 
 
+# ============================================================
+# Environment variable loading and configuration
+# ============================================================
+
+# These five keys must all be present or the bot refuses to start
 required_keys = ["DISCORD_TOKEN", "MONGO_URI", "TENOR_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEYS"]
 env_vars = {key: os.getenv(key) for key in required_keys}
 missing = [key for key, value in env_vars.items() if not value]
 if missing and (not _running_under_pytest()):
-    raise ValueError(f"❌ Missing required environment variables: {', '.join(missing)}")
+    raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 if missing and _running_under_pytest():
+    # Fill empty strings so the rest of the module can import without crashing during tests
     for key in missing:
         env_vars[key] = ""
 mongo = AsyncIOMotorClient(env_vars["MONGO_URI"]) if env_vars.get("MONGO_URI") else None
 if not missing:
     print(f"All required environment variables loaded: {', '.join(required_keys)}")
+
+# Top-level credentials extracted for convenient use throughout the file
 TOKEN = env_vars.get("DISCORD_TOKEN", "")
 MONGO_URI = env_vars.get("MONGO_URI", "")
 TENOR_API_KEY = env_vars.get("TENOR_API_KEY", "")
 OPENROUTER_API_KEY = env_vars.get("OPENROUTER_API_KEY", "")
+
+# Multiple Gemini keys can be provided as a comma-separated list so that the bot
+# can round-robin between them and stay within per-key rate limits
 GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "").split(",")
 GEMINI_API_KEYS = [k.strip() for k in GEMINI_API_KEYS if k.strip()]
+
+# Comma-separated Discord user IDs that bypass staff-role checks and can use
+# privileged commands such as addmoney and override
 _AUTH_IDS_RAW = os.getenv("AUTHORIZED_USER_IDS", "")
 AUTHORIZED_USER_IDS: set = {int(uid.strip()) for uid in _AUTH_IDS_RAW.split(",") if uid.strip().isdigit()}
+
+# Display name shown in error messages, the bot lock notice, bot status, and the AI persona.
+# Falls back to a generic phrase when the env var is absent or blank.
 _BOT_ADMIN_NAME_RAW = os.getenv("BOT_ADMIN_NAME")
 BOT_ADMIN_NAME = (_BOT_ADMIN_NAME_RAW or "").strip() or "the bot administrator"
+
+# Names shown to users who run the beg command, defaults kept as fallback
 _BEG_DONORS_RAW = os.getenv("BEG_DONORS", "thetruck,CuteBatak")
 BEG_DONORS: list = [d.strip() for d in _BEG_DONORS_RAW.split(",") if d.strip()] or ["thetruck", "CuteBatak"]
+
+# ============================================================
+# MongoDB database and collection references
+# ============================================================
+
+# Use the real Motor client when credentials are present, otherwise use the test stub
 db = mongo["discord_bot"] if mongo is not None else _DummyDB()
-settings_col = db["guild_settings"]
-config_col = db["configuration"]
-logs_col = db["logs"]
-economy_col = db["economy"]
-mod_col = db["moderation"]
-afk_col = db["afk"]
-vanity_col = db["vanityroles"]
-sticky_col = db["stickynotes"]
-reaction_col = db["reactionroles"]
-shop_col = db["shop"]
-fines_col = db["fines"]
-welcome_col = db["welcome"]
-boost_col = db["boost"]
-guild_shop_col = db["guild_shop"]
-quiz_col = db["quiz"]
-disabled_col = db["disabled"]
-tickets_col = db["tickets"]
-ticket_panels_col = db["ticket_panels"]
-tickets_counter_col = db["tickets_counter"]
-giveaway_col = db["giveaway_col"]
-guild_config_col = db["guild_config"]
-invites_col = db["invites"]
-invite_config_col = db["invite_config"]
-blacklist_col = db["blacklist"]
-reminders_col = db["reminders"]
-polls_col = db["polls"]
-investments_col = db["investments"]
-drops_col = db["drops"]
-drop_instances_col = db["drop_instances"]
-roles_col = db["roles"]
-mutes_col = db["mutes"]
-duck_conversations_col = db["duck_conversations"]
-staffperms_col = db["staffperms"]
-minigameplayerdata_col = db["minigameplayerdata"]
-xp_col = db["xp"]
-badges_col = db["badges"]
+
+# Each collection maps to a specific domain of bot data
+settings_col = db["guild_settings"]  # per-guild prefix, staff role, channel config
+config_col = db["configuration"]  # extended feature configuration per guild
+logs_col = db["logs"]  # moderation action audit log
+economy_col = db["economy"]  # wallet, bank, inventory, job data per user
+mod_col = db["moderation"]  # warnings, bans, mute records
+afk_col = db["afk"]  # AFK status and messages
+vanity_col = db["vanityroles"]  # vanity role assignments
+sticky_col = db["stickynotes"]  # sticky message channel config
+reaction_col = db["reactionroles"]  # reaction-to-role mappings
+shop_col = db["shop"]  # global default shop items
+fines_col = db["fines"]  # outstanding fines per user
+welcome_col = db["welcome"]  # welcome message templates per guild
+boost_col = db["boost"]  # boost reward config
+guild_shop_col = db["guild_shop"]  # per-guild custom shop items
+quiz_col = db["quiz"]  # active quiz session state
+disabled_col = db["disabled"]  # disabled commands and categories per guild
+tickets_col = db["tickets"]  # open and closed ticket records
+ticket_panels_col = db["ticket_panels"]  # ticket panel button configuration
+tickets_counter_col = db["tickets_counter"]  # incrementing ticket number per guild
+giveaway_col = db["giveaway_col"]  # active giveaway records
+guild_config_col = db["guild_config"]  # miscellaneous guild-level toggles
+invites_col = db["invites"]  # invite link usage tracking
+invite_config_col = db["invite_config"]  # per-guild invite tracking settings
+blacklist_col = db["blacklist"]  # users blocked from bot commands
+reminders_col = db["reminders"]  # scheduled user reminders
+polls_col = db["polls"]  # active poll records
+investments_col = db["investments"]  # user investment positions
+drops_col = db["drops"]  # active money drop definitions
+drop_instances_col = db["drop_instances"]  # in-flight drop claim state
+roles_col = db["roles"]  # claimable role listings
+mutes_col = db["mutes"]  # active timed mute records
+duck_conversations_col = db["duck_conversations"]  # DuckGPT per-user conversation history
+staffperms_col = db["staffperms"]  # granular staff permission grants per user
+minigameplayerdata_col = db["minigameplayerdata"]  # persistent minigame state
+xp_col = db["xp"]  # experience point totals per user per guild
+badges_col = db["badges"]  # earned badge IDs and activity counters
+# ============================================================
+# Economy and game constants
+# ============================================================
+
+# Catch tables, each entry is (display name with emoji, coin value)
 fishes = [("🦐 Shrimp", 100), ("🐟 Fish", 200), ("🐠 Tropical Fish", 300), ("🦑 Squid", 400), ("🐡 Pufferfish", 500)]
 deep_ocean_fishes = [
     ("🐟 Anglerfish", 650),
@@ -204,6 +275,9 @@ bugs_to_catch = [
     ("🕷️ spider", 160),
     ("🦗 cricket", 150),
 ]
+
+# How many uses each durable tool has before it breaks.
+# Values are total uses, not hours or minutes.
 TOOL_DURABILITIES = {
     "shovel": 336,
     "laptop": 28,
@@ -214,21 +288,41 @@ TOOL_DURABILITIES = {
     "rifle": 336,
     "butterfly net": 336,
 }
+
+# Quiz session settings: 10 questions, pass threshold 80 percent
 NUM_Q = 10
 PASS_PCT = 80.0
+
+# ============================================================
+# Bot instance and invite cache setup
+# ============================================================
+
+# All intents are required for member join events, message content, and invite tracking
 intents = discord.Intents.all()
+
+# In-memory invite cache: guild_id -> (timestamp, list of Invite objects).
+# A dedicated async queue serialises API calls to avoid hitting Discord rate limits.
 invite_cache = {}
 last_invite_fetch = {}
-INVITE_CACHE_DURATION = 300
-GLOBAL_RATE_LIMIT = 30
+INVITE_CACHE_DURATION = 300  # seconds before a cached invite list is considered stale
+GLOBAL_RATE_LIMIT = 30  # minimum seconds between global invite API calls
 last_global_invite_fetch = 0
 invite_queue = asyncio.Queue()
 processing_invite = False
+
+# Legacy in-memory warning and action stores, kept for backwards compatibility
 warnings_data = {}
 actions_data = {}
 
 
+# ============================================================
+# Invite tracking helpers
+# ============================================================
+
+
 async def process_invite_queue():
+    """Consume invite fetch requests one at a time, respecting per-guild and global rate limits.
+    Runs as a persistent background task started on first need."""
     global processing_invite, last_global_invite_fetch
     processing_invite = True
     while True:
@@ -271,6 +365,8 @@ async def process_invite_queue():
 
 
 async def get_guild_invites(guild):
+    """Return the cached invite list for a guild, refreshing via the queue if the cache is stale.
+    Falls back to the last known list when a rate-limit error is encountered."""
     guild_id = guild.id
     current_time = time.time()
 
@@ -307,7 +403,14 @@ async def get_guild_invites(guild):
         return []
 
 
+# ============================================================
+# Bot instance
+# ============================================================
+
+
 async def get_prefix(bot, message):
+    """Fetch the command prefix for the guild that sent message.
+    Returns the default prefix when the guild has no saved setting or the message is a DM."""
     if not message.guild:
         return "?"
     doc = await settings_col.find_one({"guild": str(message.guild.id)})
@@ -338,12 +441,22 @@ async def on_guild_join(guild):
             print(f"[Badge Roles] Error setting up badge roles for new guild {guild.id}: {e}")
 
 
+# Per-guild lock flags set by the stop command, cleared by override
 bot_locks = {}
+# Rolling buffer of the last five unhandled runtime errors, surfaced by the debug command
 recent_errors = []
-DISCORD_SERVICE_UNAVAILABLE_MESSAGE = "⚠️ Discord is having trouble right now. Please try again in a moment."
+DISCORD_SERVICE_UNAVAILABLE_MESSAGE = "Discord is having trouble right now. Please try again in a moment."
+
+
+# ============================================================
+# Error handling utilities
+# ============================================================
 
 
 def unwrap_command_error(error: Exception) -> Exception:
+    """Walk the error chain produced by discord.py's command invocation wrapper
+    and return the innermost original exception. Prevents double-wrapping from
+    hiding the real cause in error handlers."""
     invoke_error_types = (commands.CommandInvokeError,)
     app_invoke_error = getattr(app_commands, "CommandInvokeError", None)
     if app_invoke_error is not None:
@@ -366,6 +479,9 @@ def unwrap_command_error(error: Exception) -> Exception:
 
 
 def is_discord_service_unavailable_error(error: Exception) -> bool:
+    """Return True when the root cause of error is a Discord 503 outage.
+    Checked before showing generic error messages so transient outages get
+    a friendlier, more specific response."""
     root = unwrap_command_error(error)
     if isinstance(root, discord.DiscordServerError):
         return True
@@ -376,8 +492,15 @@ def is_discord_service_unavailable_error(error: Exception) -> bool:
     return "503 service unavailable" in text or "upstream connect error" in text
 
 
+# ============================================================
+# Access control, permission checks, and global bot checks
+# ============================================================
+
+
 @bot.check
 async def global_lock_check(ctx):
+    """Block all commands (except override) when the guild lock is active.
+    The lock is set by the stop command and cleared by override."""
     if ctx.guild is None:
         return True
     if ctx.command.name == "override":
@@ -390,10 +513,12 @@ async def global_lock_check(ctx):
 
 @bot.event
 async def on_disconnect():
+    """Fired whenever the bot's WebSocket drops. Discord.py will reconnect automatically."""
     print("⚠️ Bot disconnected from Discord. Will attempt reconnect soon.")
 
 
 def staff_only():
+    """Return a command check that passes only when the invoker holds the configured staff role."""
 
     async def predicate(ctx):
         guild_id = str(ctx.guild.id)
@@ -407,6 +532,9 @@ def staff_only():
 
 
 async def check_staff_perm(ctx, perm_name: str):
+    """Return True if the invoker is allowed to perform perm_name.
+    Guild owner, bot-authorized IDs, and server administrators always pass.
+    Other users are checked against the granular staffperms collection."""
     if ctx.author == ctx.guild.owner or ctx.author.id in AUTHORIZED_USER_IDS:
         return True
     if ctx.author.guild_permissions.administrator:
@@ -417,6 +545,7 @@ async def check_staff_perm(ctx, perm_name: str):
     perms = data["permissions"]
     if "all" in perms:
         return True
+    # tickets:all grants access to every ticket sub-permission
     if perm_name.startswith("tickets:"):
         if "tickets:all" in perms:
             return True
@@ -425,6 +554,7 @@ async def check_staff_perm(ctx, perm_name: str):
 
 
 def staffperm(perm_name: str):
+    """Return a command check decorator that calls check_staff_perm with perm_name."""
 
     async def predicate(ctx):
         return await check_staff_perm(ctx, perm_name)
@@ -433,6 +563,7 @@ def staffperm(perm_name: str):
 
 
 async def is_blacklisted(guild: discord.Guild, user: discord.Member) -> bool:
+    """Return True if the member holds the guild's configured blacklist role."""
     guild_id = str(guild.id)
     settings = await settings_col.find_one({"guild": guild_id})
     if settings and "blacklist_role" in settings:
@@ -443,11 +574,13 @@ async def is_blacklisted(guild: discord.Guild, user: discord.Member) -> bool:
 
 
 async def is_maintenance_mode(guild_id):
+    """Return True when the guild has maintenance mode enabled in its settings."""
     settings = await settings_col.find_one({"guild": guild_id})
     return settings.get("maintenance_mode", False) if settings else False
 
 
 async def is_staff_user(ctx):
+    """Return True if the invoker is the guild owner, an administrator, or holds the staff role."""
     if ctx.author.id == ctx.guild.owner_id:
         return True
     if ctx.author.guild_permissions.administrator:
@@ -461,6 +594,8 @@ async def is_staff_user(ctx):
 
 
 async def check_maintenance_access(ctx):
+    """Return True when the guild is not in maintenance mode, or when the invoker is staff.
+    Sends an embed and returns False if a non-staff user tries to use commands during maintenance."""
     guild_id = str(ctx.guild.id)
     if not await is_maintenance_mode(guild_id):
         return True
@@ -485,6 +620,8 @@ async def check_maintenance_access(ctx):
 
 
 def blacklist_barrier():
+    """Return a command check that blocks blacklisted users and users during maintenance.
+    Works for both prefix commands (ctx.author) and slash interactions (interaction.user)."""
 
     async def predicate(ctx_or_interaction):
         if hasattr(ctx_or_interaction, "author"):
@@ -518,13 +655,21 @@ def blacklist_barrier():
 
 
 def maintenance_bypass():
+    """Return a check that always passes. Applied to commands that must work even in maintenance mode."""
+
     async def predicate(ctx):
         return True
 
     return commands.check(predicate)
 
 
+# ============================================================
+# Command help and suggestion utilities
+# ============================================================
+
+
 def get_command_syntax(command_name: str) -> str:
+    """Build a human-readable usage string for a command, including aliases and annotated parameters."""
     command = bot.get_command(command_name)
     if not command:
         return f"Command `{command_name}` not found."
@@ -557,6 +702,8 @@ def get_command_syntax(command_name: str) -> str:
 
 
 def find_similar_commands(command_name: str, limit: int = 3) -> list:
+    """Return up to limit command names that contain command_name as a substring or share a 3-character prefix.
+    Used to suggest corrections when a user types an unknown command."""
     command_name = command_name.lower()
     similar_commands = []
     for cmd in bot.walk_commands():
@@ -579,6 +726,8 @@ def find_similar_commands(command_name: str, limit: int = 3) -> list:
 
 @bot.event
 async def on_command_error(ctx, error):
+    """Central handler for prefix command errors. Provides user-friendly messages for common
+    error types and logs unexpected errors to the console and the recent_errors buffer."""
     if isinstance(error, commands.CheckFailure):
         return await ctx.send("❌ You don't have permission to use this command.")
     elif isinstance(error, commands.MissingRequiredArgument):
@@ -632,6 +781,8 @@ async def on_command_error(ctx, error):
 
 @bot.event
 async def on_app_command_error(interaction: discord.Interaction, error):
+    """Central handler for slash command errors. Mirrors on_command_error but responds via
+    interaction (ephemeral embed) rather than a plain channel message."""
     if isinstance(error, app_commands.CommandNotFound):
         similar = find_similar_commands(interaction.command.name if interaction.command else "")
         if similar:
@@ -713,6 +864,7 @@ async def on_app_command_error(interaction: discord.Interaction, error):
 
 @bot.check
 async def ensure_guild_context(ctx):
+    """Block all commands from being used in DMs. All bot functionality requires a guild context."""
     if ctx.guild is None:
         await ctx.send("❌ This bot can only be used in a server, not in DMs.")
         return False
@@ -721,6 +873,7 @@ async def ensure_guild_context(ctx):
 
 @bot.check
 async def check_disabled(ctx):
+    """Block commands or entire categories that a guild admin has disabled via the disable command."""
     if not ctx.guild:
         return True
     doc = await disabled_col.find_one({"guild": str(ctx.guild.id)})
@@ -734,6 +887,11 @@ async def check_disabled(ctx):
     return True
 
 
+# ============================================================
+# Command name sets used by the help system and XP gating
+# ============================================================
+
+# Commands shown in the staff section of the help embed, also excluded from XP awards
 STAFF_HELP_COMMANDS = {
     "kick",
     "ban",
@@ -804,6 +962,7 @@ STAFF_HELP_COMMANDS = {
     "disableonetime",
     "performance",
 }
+# Commands shown in the economy section of the help embed
 ECONOMY_HELP_COMMANDS = {
     "balance",
     "daily",
@@ -840,8 +999,19 @@ ECONOMY_HELP_COMMANDS = {
     "ducktowers",
     "mines",
 }
+# Commands that should not appear in any section of the help embed
 HELP_EXCLUDED_COMMANDS = {"override"}
+# Canonical keys for the legacy mystery box item, all variants purged on startup
 REMOVED_SHOP_ITEM_KEYS = {"mystery box", "mystery_box", "mysterybox"}
+
+
+# ============================================================
+# Badge definitions
+# Each entry maps a badge ID to its display name, emoji,
+# description, and a check lambda that returns True when earned.
+# check(economy_data, xp, extra_counters) -> bool
+# ============================================================
+
 BADGES = {
     "first_cast": {
         "name": "First Cast",
@@ -968,11 +1138,18 @@ BADGES = {
 }
 
 
+# ============================================================
+# Badge role management helpers
+# ============================================================
+
+
 def get_badge_role_name(badge: dict) -> str:
+    """Return the Discord role name for a badge, combining its emoji and display name."""
     return f"{badge['emoji']} {badge['name']}"
 
 
 async def ensure_badge_role_for_guild(guild: discord.Guild, badge: dict):
+    """Return the existing badge role in guild, creating it if it does not exist."""
     badge_name = get_badge_role_name(badge)
     role = discord.utils.get(guild.roles, name=badge_name)
     if role:
@@ -981,6 +1158,7 @@ async def ensure_badge_role_for_guild(guild: discord.Guild, badge: dict):
 
 
 async def ensure_badge_roles_for_guild(guild: discord.Guild) -> None:
+    """Create every badge role in guild that does not already exist. Errors are printed but not raised."""
     for badge in BADGES.values():
         try:
             await ensure_badge_role_for_guild(guild, badge)
@@ -989,12 +1167,14 @@ async def ensure_badge_roles_for_guild(guild: discord.Guild) -> None:
 
 
 async def ensure_all_badge_roles() -> None:
+    """Create all badge roles across every guild the bot is currently in."""
     for guild in bot.guilds:
         if isinstance(guild, discord.Guild):
             await ensure_badge_roles_for_guild(guild)
 
 
 async def get_badge_extra_data(guild_id: str, user_id: str) -> dict:
+    """Return the badge counter dict for a user, or an empty dict if no record exists."""
     key = f"{guild_id}-{user_id}"
     doc = await badges_col.find_one({"_id": key}) or {}
     return doc.get("counters", {})
@@ -1003,6 +1183,8 @@ async def get_badge_extra_data(guild_id: str, user_id: str) -> dict:
 async def check_and_award_badges(
     ctx_or_channel, guild: discord.Guild, member: discord.Member, economy_data: dict
 ) -> None:
+    """Check all badge conditions for member, award any newly earned badges, and post an announcement.
+    Skipped entirely when running under pytest to avoid database side effects."""
     if _running_under_pytest() and (_looks_like_motor_collection(badges_col) or _looks_like_motor_collection(xp_col)):
         return
     try:
@@ -1051,6 +1233,8 @@ async def check_and_award_badges(
 
 
 async def increment_badge_counter(guild_id: str, user_id: str, counter: str, amount: int = 1) -> None:
+    """Atomically add amount to a named badge counter for a user.
+    Counters drive badge checks such as fish_count, mine_count, and shop_purchases."""
     if _running_under_pytest() and _looks_like_motor_collection(badges_col):
         return
     key = f"{guild_id}-{user_id}"
@@ -1064,7 +1248,14 @@ async def increment_badge_counter(guild_id: str, user_id: str, counter: str, amo
         return
 
 
+# ============================================================
+# XP system, decorator that awards experience on successful commands
+# ============================================================
+
+
 def xp_earn(min_xp: int, max_xp: int):
+    """Decorator factory.  Wrap a command with XP logic: intercept ctx.send to detect failure
+    responses, skip XP for staff commands, then award a random amount between min_xp and max_xp."""
 
     def decorator(func):
         import functools
@@ -1145,7 +1336,14 @@ def xp_earn(min_xp: int, max_xp: int):
     return decorator
 
 
+# ============================================================
+# User data helpers, economy record access and normalization
+# ============================================================
+
+
 async def get_user(ctx, guild_id, user_id):
+    """Fetch the economy record for a user, creating it with defaults if absent.
+    Also backfills any missing fields and normalises the inventory on every read."""
     key = f"{guild_id}-{user_id}"
     guild_id = str(guild_id)
     user_id = str(user_id)
@@ -1195,6 +1393,8 @@ async def get_user(ctx, guild_id, user_id):
 
 
 def normalize_item_key(item):
+    """Return a canonical lowercase key for an inventory item regardless of its storage format.
+    Items can be plain strings or dicts with _id, name_lower, or name fields."""
     if isinstance(item, str):
         return item.strip().lower()
     if isinstance(item, dict):
@@ -1206,16 +1406,20 @@ def normalize_item_key(item):
 
 
 def normalize_shop_item_name(raw):
+    """Lowercase, strip, and convert underscores to spaces for consistent shop item comparison."""
     return str(raw or "").strip().lower().replace("_", " ")
 
 
 def is_removed_shop_item(raw):
+    """Return True if the item key matches one of the retired shop items in REMOVED_SHOP_ITEM_KEYS."""
     normalized = normalize_shop_item_name(raw)
     removed = {normalize_shop_item_name(key) for key in REMOVED_SHOP_ITEM_KEYS}
     return normalized in removed
 
 
 async def purge_removed_shop_items(guild_id: str | None = None):
+    """Delete all variants of removed shop items from both the global shop and guild shop collections.
+    Pass guild_id to limit the guild shop sweep to a single guild."""
     removed_space = {normalize_shop_item_name(key) for key in REMOVED_SHOP_ITEM_KEYS}
     removed_underscore = {name.replace(" ", "_") for name in removed_space}
     removed_compact = {name.replace(" ", "") for name in removed_space}
@@ -1235,6 +1439,8 @@ async def purge_removed_shop_items(guild_id: str | None = None):
 
 
 def normalize_inventory_items(inventory):
+    """Return (normalized_list, changed) where every durable tool and pet_duck entry is
+    converted to the canonical dict form with a valid uses_left count."""
     normalized = []
     changed = False
     for item in inventory or []:
@@ -1269,6 +1475,9 @@ def normalize_inventory_items(inventory):
 
 
 def consume_tool_use(inventory, tool_name):
+    """Decrement the uses_left on the first matching tool in inventory in place.
+    Returns (found, broke, uses_left_after). broke is True when the tool durability reached zero.
+    Returns (False, False, None) when the tool is not in inventory."""
     tool_key = tool_name.strip().lower()
     max_uses = TOOL_DURABILITIES.get(tool_key)
     if max_uses is None:
@@ -1293,6 +1502,8 @@ def consume_tool_use(inventory, tool_name):
 
 
 def check_target_permission(ctx, member: discord.Member):
+    """Return an error string if the invoker cannot act on member due to role hierarchy rules.
+    Returns None when the action is allowed."""
     if member == ctx.author:
         return "❌ You can't perform this action on yourself."
     if member == ctx.guild.owner:
@@ -1303,6 +1514,9 @@ def check_target_permission(ctx, member: discord.Member):
 
 
 async def check_channel(ctx, config_key: str, friendly_name: str = None) -> bool:
+    """Return True when the command is invoked in an allowed channel.
+    Staff members bypass the channel restriction. If no channel is configured the check passes.
+    Sends a denial message and returns False when the channel is not permitted."""
     settings = await settings_col.find_one({"guild": str(ctx.guild.id)}) or {}
     staff_role_id = settings.get("staff_role")
     if staff_role_id and discord.utils.get(ctx.author.roles, id=staff_role_id):
@@ -1339,6 +1553,8 @@ async def check_channel(ctx, config_key: str, friendly_name: str = None) -> bool
 
 
 async def log_action(ctx, message, user_id=None, action_type=None):
+    """Post a moderation log embed to the configured log channel and persist the record to MongoDB.
+    ctx may be None for automated actions such as mute expiry."""
     try:
         guild_id = str(ctx.guild.id)
         settings = await settings_col.find_one({"guild": guild_id})
@@ -1369,6 +1585,7 @@ async def log_action(ctx, message, user_id=None, action_type=None):
 
 
 def add_suffix(value: int) -> str:
+    """Format a large integer as a compact string using B, M, or K suffixes (e.g. 1500 -> 1.50K)."""
     if value >= 1000000000:
         return f"{value / 1000000000:.2f}B"
     elif value >= 1000000:
@@ -1380,6 +1597,7 @@ def add_suffix(value: int) -> str:
 
 
 def suffix_to_int(s: str) -> int:
+    """Parse a suffixed coin string back to a plain integer (e.g. '1.5K' -> 1500)."""
     s = s.upper().replace(",", "")
     if s.endswith("B"):
         return int(float(s[:-1]) * 1000000000)
@@ -1391,8 +1609,15 @@ def suffix_to_int(s: str) -> int:
         return int(float(s))
 
 
+# ============================================================
+# Background task loops
+# ============================================================
+
+
 @tasks.loop(seconds=15)
 async def check_expired_mutes():
+    """Automatically remove the Muted role from members whose timed mute has expired.
+    Checks both the dedicated mutes_col and the legacy muted_until field in mod_col."""
     count = await mutes_col.count_documents({})
     if count == 0:
         mod_count = await mod_col.count_documents({"muted_until": {"$exists": True}})
@@ -1462,6 +1687,8 @@ async def check_expired_mutes():
 
 @tasks.loop(minutes=1)
 async def check_muted_role_permissions():
+    """Ensure the Muted role has the correct deny overwrites on every channel in every guild.
+    Corrects any misconfigured permission overwrite automatically."""
     for guild in bot.guilds:
         mute_role = discord.utils.get(guild.roles, name="Muted")
         if not mute_role:
@@ -1507,11 +1734,18 @@ async def check_muted_role_permissions():
 @check_muted_role_permissions.before_loop
 @check_expired_mutes.before_loop
 async def before_unmute_loop():
+    """Wait for the bot to be fully connected before starting the mute management loops."""
     await bot.wait_until_ready()
+
+
+# ============================================================
+# Guild configuration commands
+# ============================================================
 
 
 @bot.command(name="configure", aliases=["config"])
 async def configure(ctx):
+    """Interactive setup wizard that walks guild admins through all bot configuration options."""
     settings = await settings_col.find_one({"guild": str(ctx.guild.id)}) or {}
     staff_role_id = settings.get("staff_role")
     if not staff_role_id:
@@ -1639,6 +1873,7 @@ async def configure_error(ctx, error):
 @staffperm("config")
 @staff_only()
 async def editconfig(ctx, *, args: str = None):
+    """Edit a single configuration value by name without running the full configure wizard."""
 
     def norm(s):
         return re.sub("\\s+", "_", s.strip().lower())
@@ -1800,6 +2035,7 @@ async def editconfig_error(ctx, error):
 @staffperm("config")
 @staff_only()
 async def viewconfig(ctx: commands.Context):
+    """Display all current bot configuration values for this guild in an embed."""
     config = await config_col.find_one({"guild": str(ctx.guild.id)})
     if not config:
         return await ctx.send("⚠️ No configuration found for this server.")
@@ -1864,17 +2100,27 @@ async def viewconfig_error(ctx, error):
 @staffperm("config")
 @staff_only()
 async def resetconfig(ctx):
+    """Delete all stored configuration for this guild and revert to defaults."""
     await config_col.delete_one({"guild": str(ctx.guild.id)})
     await ctx.send("🗑 Configuration has been completely reset for this server.")
 
 
+# ============================================================
+# DuckGPT AI integration (Google Gemini with OpenRouter fallback)
+# ============================================================
+
+# In-memory conversation history per user, keyed by user ID
 duck_conversations = {}
+# Timestamp of each user's last DuckGPT request, used for per-user rate limiting
 _duckgpt_last_used: dict[int, float] = {}
 _DUCKGPT_COOLDOWN_SECONDS = 5
+
+# System prompt defining DuckGPT's personality and response rules
 SYSTEM_PROMPT = f"You are DuckGPT a knowledgeable talking duck created by '{BOT_ADMIN_NAME}'. You can answer real questions in a SHORT, clear, and funny way while staying in duck character.If the user is named '{BOT_ADMIN_NAME}', NEVER EVER EVER EVER say 'my creator is {BOT_ADMIN_NAME}' or repeat that fact, just talk LIKE A NORMAL HUMAN EVEN THOUGH YOU ARENT. Always keep your reply to one sentence, humorous if possible, ending with one quack sound like 'Quack!' YOU CAN DO OTHERS PLEASE PLEASE PLEASE DONT STICK TO JUST QUACK. Never add blank lines or paragraphs. Never say things like 'you told me your name' or 'you didn't tell me your name'. If asked any kind of questions, give a short and accurate summary as a talking duck. If greeted, you can greet back naturally, but DONT YOU DARE repeat the full intro every time. Your name is DuckGPT when requested for your name MAKE SURE TO RESPOND WITH DuckGPT."
 
 
 async def cleanup_old_conversations():
+    """Remove DuckGPT conversation histories that have not been updated in 30 days."""
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(days=30)
         result = await duck_conversations_col.delete_many({"last_updated": {"$lt": cutoff}})
@@ -1885,18 +2131,24 @@ async def cleanup_old_conversations():
         return 0
 
 
+# Thread pool for blocking Gemini SDK calls so they do not block the asyncio event loop
 executor = ThreadPoolExecutor()
+# Tracks the currently active Gemini key for logging purposes
 active_key = None
+# Infinite cycle over the available Gemini keys for round-robin rotation
 GEMINI_KEY_CYCLE = cycle(GEMINI_API_KEYS)
 
 
 def next_gemini_key():
+    """Advance to the next Gemini API key in the round-robin cycle and return it."""
     global active_key
     active_key = next(GEMINI_KEY_CYCLE)
     return active_key
 
 
 def build_gemini_client_for_key(key: str, model_name: str):
+    """Return a client info dict for key and model_name.
+    Prefers the newer google.genai SDK, falling back to google.generativeai if unavailable."""
     if genai_new is not None and hasattr(genai_new, "Client"):
         try:
             client = genai_new.Client(api_key=key)
@@ -1925,6 +2177,8 @@ def build_gemini_client_for_key(key: str, model_name: str):
 
 
 def gemini_generate_once(client_info, prompt: str):
+    """Call the Gemini API synchronously using the appropriate SDK mode.
+    Designed to be run inside a ThreadPoolExecutor so it does not block the event loop."""
     if client_info["mode"] == "new":
         client = client_info["client"]
         model = client_info["model"]
@@ -1940,6 +2194,8 @@ def gemini_generate_once(client_info, prompt: str):
 
 
 async def get_gemini_client():
+    """Cycle through available Gemini keys and return the first working client info dict.
+    Returns None when all keys fail."""
     global active_key
     for _ in range(len(GEMINI_API_KEYS)):
         key = next_gemini_key()
@@ -1954,6 +2210,8 @@ async def get_gemini_client():
 
 
 async def generate_gemini_response(messages):
+    """Convert messages list to a flat prompt string, then call Gemini with automatic key rotation
+    and exponential back-off. Falls back to a duck-themed failure message when all keys are exhausted."""
     loop = asyncio.get_event_loop()
     prompt = "\n".join((f"{m['role'].capitalize()}: {m['content']}" for m in messages))
     client_info = await get_gemini_client()
@@ -1990,6 +2248,8 @@ async def generate_gemini_response(messages):
 
 
 async def ask_duck_gpt(ctx, prompt: str) -> str:
+    """Main entry point for a DuckGPT request. Enforces per-user cooldown, loads and saves
+    conversation history from MongoDB, prepends the SYSTEM_PROMPT, then calls generate_gemini_response."""
     if not ctx.guild:
         return "🦆 I can only assist you in servers, not in DMs!"
     guild_id = str(ctx.guild.id)
@@ -2089,12 +2349,20 @@ async def ask_duck_gpt(ctx, prompt: str) -> str:
         return f"🦆 {text}"
 
 
+# ============================================================
+# Sticky notes system
+# ============================================================
+
+# Tracks when each channel last had a sticky note reposted, to avoid excessive API calls
 last_sticky_trigger = defaultdict(float)
+# Maps channel_id to the most recently posted sticky message ID
 last_sticky_msg = {}
+# Maps guild_id -> channel_id -> True for channels that delete messages after one read
 onetime_channels = {}
 
 
 async def load_sticky_messages():
+    """Populate last_sticky_msg from the database at startup so existing stickies are tracked."""
     try:
         cursor = sticky_col.find({})
         async for doc in cursor:
@@ -2107,6 +2375,7 @@ async def load_sticky_messages():
 
 
 async def find_sticky_note_doc(guild_id: int, channel_id: int):
+    """Fetch the sticky note document for a channel, tolerating mixed int and string field storage."""
     guild_str = str(guild_id)
     channel_str = str(channel_id)
     return await sticky_col.find_one(
@@ -2122,6 +2391,7 @@ async def find_sticky_note_doc(guild_id: int, channel_id: int):
 
 
 async def load_onetime_channels():
+    """Load one-time-read channel configuration from the database into the onetime_channels dict."""
     try:
         cursor = settings_col.find({"onetime_channels": {"$exists": True}})
         async for doc in cursor:
@@ -2138,6 +2408,7 @@ async def load_onetime_channels():
 
 @tasks.loop(minutes=2)
 async def check_and_repost_stickies():
+    """Scan all sticky note configurations and repost any whose stored message has been deleted."""
     try:
         cursor = sticky_col.find({})
         async for doc in cursor:
@@ -2180,6 +2451,7 @@ async def check_and_repost_stickies():
 
 
 async def get_invites_count(guild_id: int, user_id: int):
+    """Return the total number of invite uses attributed to user_id in guild_id."""
     total_uses = 0
     async for code_doc in invites_col.find({"guild_id": str(guild_id), "inviter_id": str(user_id)}):
         try:
@@ -2190,6 +2462,8 @@ async def get_invites_count(guild_id: int, user_id: int):
 
 
 def parse_time(duration_str: str) -> int:
+    """Parse a human-readable duration string (e.g. '1h 30m', '2 days') and return total seconds.
+    Raises ValueError when the string contains no recognised time units."""
     multipliers = {
         "s": 1,
         "sec": 1,
@@ -2230,6 +2504,7 @@ def parse_time(duration_str: str) -> int:
     return int(total_seconds)
 
 
+# Lookup table used by words_to_number to convert English number words to integers
 WORDS_TO_NUM = {
     "zero": 0,
     "one": 1,
@@ -2268,6 +2543,8 @@ WORDS_TO_NUM = {
 
 
 def words_to_number(text: str) -> int | None:
+    """Convert a written-out English number such as 'one hundred' to its integer value.
+    Returns None if any word in text is not found in WORDS_TO_NUM."""
     words = text.lower().replace("-", " ").split()
     total, current = (0, 0)
     for word in words:
@@ -2286,6 +2563,8 @@ def words_to_number(text: str) -> int | None:
 
 
 def parse_amount(amount_str: str) -> int | None:
+    """Parse a coin amount string that may include suffixes (k, m, b, t) or written-out words.
+    Returns None when the string cannot be interpreted as a valid amount."""
     if not amount_str:
         return None
     s = amount_str.lower().replace(",", "").strip()
@@ -2312,28 +2591,39 @@ def parse_amount(amount_str: str) -> int | None:
         return None
 
 
+# ============================================================
+# Economy balance helpers
+# ============================================================
+
+
 async def get_balance(uid: int, guild_id: int) -> int:
+    """Return the current wallet balance for a user, defaulting to 0 when no record exists."""
     user_id = f"{guild_id}-{uid}"
     data = await economy_col.find_one({"_id": user_id})
     return data.get("wallet", 0) if data else 0
 
 
 async def add_balance(uid: int, guild_id: int, amount: int):
+    """Atomically increment the wallet balance for a user by amount."""
     user_id = f"{guild_id}-{uid}"
     await economy_col.update_one({"_id": user_id}, {"$inc": {"wallet": amount}}, upsert=True)
 
 
 async def subtract_balance(uid: int, guild_id: int, amount: int):
+    """Atomically decrement the wallet balance for a user by amount."""
     user_id = f"{guild_id}-{uid}"
     await economy_col.update_one({"_id": user_id}, {"$inc": {"wallet": -amount}}, upsert=True)
 
 
 async def update_user_balance(uid: int, guild_id: int, amount: int):
+    """Adjust the wallet balance for a user by amount (positive adds, negative subtracts)."""
     user_id = f"{guild_id}-{uid}"
     await economy_col.update_one({"_id": user_id}, {"$inc": {"wallet": amount}}, upsert=True)
 
 
 async def schedule_unmute(guild, member, remaining):
+    """Sleep for remaining seconds, then remove the Muted role from member.
+    Designed to run as a detached asyncio task created by the mute command."""
     try:
         await asyncio.sleep(remaining)
         if not guild:
@@ -2361,6 +2651,8 @@ async def schedule_unmute(guild, member, remaining):
 
 
 async def check_and_use_food_item(user_id, guild_id, item_id):
+    """Search the user's inventory for item_id, remove it, and persist the change.
+    Returns True if the item was found and consumed."""
     normalized_id = item_id.replace("_", " ").strip().lower()
     user_data = await get_user(None, guild_id, user_id)
     inventory = user_data.get("inventory", [])
@@ -2387,24 +2679,32 @@ def pop_food_item(inventory: list, item_id: str) -> bool:
 
 
 async def get_work_cooldown_reduction(user_id, guild_id):
+    """Return a cooldown multiplier for work. Consumes an energy drink from inventory if present,
+    returning 0.5 (half cooldown). Returns 1.0 (no reduction) otherwise."""
     if await check_and_use_food_item(user_id, guild_id, "energy_drink"):
         return 0.5
     return 1.0
 
 
 async def get_earnings_multiplier(user_id, guild_id):
+    """Return an earnings multiplier for work. Consumes a lucky cookie if present, returning 2.0.
+    Returns 1.0 (no bonus) otherwise."""
     if await check_and_use_food_item(user_id, guild_id, "lucky_cookie"):
         return 2.0
     return 1.0
 
 
 async def get_crime_bonus(user_id, guild_id):
+    """Return an extra bonus fraction for the crime command. Consumes a coffee cup if present,
+    returning 0.25 (25 percent bonus). Returns 0.0 otherwise."""
     if await check_and_use_food_item(user_id, guild_id, "coffee_cup"):
         return 0.25
     return 0.0
 
 
 async def ensure_shop_items():
+    """Seed the global shop with default items if they do not already exist.
+    Also purges any retired items before inserting to keep the shop clean."""
     await purge_removed_shop_items()
     initial_items = [
         {
@@ -2505,6 +2805,7 @@ async def ensure_shop_items():
 
 @tasks.loop(hours=1)
 async def check_expired_drops():
+    """Expire unclaimed money drops older than 3 days: delete their messages, refund non-staff drops."""
     three_days_ago = datetime.now(timezone.utc) - timedelta(days=3)
     query = {"claimed": False, "created_at": {"$lt": three_days_ago.isoformat()}}
     async for drop in drop_instances_col.find(query):
@@ -2531,6 +2832,7 @@ async def check_expired_drops():
 
 @tasks.loop(hours=24)
 async def periodic_cleanup():
+    """Daily maintenance: remove stale DuckGPT conversation histories from MongoDB."""
     deleted = await cleanup_old_conversations()
     print(f"[DuckGPT] Cleanup complete: {deleted} old conversations removed.")
 
@@ -2577,6 +2879,7 @@ session = None
 
 @tasks.loop(hours=1)
 async def cleanup_invite_cache():
+    """Remove invite cache entries that have not been refreshed within twice the cache duration."""
     current_time = time.time()
     expired_keys = []
     for guild_id, cached_data in invite_cache.items():
@@ -2594,6 +2897,7 @@ async def cleanup_invite_cache():
 
 @tasks.loop(hours=1)
 async def update_invite_cache():
+    """Proactively refresh the invite list for every guild to keep tracking data accurate."""
     for guild in bot.guilds:
         try:
             await get_guild_invites(guild)
@@ -2603,6 +2907,8 @@ async def update_invite_cache():
 
 
 async def load_sticky_notes():
+    """Re-post all sticky notes at startup, replacing old messages with fresh ones so they appear
+    at the bottom of each channel even if messages accumulated while the bot was offline."""
     print("📝 Loading sticky notes...")
     loaded_count = 0
     async for doc in sticky_col.find({}):
@@ -2631,6 +2937,7 @@ async def load_sticky_notes():
 
 
 async def repost_sticky_note(channel_id, guild_id):
+    """Delete the previous sticky note message and post a fresh one so it remains at the bottom."""
     doc = await find_sticky_note_doc(int(guild_id), int(channel_id))
     if not doc:
         return
@@ -2651,8 +2958,15 @@ async def repost_sticky_note(channel_id, guild_id):
         print(f"❌ Failed to repost sticky note: {e}")
 
 
+# ============================================================
+# Core event handlers: on_message, on_ready, on_member_join
+# ============================================================
+
+
 @bot.event
 async def on_message(message):
+    """Handle every incoming message. Processes commands, handles boosts, DuckGPT triggers,
+    quack counting, one-time channel deletions, AFK detection, and sticky note re-posting."""
     if message.author.bot:
         return
     await bot.process_commands(message)
@@ -2864,6 +3178,9 @@ async def on_message(message):
 
 @bot.event
 async def on_ready():
+    """Fired once after the bot has successfully connected and loaded its guild data.
+    Starts all background task loops, seeds the shop, loads sticky notes, syncs slash commands,
+    and sets the bot's presence. Guard-flagged so it only runs once even if the bot reconnects."""
     global invite_cache
     global session
     if getattr(bot, "views_loaded", False):
@@ -3052,6 +3369,8 @@ async def on_ready():
 
 
 async def run_flake8_lint(base_dir):
+    """Run flake8 on base_dir as a subprocess and return a list of issue strings.
+    Returns an empty list when the code is clean or flake8 is unavailable."""
     try:
         config_path = os.path.join(base_dir, "flake8_config.txt")
         process = await asyncio.create_subprocess_exec(
@@ -3079,6 +3398,7 @@ async def run_flake8_lint(base_dir):
 
 
 async def get_category_support_members(guild: discord.Guild, category_name: str):
+    """Return the guild members who have ticket permissions for category_name (or tickets:all or all)."""
     category_key = f"tickets:{category_name.lower()}"
     all_key = "tickets:all"
     docs = await staffperms_col.find({"guild": str(guild.id)}).to_list(None)
@@ -3097,6 +3417,7 @@ async def get_category_support_members(guild: discord.Guild, category_name: str)
 
 
 async def has_staff_role(member: discord.Member, guild: discord.Guild) -> bool:
+    """Return True when member holds the configured staff role in guild."""
     doc = await settings_col.find_one({"guild": str(guild.id)})
     rid = doc.get("staff_role") if doc else None
     if not rid:
@@ -3106,6 +3427,8 @@ async def has_staff_role(member: discord.Member, guild: discord.Guild) -> bool:
 
 
 async def get_ticket_button_permissions(guild_id: int):
+    """Return a list of SelectOption objects covering every ticket button category in the guild,
+    plus an 'All Ticket Types' option when at least one category exists."""
     cursor = ticket_panels_col.find({"guild": str(guild_id)})
     categories = {}
     async for panel in cursor:
@@ -3250,8 +3573,14 @@ class StaffPermissionView(ui.View):
         await self.select.load_options(message)
 
 
+# ============================================================
+# Staff management commands
+# ============================================================
+
+
 @bot.hybrid_command(name="staff", description="Give the staff role to a user (owner-only).")
 async def staff(ctx, member: discord.Member):
+    """Assign the configured staff role to member and open a permission selection menu."""
     data = await settings_col.find_one({"guild": str(ctx.guild.id)})
     if not data or "staff_role" not in data:
         return await ctx.send("❌ No staff role has been set. Use `.configure` first.")
@@ -3286,6 +3615,7 @@ async def staff(ctx, member: discord.Member):
 
 @bot.hybrid_command(name="unstaff", description="Remove the staff role and permissions from a user.")
 async def unstaff(ctx, member: discord.Member):
+    """Remove the configured staff role from member and delete their saved staff permissions."""
     data = await settings_col.find_one({"guild": str(ctx.guild.id)})
     if not data or "staff_role" not in data:
         return await ctx.send("❌ No staff role has been set. Use `.configure` first.")
@@ -3456,6 +3786,8 @@ _DEBUG_RED_SEP = "🔴" * 20
 @bot.command()
 @staff_only()
 async def debug(ctx):
+    """Run syntax checks, flake8 lint, and recent error summary. Detailed output goes to the console.
+    Only a brief result count is posted to Discord to avoid leaking internal error strings."""
     await ctx.send("🧪 Running debug checks - full details are printed to the **bot console**.")
 
     async def run_debug_checks():
@@ -4591,11 +4923,17 @@ async def ducktowers(ctx):
         print(f"[ERROR] ducktowers command: {type(e).__name__} - {e}")
 
 
+# ============================================================
+# Economy commands
+# ============================================================
+
+
 @bot.hybrid_command(name="balance", description="Check your balance.", aliases=["bal"])
 @app_commands.describe(member_name="The member whose balance to check (optional - shows your balance if not provided)")
 @blacklist_barrier()
 @xp_earn(4, 8)
 async def balance(ctx, member_name: str = None):
+    """Display the wallet and bank balance for the invoker or a named member."""
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     try:
@@ -4664,6 +5002,7 @@ async def balance(ctx, member_name: str = None):
 @blacklist_barrier()
 @xp_earn(10, 20)
 async def daily(ctx):
+    """Award the daily coin bonus, maintaining and rewarding a consecutive-day streak."""
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     try:
@@ -4739,6 +5078,7 @@ async def daily(ctx):
 @blacklist_barrier()
 @xp_earn(8, 16)
 async def beg(ctx):
+    """Beg a random donor for coins. Has a 15-minute cooldown and a lucky-cookie bonus."""
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     try:
@@ -4795,6 +5135,7 @@ async def beg(ctx):
 @blacklist_barrier()
 @xp_earn(5, 10)
 async def deposit(ctx, amount: str):
+    """Move coins from wallet to bank. Applies a 5 percent deposit tax."""
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     try:
@@ -4831,6 +5172,7 @@ async def deposit(ctx, amount: str):
 @blacklist_barrier()
 @xp_earn(5, 10)
 async def withdraw(ctx, amount: str):
+    """Move coins from bank to wallet. No fee applied on withdrawal."""
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     try:
@@ -6017,6 +6359,8 @@ async def choosejob(ctx):
 @blacklist_barrier()
 @xp_earn(20, 35)
 async def work(ctx):
+    """Perform a work shift in the user's current job. Enforces a per-job cooldown,
+    applies food-item bonuses, and calculates earnings based on job tier and promotions."""
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     try:
@@ -6137,6 +6481,7 @@ async def work_error(ctx, error):
 @staff_only()
 @xp_earn(3, 6)
 async def reseteconomy(ctx):
+    """Wipe all economy records for the guild. Requires economy staff permission. Irreversible."""
     await ctx.defer()
     try:
         result = await economy_col.delete_many({"_id": {"$regex": f"^{ctx.guild.id}-"}})
@@ -6793,6 +7138,7 @@ async def sell(ctx, *, item: str = None):
 
 
 async def create_investment(user_id: str, company: str, amount: int):
+    """Insert a new investment record with a generated UUID. Sets current_value equal to amount at creation."""
     inv_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
@@ -6812,6 +7158,7 @@ async def create_investment(user_id: str, company: str, amount: int):
 
 
 def get_investment_date(inv: dict) -> datetime:
+    """Parse the investment creation date from the record, falling back to now when missing or malformed."""
     date_raw = inv.get("date") or inv.get("timestamp")
     if not date_raw:
         return datetime.now(timezone.utc)
@@ -6825,6 +7172,7 @@ def get_investment_date(inv: dict) -> datetime:
 
 
 async def calculate_investment_value(inv: dict) -> int:
+    """Return the current integer value of an investment, falling back to the original amount."""
     current_value = inv.get("current_value")
     if current_value is None:
         current_value = inv.get("amount", 0)
@@ -6835,10 +7183,13 @@ async def calculate_investment_value(inv: dict) -> int:
 
 
 def pick_daily_investment_change_pct() -> float:
+    """Sample a daily percentage change for an investment. Weighted slightly toward small losses."""
     return random.choices([-0.03, -0.02, -0.01, 0.01, 0.02, 0.03], weights=[18, 18, 18, 16, 15, 15], k=1)[0]
 
 
 async def refresh_user_investments_for_today(investments: list[dict], now: datetime | None = None) -> list[dict]:
+    """Apply daily price changes to each investment that has not been refreshed today.
+    Returns the updated list of investment dicts."""
     if now is None:
         now = datetime.now(timezone.utc)
     refresh_date = now.date().isoformat()
@@ -7914,11 +8265,19 @@ class TicketCategoryButton(discord.ui.Button):
         )
 
 
+# ============================================================
+# Ticket system helpers and commands
+# ============================================================
+
+
 def is_prefix(ctx):
+    """Return True when the context originated from a prefix command rather than a slash interaction."""
     return not hasattr(ctx, "interaction") or ctx.interaction is None
 
 
 async def send_hybrid_error(ctx, *, content=None, embed=None, delete_after=None):
+    """Send an error response that works for both prefix commands and slash interactions.
+    Also marks the context so XP is not awarded for this invocation."""
     setattr(ctx, "_skip_xp_award", True)
     if is_prefix(ctx):
         if embed is None and delete_after is None:
@@ -7937,6 +8296,7 @@ async def send_hybrid_error(ctx, *, content=None, embed=None, delete_after=None)
 
 
 async def ping_ticket_roles(channel: discord.TextChannel, guild_id: str, opener_id: int = None):
+    """Mention any staff members with ticket permissions in the newly created ticket channel."""
     try:
         allowed_members = {}
         staff_role_mentions = set()
@@ -7973,6 +8333,8 @@ async def ping_ticket_roles(channel: discord.TextChannel, guild_id: str, opener_
 
 
 async def actually_close_ticket(ctx, opener, forced=False):
+    """Snapshot the ticket channel's message history, store the transcript, then delete the channel.
+    forced=True indicates the close was initiated by staff rather than the ticket opener."""
     channel = ctx.channel
     messages = [msg async for msg in channel.history(limit=None, oldest_first=True)]
     transcript_text = "\n".join([f"[{msg.created_at}] {msg.author}: {msg.content}" for msg in messages])
@@ -9473,10 +9835,16 @@ async def drop_error(ctx, error):
         await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred.\nPlease contact an administrator.")
 
 
+# ============================================================
+# Moderation commands
+# ============================================================
+
+
 @bot.command(name="kick", description="Kick a member. Staff-only.")
 @staffperm("kick")
 @staff_only()
 async def kick(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    """Kick member from the guild, log the action, and send a result message."""
     err = check_target_permission(ctx, member)
     if err:
         return await ctx.send(err)
@@ -9502,6 +9870,7 @@ async def kick(ctx, member: discord.Member, *, reason: str = "No reason provided
 @staffperm("ban")
 @staff_only()
 async def ban(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    """Prompt for confirmation before banning member, then execute the ban and log it."""
     err = check_target_permission(ctx, member)
     if err:
         return await ctx.send(err)
@@ -9840,6 +10209,7 @@ async def setprefix(ctx, new: str):
 @bot.hybrid_command(name="userinfo", description="View info about the specified user.")
 @app_commands.describe(member="The user to check (optional - shows your info if not provided)")
 async def userinfo(ctx, member: discord.Member = None):
+    """Show account creation date, server join date, and warning count for member."""
     member = member or ctx.author
     join = member.joined_at.strftime("%Y-%m-%d")
     created = member.created_at.strftime("%Y-%m-%d")
@@ -9855,6 +10225,7 @@ async def userinfo(ctx, member: discord.Member = None):
 
 
 async def fetch_punishments(guild_id: int, user_id: int):
+    """Return a formatted string listing all recorded punishments for a user in a guild."""
     data = await mod_col.find_one({"guild": str(guild_id), "user": str(user_id)})
     if not data:
         return "No recorded punishments."
@@ -10149,6 +10520,8 @@ class PerformanceView(discord.ui.View):
 
 
 async def generate_performance_analytics(guild_id, staff_id, days=30):
+    """Aggregate moderation actions and message counts for staff_id over the last days days.
+    Returns a dict containing action totals, averages, peak hours, and a recent activity list."""
     try:
         analytics = {
             "total_actions": 0,
@@ -10300,6 +10673,8 @@ async def get_user_message_count(guild_id, user_id, since_date):
 @staffperm("other_moderation")
 @staff_only()
 async def performance(ctx, days: int = 30):
+    """Show a staff performance report with action counts, message stats, and peak-activity times.
+    Defaults to the last 30 days. Detailed errors are printed to the console only."""
     try:
         staff_role_id = None
         settings = await settings_col.find_one({"guild": str(ctx.guild.id)})
@@ -10540,6 +10915,7 @@ class WarnModal(discord.ui.Modal, title="Moderator Action"):
 @staffperm("other_moderation")
 @staff_only()
 async def modview(ctx, member: discord.Member):
+    """Send a detailed embed with member account info, roles, permissions, flags, and punishment history."""
     punishments = await fetch_punishments(ctx.guild.id, member.id)
     mod_perms = format_permissions(member)
     roles = format_roles(member)
@@ -10795,6 +11171,8 @@ async def testboost(ctx, member: discord.Member = None):
 
 @bot.event
 async def on_member_join(member):
+    """Fired when a new member joins. Tracks which invite was used, sends the welcome message,
+    re-applies any active mute, and ensures badge roles are available for the member."""
     guild = member.guild
     try:
         doc = await guild_config_col.find_one({"guild_id": str(guild.id)}) or {}
@@ -10925,6 +11303,7 @@ async def on_member_join(member):
 
 @bot.event
 async def on_member_remove(member: discord.Member):
+    """Fired when a member leaves or is removed. Updates invite leave counts to keep stats accurate."""
     guild = member.guild
     code_doc = await invites_col.find_one({"guild_id": str(guild.id), "joined_users": str(member.id)})
     if code_doc:
@@ -10995,6 +11374,7 @@ async def quote(ctx):
 
 @tasks.loop(seconds=0.01)
 async def check_reminders():
+    """Fire any due reminders by DMing the requesting user, then delete the reminder record."""
     now = datetime.now(timezone.utc)
     reminders = await reminders_col.find({"remind_at": {"$lte": now}}).to_list(length=None)
     for reminder in reminders:
@@ -11009,11 +11389,13 @@ async def check_reminders():
 
 @check_reminders.before_loop
 async def before_check_reminders():
+    """Wait for the bot to be ready before starting the reminder polling loop."""
     await bot.wait_until_ready()
 
 
 @bot.hybrid_command(name="serverinfo", description="View server information")
 async def serverinfo(ctx):
+    """Display a detailed embed with server statistics including member counts, channels, and boosts."""
     guild = ctx.guild
     embed = discord.Embed(title=f"📜 Server Information - {guild.name}", color=discord.Color.blurple())
     embed.set_thumbnail(url=guild.icon.url if guild.icon else discord.Embed.Empty)
@@ -11085,6 +11467,7 @@ class TutorialPages(discord.ui.View):
 
 @bot.hybrid_command(name="tutorial", description="Learn how to use each bot system.")
 async def tutorial(ctx):
+    """Send a paginated tutorial embed showing current server configuration and how to use each feature."""
     settings = await settings_col.find_one({"guild": str(ctx.guild.id)}) or {}
     config = await config_col.find_one({"guild": str(ctx.guild.id)}) or {}
     invite_cfg = await invite_config_col.find_one({"guild": str(ctx.guild.id)}) or {}
@@ -11305,6 +11688,8 @@ bot.remove_command("help")
 
 @bot.hybrid_command(name="help", description="View bot commands.", aliases=["commands", "cmds"])
 async def help(ctx):
+    """Display a paginated help embed. Economy commands are shown to everyone,
+    and staff commands are shown only when the invoker holds the configured staff role."""
     doc = await settings_col.find_one({"guild": str(ctx.guild.id)})
     prefix = doc.get("prefix", "?") if doc else "?"
     staff_role = ctx.guild.get_role(doc.get("staff_role")) if doc else None
@@ -11371,10 +11756,16 @@ async def help(ctx):
     await ctx.send(embed=pages[0], view=view)
 
 
+# ============================================================
+# Bot control and one-time channel commands
+# ============================================================
+
+
 @bot.command()
 @staffperm("stopbot")
 @staff_only()
 async def stop(ctx):
+    """Lock the bot for this guild so only the override command works. Lists authorized users."""
     bot_locks[str(ctx.guild.id)] = True
     names = []
     for uid in AUTHORIZED_USER_IDS:
@@ -11396,6 +11787,7 @@ async def stop(ctx):
 @staffperm("config")
 @staff_only()
 async def onetime(ctx, channel: discord.TextChannel = None):
+    """Configure a channel so non-staff members can only send one message before losing send permissions."""
     target_channel = channel or ctx.channel
     guild_id = str(ctx.guild.id)
     channel_id = str(target_channel.id)
@@ -11426,6 +11818,7 @@ async def onetime(ctx, channel: discord.TextChannel = None):
 @staffperm("config")
 @staff_only()
 async def restore(ctx, member: discord.Member, channel: discord.TextChannel = None):
+    """Restore send permissions for a member in a one-time channel so they can message again."""
     target_channel = channel or ctx.channel
     guild_id = str(ctx.guild.id)
     channel_id = str(target_channel.id)
@@ -11452,6 +11845,7 @@ async def restore(ctx, member: discord.Member, channel: discord.TextChannel = No
 @staffperm("config")
 @staff_only()
 async def disableonetime(ctx, channel: discord.TextChannel = None):
+    """Remove one-time channel restrictions and restore send permissions for all affected members."""
     target_channel = channel or ctx.channel
     guild_id = str(ctx.guild.id)
     channel_id = str(target_channel.id)
@@ -11477,6 +11871,7 @@ async def disableonetime(ctx, channel: discord.TextChannel = None):
 
 @bot.command()
 async def override(ctx):
+    """Unlock the bot for this guild. Only authorized user IDs from AUTHORIZED_USER_IDS may use this."""
     if ctx.author.id in AUTHORIZED_USER_IDS:
         bot_locks[str(ctx.guild.id)] = False
         await ctx.send("🚀 Bot unlocked!")
