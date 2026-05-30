@@ -21,7 +21,10 @@
 import sys
 import types
 
-sys.modules["audioop"] = types.ModuleType("audioop")
+try:
+    __import__("audioop")
+except ImportError:
+    sys.modules["audioop"] = types.ModuleType("audioop")
 
 # Standard library
 import ast
