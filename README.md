@@ -135,10 +135,11 @@ If PatosX is made available for use over a network, the corresponding source cod
 
 ## Contact
 
-Project owner: `theofficialtruck`
+Project owner: `theofficialtruck`\
+PatosX's Main Discord: [Duck Paradise](https://discord.gg/DuckParadise)
 
 For questions, permissions, or other inquiries:
 
-- Discord: theofficialtruck
-- GitHub: [theofficialtruck](https://github.com/theofficialtruck)
+- Discord: theofficialtruck (or open a ticket in the Discord server)
 - Email: `theofficialtruck@gmail.com`
+- GitHub: [theofficialtruck](https://github.com/theofficialtruck)
