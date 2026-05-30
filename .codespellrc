@@ -1,3 +1,7 @@
+# Copyright (C) 2025 theofficialtruck
+# This file is part of Patos and is licensed under the GNU Affero General Public License v3.0 or later.
+# See the LICENSE file in the project root for details.
+
 [codespell]
 # "ore" is a legitimate in game item name (iron ore, gold ore), not a misspelling of "or"
 # "panting" is the act of breathing rapidly (ducks pant to cool down), not "painting"

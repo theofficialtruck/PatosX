@@ -1,3 +1,19 @@
+# PatosX, a multipurpose Discord bot (moderation, economy, AI, fun)
+# Copyright (C) 2025 theofficialtruck
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 import sys
 import types
 import os
@@ -57,7 +73,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "t", "yes", "y", "on")
 
 
-DEBUG_COMMANDS = _env_flag("DUCKPARADISE_DEBUG_COMMANDS", default=False)
+DEBUG_COMMANDS = _env_flag("PATOSX_DEBUG_COMMANDS", default=False)
 
 
 def _running_under_pytest() -> bool:
@@ -1060,7 +1076,9 @@ def xp_earn(min_xp: int, max_xp: int):
 
             def looks_like_failure_message(content: str) -> bool:
                 text = content.strip().lower()
-                if text.startswith(("❌", "⚠️", "⏰", "🕒")):
+                if text.startswith(("❌", "⚠️", "⏰", "🕒", "🚫")):
+                    # 🚫 covers wrong-channel rejections ("can only be used in #…")
+                    # and blacklist blocks — neither should award XP.
                     return True
                 failure_markers = (
                     " on cooldown",
@@ -5676,7 +5694,7 @@ async def inventory(ctx):
 async def give(ctx, member_name: str, amount: str):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
-    if member_name.lower() == "duckparadise":
+    if member_name.lower() == "patosx":
         return await ctx.send("🦆 I don't need coins, but thanks for the thought! Quack!")
     member = None
     if member_name.startswith("<@") and member_name.endswith(">"):
@@ -11466,10 +11484,31 @@ async def override(ctx):
         await ctx.send("❌ You don't have permission.")
 
 
+@bot.event
+async def on_close():
+    """Called by discord.py whenever the bot's websocket connection is closing.
+    Flush any open HTTP session so no ResourceWarning is raised on exit."""
+    global session
+    print("🛑 Bot connection closing — cleaning up resources...")
+    if session is not None and not session.closed:
+        await session.close()
+        print("✅ aiohttp session closed.")
+
+
+async def _main() -> None:
+    """Async entry-point.  Using ``async with bot`` guarantees bot.close() is
+    called even if start() raises, which triggers on_close() for clean-up."""
+    async with bot:
+        await bot.start(TOKEN)
+
+
 if __name__ == "__main__":
     print("📊 Checking registered commands...")
     for cmd in ():
         print(f"📌 Registered command: {cmd.name}, guilds: {cmd._guild_ids}")
     print(f"📊 Total commands registered: {len(list(bot.tree.walk_commands()))}")
-    print("Starting bot...")
-    bot.run(TOKEN)
+    print("Starting bot...  (press Ctrl+C to shut down gracefully)")
+    try:
+        asyncio.run(_main())
+    except KeyboardInterrupt:
+        print("\n🛑 Shutdown complete.")

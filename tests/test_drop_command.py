@@ -1,4 +1,20 @@
-"""Tests for the drop command: no XP, always-public embed."""
+# PatosX, a multipurpose Discord bot (moderation, economy, AI, fun)
+# Copyright (C) 2025 theofficialtruck
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+"""Tests for the drop command: no xp, always-public embed."""
 
 import inspect
 import pytest
@@ -6,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import main
 
 
-# ── Decorator checks (static) ─────────────────────────────────────────────────
+# === decorator checks (static) ================================================================
 
 
 def test_drop_command_has_no_xp_earn_decorator():
@@ -27,7 +43,7 @@ def test_drop_xp_earn_not_in_decorators():
         assert "xp_earn" not in str(wrapper)
 
 
-# ── Prefix path: drop embed is sent publicly ──────────────────────────────────
+# === prefix path: drop embed is sent publicly ==================================
 
 
 @pytest.mark.asyncio
@@ -135,7 +151,7 @@ async def test_drop_no_xp_message_sent(monkeypatch):
     ctx.send.assert_not_awaited()
 
 
-# ── Member drop: balance deducted and refunded on failure ─────────────────────
+# === member drop: balance deducted and refunded on failure  ========================
 
 
 @pytest.mark.asyncio

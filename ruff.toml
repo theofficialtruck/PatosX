@@ -1,4 +1,9 @@
-# Ruff linter configuration for DuckParadise
+# Copyright (C) 2025 theofficialtruck
+# This file is part of Patos and is licensed under the GNU Affero General Public License v3.0 or later.
+# See the LICENSE file in the project root for details.
+
+
+# Ruff linter configuration for PatosX
 # See https://docs.astral.sh/ruff/configuration/
 
 # Default line length (ruff default is 88)

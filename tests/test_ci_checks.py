@@ -1,5 +1,21 @@
+# PatosX, a multipurpose Discord bot (moderation, economy, AI, fun)
+# Copyright (C) 2025 theofficialtruck
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 """
-CI quality gate checks — run these locally before pushing to avoid PR failures.
+CI quality gate checks, run these locally before pushing to avoid PR failures.
 
 Covers: Bandit (B110 bare-except-pass), Ruff (lint errors), codespell (spelling).
 Each test calls the real tool as a subprocess so the result matches CI exactly.
@@ -13,7 +29,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# === helpers ================================================================
 
 
 def _run(*args, **kwargs) -> subprocess.CompletedProcess:
@@ -30,7 +46,7 @@ def _run(*args, **kwargs) -> subprocess.CompletedProcess:
     )
 
 
-# ── Bandit ───────────────────────────────────────────────────────────────────
+# === bandit ================================================================
 
 
 def test_bandit_no_b110_in_main():
@@ -49,7 +65,7 @@ def test_bandit_no_b110_in_main():
     )
     # bandit exits 0 (no issues) or 1 (issues found)
     if result.returncode not in (0, 1):
-        # tool not available or crashed — skip rather than fail
+        # tool not available or crashed: skip rather than fail
         import pytest
 
         pytest.skip(f"bandit exited {result.returncode}: {result.stderr[:300]}")
@@ -101,7 +117,7 @@ def test_bandit_no_b110_in_tests():
     )
 
 
-# ── Ruff ─────────────────────────────────────────────────────────────────────
+# === ruff ================================================================
 
 
 def test_ruff_no_errors_main():
@@ -122,7 +138,7 @@ def test_ruff_no_errors_main():
     try:
         diagnostics = json.loads(result.stdout)
     except json.JSONDecodeError:
-        # non-zero exit with no parseable JSON means configuration error
+        # non zero exit with no parseable JSON means configuration error
         import pytest
 
         pytest.skip("ruff output was not JSON")
@@ -162,7 +178,7 @@ def test_ruff_no_errors_tests():
     )
 
 
-# ── codespell ─────────────────────────────────────────────────────────────────
+# === codespell ================================================================
 
 
 def test_codespell_no_spelling_errors():
