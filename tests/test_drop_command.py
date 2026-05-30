@@ -150,6 +150,7 @@ async def test_drop_no_xp_message_sent(monkeypatch):
     # ctx.send should not have been called at all (no XP message, no error)
     ctx.send.assert_not_awaited()
 
+
 # === member drop: balance deducted and refunded on failure  ========================
 
 
