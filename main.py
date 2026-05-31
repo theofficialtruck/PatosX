@@ -11885,19 +11885,67 @@ async def override(ctx):
 @bot.event
 async def on_close():
     """Called by discord.py whenever the bot's websocket connection is closing.
-    Flush any open HTTP session so no ResourceWarning is raised on exit."""
+    This is a secondary cleanup path. Primary cleanup (task loop cancellation and
+    session close) happens in _main()'s finally block, which is always awaited.
+    This handler is kept as a belt-and-suspenders fallback for any session that
+    was not already closed by the time discord.py fires the close event."""
     global session
-    print("🛑 Bot connection closing, cleaning up resources...")
     if session is not None and not session.closed:
         await session.close()
-        print("✅ aiohttp session closed.")
 
 
 async def _main() -> None:
-    """Async entry point.  Using ``async with bot`` guarantees bot.close() is
-    called even if start() raises, which triggers on_close() for clean up."""
-    async with bot:
-        await bot.start(TOKEN)
+    """Async entry point. Using ``async with bot`` guarantees bot.close() is
+    called even if start() raises. The finally block cancels all task loops
+    and closes the aiohttp session before the event loop shuts down.
+
+    Why the finally block is necessary for clean shutdown:
+
+    1. Datadog tracer abandoned-span logs: the three 0.01-second task loops
+       (check_reminders, check_polls, check_all_statuses) are almost always
+       mid-pymongo-query when Ctrl+C arrives. ddtrace registers an atexit hook
+       that logs every span that was started but not finished. Cancelling the
+       loops here stops new queries from starting and cancels any in-flight
+       awaits before Python's atexit hooks run.
+
+    2. Unclosed aiohttp session warning: discord.py dispatches on_close as a
+       fire-and-forget asyncio task, so it may not complete before asyncio.run
+       tears down the event loop. Closing the session here guarantees it is
+       awaited and truly finished."""
+    try:
+        async with bot:
+            await bot.start(TOKEN)
+    finally:
+        # Cancel all running task loops so no new database queries can start
+        # during shutdown and any in-flight queries are cancelled at their next
+        # await point. This stops ddtrace from logging abandoned pymongo spans.
+        _loops = [
+            check_expired_mutes,
+            check_muted_role_permissions,
+            check_and_repost_stickies,
+            check_expired_drops,
+            periodic_cleanup,
+            cleanup_invite_cache,
+            update_invite_cache,
+            check_all_statuses,
+            check_polls,
+            check_reminders,
+        ]
+        for _loop in _loops:
+            try:
+                if _loop.is_running():
+                    _loop.cancel()
+            except Exception:  # nosec B110 - intentionally silent, loop may already be stopped
+                pass
+        # Give cancellations a moment to propagate through any iteration that
+        # is currently suspended at an await before the event loop closes.
+        await asyncio.sleep(0.1)
+        # Close the shared aiohttp session here rather than relying solely on
+        # on_close, because discord.py dispatches that event fire-and-forget
+        # and the task may not finish before asyncio shuts the event loop down.
+        global session
+        if session is not None and not session.closed:
+            await session.close()
 
 
 if __name__ == "__main__":
