@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+
 # sys and types are imported first because the audioop stub below must exist
 # before discord.py is loaded. audioop was removed in Python 3.13, but older
 # versions of discord.py reference it at import time for optional voice support.
@@ -45,7 +46,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import cycle
 from typing import Union
 
-# Third-party libraries
+# Third party libraries
 import aiohttp
 from dateutil import parser
 from dotenv import load_dotenv
@@ -130,8 +131,8 @@ class _DummyAsyncCursor:
 
 
 class _DummyAsyncCollection:
-    """No-op MongoDB collection used during test runs.
-    Every write returns a success-shaped namespace, every read returns None or zero."""
+    """No op MongoDB collection used during test runs.
+    Every write returns a success shaped namespace, every read returns None or zero."""
 
     def __init__(self, name: str = ""):
         self._name = name
@@ -159,7 +160,7 @@ class _DummyAsyncCollection:
 
 
 class _DummyDB:
-    """Minimal database stand-in that returns a _DummyAsyncCollection for every attribute access."""
+    """Minimal database stand in that returns a _DummyAsyncCollection for every attribute access."""
 
     def __getitem__(self, name: str):
         return _DummyAsyncCollection(name)
@@ -183,18 +184,18 @@ mongo = AsyncIOMotorClient(env_vars["MONGO_URI"]) if env_vars.get("MONGO_URI") e
 if not missing:
     print(f"All required environment variables loaded: {', '.join(required_keys)}")
 
-# Top-level credentials extracted for convenient use throughout the file
+# Top level credentials extracted for convenient use throughout the file
 TOKEN = env_vars.get("DISCORD_TOKEN", "")
 MONGO_URI = env_vars.get("MONGO_URI", "")
 TENOR_API_KEY = env_vars.get("TENOR_API_KEY", "")
 OPENROUTER_API_KEY = env_vars.get("OPENROUTER_API_KEY", "")
 
-# Multiple Gemini keys can be provided as a comma-separated list so that the bot
-# can round-robin between them and stay within per-key rate limits
+# Multiple Gemini keys can be provided as a comma separated list so that the bot
+# can round robin between them and stay within per key rate limits
 GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "").split(",")
 GEMINI_API_KEYS = [k.strip() for k in GEMINI_API_KEYS if k.strip()]
 
-# Comma-separated Discord user IDs that bypass staff-role checks and can use
+# Comma separated Discord user IDs that bypass staff role checks and can use
 # privileged commands such as addmoney and override
 _AUTH_IDS_RAW = os.getenv("AUTHORIZED_USER_IDS", "")
 AUTHORIZED_USER_IDS: set = {int(uid.strip()) for uid in _AUTH_IDS_RAW.split(",") if uid.strip().isdigit()}
@@ -216,7 +217,7 @@ BEG_DONORS: list = [d.strip() for d in _BEG_DONORS_RAW.split(",") if d.strip()] 
 db = mongo["discord_bot"] if mongo is not None else _DummyDB()
 
 # Each collection maps to a specific domain of bot data
-settings_col = db["guild_settings"]  # per-guild prefix, staff role, channel config
+settings_col = db["guild_settings"]  # per guild prefix, staff role, channel config
 config_col = db["configuration"]  # extended feature configuration per guild
 logs_col = db["logs"]  # moderation action audit log
 economy_col = db["economy"]  # wallet, bank, inventory, job data per user
@@ -224,30 +225,30 @@ mod_col = db["moderation"]  # warnings, bans, mute records
 afk_col = db["afk"]  # AFK status and messages
 vanity_col = db["vanityroles"]  # vanity role assignments
 sticky_col = db["stickynotes"]  # sticky message channel config
-reaction_col = db["reactionroles"]  # reaction-to-role mappings
+reaction_col = db["reactionroles"]  # reaction to role mappings
 shop_col = db["shop"]  # global default shop items
 fines_col = db["fines"]  # outstanding fines per user
 welcome_col = db["welcome"]  # welcome message templates per guild
 boost_col = db["boost"]  # boost reward config
-guild_shop_col = db["guild_shop"]  # per-guild custom shop items
+guild_shop_col = db["guild_shop"]  # per guild custom shop items
 quiz_col = db["quiz"]  # active quiz session state
 disabled_col = db["disabled"]  # disabled commands and categories per guild
 tickets_col = db["tickets"]  # open and closed ticket records
 ticket_panels_col = db["ticket_panels"]  # ticket panel button configuration
 tickets_counter_col = db["tickets_counter"]  # incrementing ticket number per guild
 giveaway_col = db["giveaway_col"]  # active giveaway records
-guild_config_col = db["guild_config"]  # miscellaneous guild-level toggles
+guild_config_col = db["guild_config"]  # miscellaneous guild level toggles
 invites_col = db["invites"]  # invite link usage tracking
-invite_config_col = db["invite_config"]  # per-guild invite tracking settings
+invite_config_col = db["invite_config"]  # per guild invite tracking settings
 blacklist_col = db["blacklist"]  # users blocked from bot commands
 reminders_col = db["reminders"]  # scheduled user reminders
 polls_col = db["polls"]  # active poll records
 investments_col = db["investments"]  # user investment positions
 drops_col = db["drops"]  # active money drop definitions
-drop_instances_col = db["drop_instances"]  # in-flight drop claim state
+drop_instances_col = db["drop_instances"]  # in flight drop claim state
 roles_col = db["roles"]  # claimable role listings
 mutes_col = db["mutes"]  # active timed mute records
-duck_conversations_col = db["duck_conversations"]  # DuckGPT per-user conversation history
+duck_conversations_col = db["duck_conversations"]  # DuckGPT per user conversation history
 staffperms_col = db["staffperms"]  # granular staff permission grants per user
 minigameplayerdata_col = db["minigameplayerdata"]  # persistent minigame state
 xp_col = db["xp"]  # experience point totals per user per guild
@@ -303,7 +304,7 @@ PASS_PCT = 80.0
 # All intents are required for member join events, message content, and invite tracking
 intents = discord.Intents.all()
 
-# In-memory invite cache: guild_id -> (timestamp, list of Invite objects).
+# In memory invite cache: guild_id -> (timestamp, list of Invite objects).
 # A dedicated async queue serialises API calls to avoid hitting Discord rate limits.
 invite_cache = {}
 last_invite_fetch = {}
@@ -313,7 +314,7 @@ last_global_invite_fetch = 0
 invite_queue = asyncio.Queue()
 processing_invite = False
 
-# Legacy in-memory warning and action stores, kept for backwards compatibility
+# Legacy in memory warning and action stores, kept for backwards compatibility
 warnings_data = {}
 actions_data = {}
 
@@ -324,7 +325,7 @@ actions_data = {}
 
 
 async def process_invite_queue():
-    """Consume invite fetch requests one at a time, respecting per-guild and global rate limits.
+    """Consume invite fetch requests one at a time, respecting per guild and global rate limits.
     Runs as a persistent background task started on first need."""
     global processing_invite, last_global_invite_fetch
     processing_invite = True
@@ -369,7 +370,7 @@ async def process_invite_queue():
 
 async def get_guild_invites(guild):
     """Return the cached invite list for a guild, refreshing via the queue if the cache is stale.
-    Falls back to the last known list when a rate-limit error is encountered."""
+    Falls back to the last known list when a rate limit error is encountered."""
     guild_id = guild.id
     current_time = time.time()
 
@@ -427,7 +428,7 @@ bot = commands.Bot(
 )
 
 if DEBUG_COMMANDS:
-    print("🔧 Bot initialized with built-in tree")
+    print("🔧 Bot initialized with built in tree")
     print(f"🔧 Bot object: {bot}")
     print(f"🔧 Tree object: {bot.tree}")
     cmds = list(bot.tree.walk_commands())
@@ -444,7 +445,7 @@ async def on_guild_join(guild):
             print(f"[Badge Roles] Error setting up badge roles for new guild {guild.id}: {e}")
 
 
-# Per-guild lock flags set by the stop command, cleared by override
+# Per guild lock flags set by the stop command, cleared by override
 bot_locks = {}
 # Rolling buffer of the last five unhandled runtime errors, surfaced by the debug command
 recent_errors = []
@@ -458,7 +459,7 @@ DISCORD_SERVICE_UNAVAILABLE_MESSAGE = "Discord is having trouble right now. Plea
 
 def unwrap_command_error(error: Exception) -> Exception:
     """Walk the error chain produced by discord.py's command invocation wrapper
-    and return the innermost original exception. Prevents double-wrapping from
+    and return the innermost original exception. Prevents double wrapping from
     hiding the real cause in error handlers."""
     invoke_error_types = (commands.CommandInvokeError,)
     app_invoke_error = getattr(app_commands, "CommandInvokeError", None)
@@ -509,7 +510,7 @@ async def global_lock_check(ctx):
     if ctx.command.name == "override":
         return True
     if bot_locks.get(str(ctx.guild.id)):
-        await ctx.send(f"🔒 The bot is locked - only `override` by **{BOT_ADMIN_NAME}** works.")
+        await ctx.send(f"🔒 The bot is locked, only `override` by **{BOT_ADMIN_NAME}** works.")
         return False
     return True
 
@@ -524,19 +525,16 @@ def staff_only():
     """Return a command check that passes only when the invoker holds the configured staff role."""
 
     async def predicate(ctx):
-        guild_id = str(ctx.guild.id)
-        settings = await settings_col.find_one({"guild": guild_id})
-        if not settings or "staff_role" not in settings:
+        if ctx.guild is None:
             return False
-        role = discord.utils.get(ctx.guild.roles, id=settings["staff_role"])
-        return bool(role and role in ctx.author.roles)
+        return await is_staff_user(ctx)
 
     return commands.check(predicate)
 
 
 async def check_staff_perm(ctx, perm_name: str):
     """Return True if the invoker is allowed to perform perm_name.
-    Guild owner, bot-authorized IDs, and server administrators always pass.
+    Guild owner, bot authorized IDs, and server administrators always pass.
     Other users are checked against the granular staffperms collection."""
     if ctx.author == ctx.guild.owner or ctx.author.id in AUTHORIZED_USER_IDS:
         return True
@@ -548,7 +546,7 @@ async def check_staff_perm(ctx, perm_name: str):
     perms = data["permissions"]
     if "all" in perms:
         return True
-    # tickets:all grants access to every ticket sub-permission
+    # tickets:all grants access to every ticket sub permission
     if perm_name.startswith("tickets:"):
         if "tickets:all" in perms:
             return True
@@ -584,6 +582,8 @@ async def is_maintenance_mode(guild_id):
 
 async def is_staff_user(ctx):
     """Return True if the invoker is the guild owner, an administrator, or holds the staff role."""
+    if ctx.author.id in AUTHORIZED_USER_IDS:
+        return True
     if ctx.author.id == ctx.guild.owner_id:
         return True
     if ctx.author.guild_permissions.administrator:
@@ -598,7 +598,7 @@ async def is_staff_user(ctx):
 
 async def check_maintenance_access(ctx):
     """Return True when the guild is not in maintenance mode, or when the invoker is staff.
-    Sends an embed and returns False if a non-staff user tries to use commands during maintenance."""
+    Sends an embed and returns False if a non staff user tries to use commands during maintenance."""
     guild_id = str(ctx.guild.id)
     if not await is_maintenance_mode(guild_id):
         return True
@@ -672,7 +672,7 @@ def maintenance_bypass():
 
 
 def get_command_syntax(command_name: str) -> str:
-    """Build a human-readable usage string for a command, including aliases and annotated parameters."""
+    """Build a human readable usage string for a command, including aliases and annotated parameters."""
     command = bot.get_command(command_name)
     if not command:
         return f"Command `{command_name}` not found."
@@ -705,7 +705,7 @@ def get_command_syntax(command_name: str) -> str:
 
 
 def find_similar_commands(command_name: str, limit: int = 3) -> list:
-    """Return up to limit command names that contain command_name as a substring or share a 3-character prefix.
+    """Return up to limit command names that contain command_name as a substring or share a 3 character prefix.
     Used to suggest corrections when a user types an unknown command."""
     command_name = command_name.lower()
     similar_commands = []
@@ -729,7 +729,7 @@ def find_similar_commands(command_name: str, limit: int = 3) -> list:
 
 @bot.event
 async def on_command_error(ctx, error):
-    """Central handler for prefix command errors. Provides user-friendly messages for common
+    """Central handler for prefix command errors. Provides user friendly messages for common
     error types and logs unexpected errors to the console and the recent_errors buffer."""
     if isinstance(error, commands.CheckFailure):
         return await ctx.send("❌ You don't have permission to use this command.")
@@ -1079,13 +1079,13 @@ BADGES = {
     "daily_devotee": {
         "name": "Daily Devotee",
         "emoji": "📅",
-        "description": "Reached a 7-day daily streak.",
+        "description": "Reached a 7 day daily streak.",
         "check": lambda data, xp, extra: data.get("daily_streak", 0) >= 7,
     },
     "streak_master": {
         "name": "Streak Master",
         "emoji": "🏆",
-        "description": "Reached a 30-day daily streak.",
+        "description": "Reached a 30 day daily streak.",
         "check": lambda data, xp, extra: data.get("daily_streak", 0) >= 30,
     },
     "apprentice": {
@@ -1157,7 +1157,7 @@ async def ensure_badge_role_for_guild(guild: discord.Guild, badge: dict):
     role = discord.utils.get(guild.roles, name=badge_name)
     if role:
         return role
-    return await guild.create_role(name=badge_name, reason="Badge role auto-created")
+    return await guild.create_role(name=badge_name, reason="Badge role auto created")
 
 
 async def ensure_badge_roles_for_guild(guild: discord.Guild) -> None:
@@ -1271,8 +1271,8 @@ def xp_earn(min_xp: int, max_xp: int):
             def looks_like_failure_message(content: str) -> bool:
                 text = content.strip().lower()
                 if text.startswith(("❌", "⚠️", "⏰", "🕒", "🚫")):
-                    # 🚫 covers wrong-channel rejections ("can only be used in #…")
-                    # and blacklist blocks — neither should award XP.
+                    # 🚫 covers wrong channel rejections ("can only be used in #…")
+                    # and blacklist blocks, neither should award XP.
                     return True
                 failure_markers = (
                     " on cooldown",
@@ -1682,10 +1682,10 @@ async def check_expired_mutes():
                             ctx=None, message=f"Auto-unmuted {member}", user_id=member.id, action_type="unmute"
                         )
                     except Exception as inner_e:
-                        print(f"[Auto-unmute role removal error] {inner_e}")
+                        print(f"[Auto unmute role removal error] {inner_e}")
                 await mod_col.update_one({"guild": doc["guild"], "user": doc["user"]}, {"$unset": {"muted_until": ""}})
         except Exception as e:
-            print(f"[Auto-unmute error - mod_col] {e}")
+            print(f"[Auto unmute error - mod_col] {e}")
 
 
 @tasks.loop(minutes=1)
@@ -1761,9 +1761,9 @@ async def configure(ctx):
             return await ctx.send("❌ You don't have permission to configure the bot.")
     prompts = {
         "welcome_channel": "Enter the **welcome channel ID** (required for welcome system):",
-        "welcome_message": "Enter the **welcome message** (supports `{mention}`, `{username}`, `{server}`, `{membercount}` placeholders — or type `skip` to use the default):",
+        "welcome_message": "Enter the **welcome message** (supports `{mention}`, `{username}`, `{server}`, `{membercount}` placeholders - or type `skip` to use the default):",
         "boost_channel": "Enter the **boost channel ID** (required for boost system):",
-        "boost_message": "Enter the **boost message** (supports `{mention}`, `{username}`, `{server}`, `{boostcount}` placeholders — required):",
+        "boost_message": "Enter the **boost message** (supports `{mention}`, `{username}`, `{server}`, `{boostcount}` placeholders - required):",
         "ALLOWED_DUCK_CHANNELS": "Enter allowed channel IDs for `.duck` (comma/space separated, required):",
         "ROLE_ID": "Enter role IDs to award for passing `.duckquiz` (comma/space separated, required):",
         "QUIZ_CHANNEL": "Enter channel IDs where `.duckquiz` can run (comma/space separated, required):",
@@ -2112,9 +2112,9 @@ async def resetconfig(ctx):
 # DuckGPT AI integration (Google Gemini with OpenRouter fallback)
 # ============================================================
 
-# In-memory conversation history per user, keyed by user ID
+# In memory conversation history per user, keyed by user ID
 duck_conversations = {}
-# Timestamp of each user's last DuckGPT request, used for per-user rate limiting
+# Timestamp of each user's last DuckGPT request, used for per user rate limiting
 _duckgpt_last_used: dict[int, float] = {}
 _DUCKGPT_COOLDOWN_SECONDS = 5
 
@@ -2143,7 +2143,7 @@ GEMINI_KEY_CYCLE = cycle(GEMINI_API_KEYS)
 
 
 def next_gemini_key():
-    """Advance to the next Gemini API key in the round-robin cycle and return it."""
+    """Advance to the next Gemini API key in the round robin cycle and return it."""
     global active_key
     active_key = next(GEMINI_KEY_CYCLE)
     return active_key
@@ -2214,7 +2214,7 @@ async def get_gemini_client():
 
 async def generate_gemini_response(messages):
     """Convert messages list to a flat prompt string, then call Gemini with automatic key rotation
-    and exponential back-off. Falls back to a duck-themed failure message when all keys are exhausted."""
+    and exponential back off. Falls back to a duck themed failure message when all keys are exhausted."""
     loop = asyncio.get_event_loop()
     prompt = "\n".join((f"{m['role'].capitalize()}: {m['content']}" for m in messages))
     client_info = await get_gemini_client()
@@ -2251,7 +2251,7 @@ async def generate_gemini_response(messages):
 
 
 async def ask_duck_gpt(ctx, prompt: str) -> str:
-    """Main entry point for a DuckGPT request. Enforces per-user cooldown, loads and saves
+    """Main entry point for a DuckGPT request. Enforces per user cooldown, loads and saves
     conversation history from MongoDB, prepends the SYSTEM_PROMPT, then calls generate_gemini_response."""
     if not ctx.guild:
         return "🦆 I can only assist you in servers, not in DMs!"
@@ -2394,7 +2394,7 @@ async def find_sticky_note_doc(guild_id: int, channel_id: int):
 
 
 async def load_onetime_channels():
-    """Load one-time-read channel configuration from the database into the onetime_channels dict."""
+    """Load one time read channel configuration from the database into the onetime_channels dict."""
     try:
         cursor = settings_col.find({"onetime_channels": {"$exists": True}})
         async for doc in cursor:
@@ -2465,7 +2465,7 @@ async def get_invites_count(guild_id: int, user_id: int):
 
 
 def parse_time(duration_str: str) -> int:
-    """Parse a human-readable duration string (e.g. '1h 30m', '2 days') and return total seconds.
+    """Parse a human readable duration string (e.g. '1h 30m', '2 days') and return total seconds.
     Raises ValueError when the string contains no recognised time units."""
     multipliers = {
         "s": 1,
@@ -2546,7 +2546,7 @@ WORDS_TO_NUM = {
 
 
 def words_to_number(text: str) -> int | None:
-    """Convert a written-out English number such as 'one hundred' to its integer value.
+    """Convert a written out English number such as 'one hundred' to its integer value.
     Returns None if any word in text is not found in WORDS_TO_NUM."""
     words = text.lower().replace("-", " ").split()
     total, current = (0, 0)
@@ -2566,7 +2566,7 @@ def words_to_number(text: str) -> int | None:
 
 
 def parse_amount(amount_str: str) -> int | None:
-    """Parse a coin amount string that may include suffixes (k, m, b, t) or written-out words.
+    """Parse a coin amount string that may include suffixes (k, m, b, t) or written out words.
     Returns None when the string cannot be interpreted as a valid amount."""
     if not amount_str:
         return None
@@ -2641,7 +2641,7 @@ async def schedule_unmute(guild, member, remaining):
         if mute_role and mute_role in member.roles:
             try:
                 await member.remove_roles(mute_role, reason="Mute expired")
-                print(f"[schedule_unmute] Auto-unmuted {member} in {guild.name}")
+                print(f"[schedule_unmute] Auto unmuted {member} in {guild.name}")
             except NotFound:
                 print(f"[schedule_unmute] Member {member.id} not found during unmute.")
             except Exception as inner_e:
@@ -2672,7 +2672,7 @@ async def check_and_use_food_item(user_id, guild_id, item_id):
 
 
 def pop_food_item(inventory: list, item_id: str) -> bool:
-    """Remove one instance of item_id from inventory in-place. Returns True if found."""
+    """Remove one instance of item_id from inventory in place. Returns True if found."""
     normalized_id = item_id.replace("_", " ").strip().lower()
     for i, item in enumerate(inventory):
         if normalize_item_key(item) == normalized_id:
@@ -2779,7 +2779,7 @@ async def ensure_shop_items():
             "name": "Energy Drink",
             "name_lower": "energy drink",
             "price": 200,
-            "description": "⚡ Reduces work cooldown by 50% for your next work session. One-time use.",
+            "description": "⚡ Reduces work cooldown by 50% for your next work session. One time use.",
             "uses_left": 1,
         },
         {
@@ -2787,7 +2787,7 @@ async def ensure_shop_items():
             "name": "Lucky Cookie",
             "name_lower": "lucky cookie",
             "price": 150,
-            "description": "🍪 Doubles your next work/beg earnings. One-time use.",
+            "description": "🍪 Doubles your next work/beg earnings. One time use.",
             "uses_left": 1,
         },
         {
@@ -2795,7 +2795,7 @@ async def ensure_shop_items():
             "name": "Coffee Cup",
             "name_lower": "coffee cup",
             "price": 100,
-            "description": "☕ Gives 25% bonus on your next crime success chance. One-time use.",
+            "description": "☕ Gives 25% bonus on your next crime success chance. One time use.",
             "uses_left": 1,
         },
     ]
@@ -2808,7 +2808,7 @@ async def ensure_shop_items():
 
 @tasks.loop(hours=1)
 async def check_expired_drops():
-    """Expire unclaimed money drops older than 3 days: delete their messages, refund non-staff drops."""
+    """Expire unclaimed money drops older than 3 days: delete their messages, refund non staff drops."""
     three_days_ago = datetime.now(timezone.utc) - timedelta(days=3)
     query = {"claimed": False, "created_at": {"$lt": three_days_ago.isoformat()}}
     async for drop in drop_instances_col.find(query):
@@ -2910,7 +2910,7 @@ async def update_invite_cache():
 
 
 async def load_sticky_notes():
-    """Re-post all sticky notes at startup, replacing old messages with fresh ones so they appear
+    """Re post all sticky notes at startup, replacing old messages with fresh ones so they appear
     at the bottom of each channel even if messages accumulated while the bot was offline."""
     print("📝 Loading sticky notes...")
     loaded_count = 0
@@ -2969,7 +2969,7 @@ async def repost_sticky_note(channel_id, guild_id):
 @bot.event
 async def on_message(message):
     """Handle every incoming message. Processes commands, handles boosts, DuckGPT triggers,
-    quack counting, one-time channel deletions, AFK detection, and sticky note re-posting."""
+    quack counting, one time channel deletions, AFK detection, and sticky note re posting."""
     if message.author.bot:
         return
     await bot.process_commands(message)
@@ -3010,7 +3010,7 @@ async def on_message(message):
                             except (discord.HTTPException, discord.Forbidden):
                                 pass
                     except Exception as e:
-                        print(f"⚠️ Error sending boost thank-you in {guild.name}: {e}")
+                        print(f"⚠️ Error sending boost thank you in {guild.name}: {e}")
             return
     except Exception as e:
         print(f"[boost message handler error] {e}")
@@ -3056,15 +3056,15 @@ async def on_message(message):
                 )
                 try:
                     await message.channel.set_permissions(
-                        message.author, send_messages=False, reason="One-time message used"
+                        message.author, send_messages=False, reason="One time message used"
                     )
                     await message.channel.send(
-                        f"⚠️ {message.author.mention} has used their one-time message in this channel. Staff can restore permissions with `.restore`."
+                        f"⚠️ {message.author.mention} has used their one time message in this channel. Staff can restore permissions with `.restore`."
                     )
                 except Exception as perm_error:
-                    print(f"[One-time permission error] {perm_error}")
+                    print(f"[One time permission error] {perm_error}")
     except Exception as e:
-        print(f"[One-time message error] {e}")
+        print(f"[One time message error] {e}")
     try:
         for user in message.mentions:
             doc = await afk_col.find_one({"_id": f"{message.guild.id}-{user.id}"})
@@ -3173,7 +3173,7 @@ async def on_message(message):
                         print(f"[ticket confirmation] Could not find opener {opener_id} in guild")
             else:
                 print(
-                    f"[ticket confirmation] Non-opener {message.author.id} tried to confirm ticket {ticket_entry['_id']}"
+                    f"[ticket confirmation] Non opener {message.author.id} tried to confirm ticket {ticket_entry['_id']}"
                 )
     except Exception as e:
         print(f"[ticket confirmation error] {e}")
@@ -3183,7 +3183,7 @@ async def on_message(message):
 async def on_ready():
     """Fired once after the bot has successfully connected and loaded its guild data.
     Starts all background task loops, seeds the shop, loads sticky notes, syncs slash commands,
-    and sets the bot's presence. Guard-flagged so it only runs once even if the bot reconnects."""
+    and sets the bot's presence. Guard flagged so it only runs once even if the bot  reconnects."""
     global invite_cache
     global session
     if getattr(bot, "views_loaded", False):
@@ -3581,7 +3581,7 @@ class StaffPermissionView(ui.View):
 # ============================================================
 
 
-@bot.hybrid_command(name="staff", description="Give the staff role to a user (owner-only).")
+@bot.hybrid_command(name="staff", description="Give the staff role to a user (owner only).")
 async def staff(ctx, member: discord.Member):
     """Assign the configured staff role to member and open a permission selection menu."""
     data = await settings_col.find_one({"guild": str(ctx.guild.id)})
@@ -3883,7 +3883,7 @@ async def resolve_member(ctx: commands.Context, member_str: str) -> discord.Memb
     return member
 
 
-@bot.hybrid_command(name="blacklist", description="Blacklist a user from bot commands. Staff-only.")
+@bot.hybrid_command(name="blacklist", description="Blacklist a user from bot commands. Staff only.")
 @staffperm("other_moderation")
 @staff_only()
 async def blacklist(ctx, member: discord.Member):
@@ -3908,7 +3908,7 @@ async def blacklist(ctx, member: discord.Member):
         await ctx.send(f"❌ Failed to add blacklist role: {e}")
 
 
-@bot.hybrid_command(name="whitelist", description="Remove a user from the blacklist. Staff-only.")
+@bot.hybrid_command(name="whitelist", description="Remove a user from the blacklist. Staff only.")
 @staffperm("other_moderation")
 @staff_only()
 async def whitelist(ctx, member: discord.Member):
@@ -3951,7 +3951,7 @@ async def whitelist_error(ctx, error):
         await send_hybrid_error(ctx, content=f"⚠️ An error occurred: {error}")
 
 
-@bot.hybrid_command(name="vanityroles", description="Track users with keyword in status. Staff-only.")
+@bot.hybrid_command(name="vanityroles", description="Track users with keyword in status. Staff only.")
 @app_commands.describe(
     role="Role to assign", log_channel="Channel to log changes", keyword="Keyword to track in status"
 )
@@ -4022,7 +4022,7 @@ class PromotersView(View):
         await self.disable_all(message=self.message)
 
 
-@bot.hybrid_command(name="promoters", description="View users with the vanity role. Staff-only.")
+@bot.hybrid_command(name="promoters", description="View users with the vanity role. Staff only.")
 @staffperm("vanity")
 @staff_only()
 async def promoters(ctx):
@@ -4038,7 +4038,7 @@ async def promoters(ctx):
     view.message = msg
 
 
-@bot.hybrid_command(name="resetpromoters", description="Clear all users from the vanity role. Staff-only.")
+@bot.hybrid_command(name="resetpromoters", description="Clear all users from the vanity role. Staff only.")
 @staffperm("vanity")
 @staff_only()
 async def resetpromoters(ctx):
@@ -4130,7 +4130,7 @@ async def check_all_statuses():
             status = member.activity.name.lower() if member.activity and member.activity.name else ""
             has_role = role in member.roles
             if keyword in status and (not has_role):
-                await member.add_roles(role, reason="Vanity match (auto-check)")
+                await member.add_roles(role, reason="Vanity match (auto check)")
                 await vanity_col.update_one({"guild": str(guild.id)}, {"$addToSet": {"users": member.id}})
                 if log_ch:
                     await log_ch.send(
@@ -4143,7 +4143,7 @@ async def check_all_statuses():
                     )
                     await repost_sticky_note(log_ch.id, guild.id)
             elif keyword not in status and has_role:
-                await member.remove_roles(role, reason="Vanity removed (auto-check)")
+                await member.remove_roles(role, reason="Vanity removed (auto check)")
                 await vanity_col.update_one({"guild": str(guild.id)}, {"$pull": {"users": member.id}})
                 if log_ch:
                     await log_ch.send(
@@ -5005,7 +5005,7 @@ async def balance(ctx, member_name: str = None):
 @blacklist_barrier()
 @xp_earn(10, 20)
 async def daily(ctx):
-    """Award the daily coin bonus, maintaining and rewarding a consecutive-day streak."""
+    """Award the daily coin bonus, maintaining and rewarding a consecutive day streak."""
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     try:
@@ -5081,7 +5081,7 @@ async def daily(ctx):
 @blacklist_barrier()
 @xp_earn(8, 16)
 async def beg(ctx):
-    """Beg a random donor for coins. Has a 15-minute cooldown and a lucky-cookie bonus."""
+    """Beg a random donor for coins. Has a 15 minute cooldown and a lucky cookie bonus."""
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     try:
@@ -6362,8 +6362,8 @@ async def choosejob(ctx):
 @blacklist_barrier()
 @xp_earn(20, 35)
 async def work(ctx):
-    """Perform a work shift in the user's current job. Enforces a per-job cooldown,
-    applies food-item bonuses, and calculates earnings based on job tier and promotions."""
+    """Perform a work shift in the user's current job. Enforces a per job cooldown,
+    applies food item bonuses, and calculates earnings based on job tier and promotions."""
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     try:
@@ -6646,7 +6646,7 @@ async def fish(ctx):
         success = random.random() < adjusted_chance
         if not success:
             await economy_col.update_one({"_id": user_id}, {"$set": {"inventory": inventory}})
-            return await ctx.send(f"🐟 You tried fishing, but came up empty-handed!{tool_break_notice}")
+            return await ctx.send(f"🐟 You tried fishing, but came up empty handed!{tool_break_notice}")
         catch = random.choice(fishes)
         coins_earned = int(catch[1] * (1 + luck_buff))
         await add_balance(ctx.author.id, ctx.guild.id, coins_earned)
@@ -8380,13 +8380,13 @@ async def actually_close_ticket(ctx, opener, forced=False):
         action_type=action_type,
     )
     if forced:
-        await channel.send(f"✅ Ticket force-closed by {ctx.author.mention}.")
+        await channel.send(f"✅ Ticket force closed by {ctx.author.mention}.")
     else:
         await channel.send("✅ Ticket confirmed and closed.")
     await channel.delete()
 
 
-@bot.hybrid_command(name="ticketaddbutton", description="Add a button to an existing ticket panel (form). Staff-only.")
+@bot.hybrid_command(name="ticketaddbutton", description="Add a button to an existing ticket panel (form). Staff only.")
 @staffperm("tickets:admin")
 @staff_only()
 async def ticketaddbutton(ctx):
@@ -8427,7 +8427,7 @@ async def ticketaddbutton(ctx):
                 await ctx.interaction.response.send_message(f"❌ Error:\n```{e}```", ephemeral=True)
 
 
-@bot.hybrid_command(name="ticketsetup", description="Create interactive ticket panel. Staff-only.")
+@bot.hybrid_command(name="ticketsetup", description="Create interactive ticket panel. Staff only.")
 @app_commands.describe(panel_name="Name for the ticket panel (e.g., 'Support', 'Help Desk')")
 @staffperm("tickets:admin")
 @staff_only()
@@ -8451,7 +8451,7 @@ async def ticketsetup(ctx, panel_name: str = "Support"):
             await ctx.interaction.response.send_message(f"❌ Error:\n```{e}```", ephemeral=True)
 
 
-@bot.hybrid_command(name="ticketpanel", description="Post a saved ticket panel. Staff-only.")
+@bot.hybrid_command(name="ticketpanel", description="Post a saved ticket panel. Staff only.")
 @staffperm("tickets:admin")
 @staff_only()
 async def ticketpanel(ctx, panel_name: str):
@@ -8486,7 +8486,7 @@ async def ticketpanel(ctx, panel_name: str):
             await ctx.send(f"❌ Error:\n```{e}```")
 
 
-@bot.hybrid_command(name="ticketeditbutton", description="Edit a button in a ticket panel. Staff-only.")
+@bot.hybrid_command(name="ticketeditbutton", description="Edit a button in a ticket panel. Staff only.")
 @staffperm("tickets:admin")
 @staff_only()
 async def ticketeditbutton(ctx, panel_name: str):
@@ -8519,7 +8519,7 @@ async def ticketeditbutton(ctx, panel_name: str):
             await ctx.send(f"❌ Error:\n```{e}```")
 
 
-@bot.hybrid_command(name="ticketdeletepanel", description="Delete a saved ticket panel. Staff-only.")
+@bot.hybrid_command(name="ticketdeletepanel", description="Delete a saved ticket panel. Staff only.")
 @staffperm("tickets:admin")
 @staff_only()
 async def ticketdeletepanel(ctx, panel_name: str):
@@ -8541,7 +8541,7 @@ async def ticketdeletepanel(ctx, panel_name: str):
         print("ticketdeletepanel ERROR:", traceback.format_exc())
 
 
-@bot.hybrid_command(name="ticketlist", description="List all saved ticket panels. Staff-only.")
+@bot.hybrid_command(name="ticketlist", description="List all saved ticket panels. Staff only.")
 @staffperm("tickets:admin")
 @staff_only()
 async def ticketlist(ctx):
@@ -8629,7 +8629,7 @@ async def ticketforceclose(ctx):
     await local_error_handler(inner)
 
 
-@bot.hybrid_command(name="transcript", description="Fetch a ticket transcript. Staff-only.")
+@bot.hybrid_command(name="transcript", description="Fetch a ticket transcript. Staff only.")
 @staffperm("tickets:admin")
 @staff_only()
 async def transcript(ctx, ticket_id: str):
@@ -8678,7 +8678,7 @@ async def transcript(ctx, ticket_id: str):
         print("transcript ERROR:", traceback.format_exc())
 
 
-@bot.hybrid_command(name="transcriptsearch", description="Search tickets by username. Staff-only.")
+@bot.hybrid_command(name="transcriptsearch", description="Search tickets by username. Staff only.")
 @staffperm("tickets:admin")
 @staff_only()
 async def transcriptsearch(ctx, username: str):
@@ -8804,7 +8804,7 @@ class TranscriptPaginationView(discord.ui.View):
                 pass
 
 
-@bot.hybrid_command(name="transcriptlist", description="List all tickets (open & closed) with details. Staff-only.")
+@bot.hybrid_command(name="transcriptlist", description="List all tickets (open & closed) with details. Staff only.")
 @staffperm("tickets:admin")
 @staff_only()
 async def transcriptlist(ctx):
@@ -9358,7 +9358,7 @@ class GiveawayModal(discord.ui.Modal, title="Create Giveaway"):
         asyncio.create_task(end_after_delay(view, duration_seconds))
 
 
-@bot.hybrid_command(name="giveaway", description="Create a giveaway using a form. Staff-only.")
+@bot.hybrid_command(name="giveaway", description="Create a giveaway using a form. Staff only.")
 @staffperm("giveaways")
 @staff_only()
 async def giveaway(ctx: commands.Context):
@@ -9408,7 +9408,7 @@ async def reroll(ctx: commands.Context, message_id: int):
     await ctx.send("✅ Reroll complete and announced in the giveaway's channel.", ephemeral=True)
 
 
-@bot.hybrid_command(name="draw", description="Instantly draw winners from a giveaway using its message ID. Staff-only.")
+@bot.hybrid_command(name="draw", description="Instantly draw winners from a giveaway using its message ID. Staff only.")
 @staffperm("giveaways")
 @staff_only()
 async def draw(ctx: commands.Context, message_id: int):
@@ -9843,7 +9843,7 @@ async def drop_error(ctx, error):
 # ============================================================
 
 
-@bot.command(name="kick", description="Kick a member. Staff-only.")
+@bot.command(name="kick", description="Kick a member. Staff only.")
 @staffperm("kick")
 @staff_only()
 async def kick(ctx, member: discord.Member, *, reason: str = "No reason provided"):
@@ -9869,7 +9869,7 @@ async def kick(ctx, member: discord.Member, *, reason: str = "No reason provided
     await log_action(ctx, f"Kicked {member} ({member.id}) for: {reason}", user_id=member.id, action_type="kick")
 
 
-@bot.command(name="ban", description="Ban a member. Staff-only.")
+@bot.command(name="ban", description="Ban a member. Staff only.")
 @staffperm("ban")
 @staff_only()
 async def ban(ctx, member: discord.Member, *, reason: str = "No reason provided"):
@@ -9889,7 +9889,7 @@ async def ban(ctx, member: discord.Member, *, reason: str = "No reason provided"
     await ctx.send(embed=embed, view=confirm_view)
 
 
-@bot.hybrid_command(name="unban", description="Unban a member. Staff-only.")
+@bot.hybrid_command(name="unban", description="Unban a member. Staff only.")
 @staffperm("ban")
 @staff_only()
 async def unban(ctx, *, user_id: int):
@@ -9976,7 +9976,7 @@ async def say_error(ctx, error):
 _MAX_MUTE_SECONDS = 30 * 24 * 3600
 
 
-@bot.command(name="mute", description="Mute a member temporarily. Staff-only.")
+@bot.command(name="mute", description="Mute a member temporarily. Staff only.")
 @staffperm("mute")
 @staff_only()
 async def mute(ctx, member: discord.Member, duration: str = None, *, reason: str = "No reason provided"):
@@ -10046,7 +10046,7 @@ async def unmute(ctx, member: discord.Member):
         await ctx.send("⚠️ That member is not muted.")
 
 
-@bot.hybrid_command(name="warn", description="Warn a user. Staff-only.")
+@bot.hybrid_command(name="warn", description="Warn a user. Staff only.")
 @app_commands.describe(member="The user to warn", reason="Reason for the warning (optional)")
 @staffperm("other_moderation")
 @staff_only()
@@ -10094,7 +10094,7 @@ async def warn(ctx, member: discord.Member, *, reason="No reason provided"):
         print(f"[warn] log_action failed: {e}")
 
 
-@bot.hybrid_command(name="clearwarns", description="Clear all warnings. Staff-only.")
+@bot.hybrid_command(name="clearwarns", description="Clear all warnings. Staff only.")
 @staffperm("other_moderation")
 @staff_only()
 async def clearwarns(ctx, member: discord.Member):
@@ -10103,7 +10103,7 @@ async def clearwarns(ctx, member: discord.Member):
     await log_action(ctx, f"Cleared warnings for {member}", user_id=member.id, action_type="clearwarns")
 
 
-@bot.hybrid_command(name="purge", description="Bulk delete messages. Staff-only.")
+@bot.hybrid_command(name="purge", description="Bulk delete messages. Staff only.")
 @staffperm("other_moderation")
 @staff_only()
 async def purge(ctx, count: int, member: discord.Member = None):
@@ -10120,7 +10120,7 @@ async def purge(ctx, count: int, member: discord.Member = None):
     )
 
 
-@bot.hybrid_command(name="slowmode", description="Set slowmode for this channel. Staff-only.")
+@bot.hybrid_command(name="slowmode", description="Set slowmode for this channel. Staff only.")
 @staffperm("other_moderation")
 @staff_only()
 async def slowmode(ctx, seconds: int):
@@ -10129,7 +10129,7 @@ async def slowmode(ctx, seconds: int):
     await log_action(ctx, f"Set slowmode to {seconds}s in #{ctx.channel.name}", action_type="slowmode")
 
 
-@bot.hybrid_command(name="disable", description="Disable a command or a category. Staff-only.")
+@bot.hybrid_command(name="disable", description="Disable a command or a category. Staff only.")
 @staffperm("toggle_commands")
 @staff_only()
 async def disable(ctx, target: str):
@@ -10159,7 +10159,7 @@ async def disable(ctx, target: str):
     )
 
 
-@bot.hybrid_command(name="enable", description="Enable a disabled command or category. Staff-only.")
+@bot.hybrid_command(name="enable", description="Enable a disabled command or category. Staff only.")
 @staffperm("toggle_commands")
 @staff_only()
 async def enable(ctx, target: str):
@@ -10183,7 +10183,7 @@ async def enable(ctx, target: str):
     )
 
 
-@bot.hybrid_command(name="listdisabled", description="List currently disabled commands and categories. Staff-only.")
+@bot.hybrid_command(name="listdisabled", description="List currently disabled commands and categories. Staff only.")
 @staffperm("toggle_commands")
 @staff_only()
 async def listdisabled(ctx):
@@ -10200,7 +10200,7 @@ async def listdisabled(ctx):
     await ctx.send(embed=embed)
 
 
-@bot.hybrid_command(name="setprefix", description="Change the bot prefix. Staff-only.")
+@bot.hybrid_command(name="setprefix", description="Change the bot prefix. Staff only.")
 @staffperm("config")
 @staff_only()
 async def setprefix(ctx, new: str):
@@ -10672,11 +10672,11 @@ async def get_user_message_count(guild_id, user_id, since_date):
         return 0
 
 
-@bot.command(name="performance", description="View staff performance analytics. Staff-only.")
+@bot.command(name="performance", description="View staff performance analytics. Staff only.")
 @staffperm("other_moderation")
 @staff_only()
 async def performance(ctx, days: int = 30):
-    """Show a staff performance report with action counts, message stats, and peak-activity times.
+    """Show a staff performance report with action counts, message stats, and peak activity times.
     Defaults to the last 30 days. Detailed errors are printed to the console only."""
     try:
         staff_role_id = None
@@ -10914,7 +10914,7 @@ class WarnModal(discord.ui.Modal, title="Moderator Action"):
             await interaction.followup.send("❌ Could not send confirmation dialog.", ephemeral=True)
 
 
-@bot.hybrid_command(name="modview", description="Open moderator view for a user. Staff-only.")
+@bot.hybrid_command(name="modview", description="Open moderator view for a user. Staff only.")
 @staffperm("other_moderation")
 @staff_only()
 async def modview(ctx, member: discord.Member):
@@ -11021,7 +11021,7 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
         print(f"[reactionrole remove error] {e}")
 
 
-@bot.hybrid_command(name="reactionrole", description="Set up a reaction role. Staff-only.")
+@bot.hybrid_command(name="reactionrole", description="Set up a reaction role. Staff only.")
 @staffperm("reactionroles")
 @staff_only()
 async def reactionrole(ctx, message_id: int, emoji, role: discord.Role):
@@ -11037,7 +11037,7 @@ async def reactionrole(ctx, message_id: int, emoji, role: discord.Role):
         await ctx.send("❌ Could not set reaction role. Check your permissions and message ID.")
 
 
-@bot.hybrid_command(name="stickynote", description="Set a sticky note in this channel. Staff-only.")
+@bot.hybrid_command(name="stickynote", description="Set a sticky note in this channel. Staff only.")
 @staffperm("stickynotes")
 @staff_only()
 async def stickynote(ctx):
@@ -11084,7 +11084,7 @@ async def stickynote(ctx):
         await ctx.send("❌ Timeout. Sticky note creation cancelled.")
 
 
-@bot.hybrid_command(name="unstickynote", description="Remove the sticky note. Staff-only.")
+@bot.hybrid_command(name="unstickynote", description="Remove the sticky note. Staff only.")
 @staffperm("stickynotes")
 @staff_only()
 async def unstickynote(ctx):
@@ -11175,7 +11175,7 @@ async def testboost(ctx, member: discord.Member = None):
 @bot.event
 async def on_member_join(member):
     """Fired when a new member joins. Tracks which invite was used, sends the welcome message,
-    re-applies any active mute, and ensures badge roles are available for the member."""
+    re applies any active mute, and ensures badge roles are available for the member."""
     guild = member.guild
     try:
         doc = await guild_config_col.find_one({"guild_id": str(guild.id)}) or {}
@@ -11400,7 +11400,7 @@ async def before_check_reminders():
 async def serverinfo(ctx):
     """Display a detailed embed with server statistics including member counts, channels, and boosts."""
     guild = ctx.guild
-    embed = discord.Embed(title=f"📜 Server Information - {guild.name}", color=discord.Color.blurple())
+    embed = discord.Embed(title=f"📜 Server Information: {guild.name}", color=discord.Color.blurple())
     embed.set_thumbnail(url=guild.icon.url if guild.icon else discord.Embed.Empty)
     embed.add_field(name="👥 Members", value=f"{guild.member_count:,}", inline=True)
     embed.add_field(name="🆔 Server ID", value=guild.id, inline=True)
@@ -11540,7 +11540,7 @@ async def tutorial(ctx):
     pages.append(config)
     sticky = discord.Embed(
         title="🗒 Sticky Notes System",
-        description=f"{bar(7)}\n\nPin an auto-reposting sticky message to keep rules or reminders visible.\n\n**Starter Commands:**\n• `{prefix}stickynote <channel> <message>`\n• `{prefix}unstickynote <id>`",
+        description=f"{bar(7)}\n\nPin an auto reposting sticky message to keep rules or reminders visible.\n\n**Starter Commands:**\n• `{prefix}stickynote <channel> <message>`\n• `{prefix}unstickynote <id>`",
         color=discord.Color.yellow(),
     )
     pages.append(sticky)
@@ -11760,7 +11760,7 @@ async def help(ctx):
 
 
 # ============================================================
-# Bot control and one-time channel commands
+# Bot control and one time channel commands
 # ============================================================
 
 
@@ -11790,7 +11790,7 @@ async def stop(ctx):
 @staffperm("config")
 @staff_only()
 async def onetime(ctx, channel: discord.TextChannel = None):
-    """Configure a channel so non-staff members can only send one message before losing send permissions."""
+    """Configure a channel so non staff members can only send one message before losing send permissions."""
     target_channel = channel or ctx.channel
     guild_id = str(ctx.guild.id)
     channel_id = str(target_channel.id)
@@ -11802,37 +11802,37 @@ async def onetime(ctx, channel: discord.TextChannel = None):
             {"guild": guild_id}, {"$set": {f"onetime_channels.{channel_id}": {}}}, upsert=True
         )
         embed = discord.Embed(
-            title="✅ One-Time Message Channel Set Up",
-            description=f"**{target_channel.mention}** is now a one-time message channel.\n\nNon-staff members can send **only one message** in this channel. After their first message, they will lose permission to send more messages.\n\nStaff members are exempt and can continue messaging normally.\n\nUse `.restore <user>` to give a user back their messaging permissions.",
+            title="✅ One Time Message Channel Set Up",
+            description=f"**{target_channel.mention}** is now a one time message channel.\n\nNon staff members can send **only one message** in this channel. After their first message, they will lose permission to send more messages.\n\nStaff members are exempt and can continue messaging normally.\n\nUse `.restore <user>` to give a user back their messaging permissions.",
             color=discord.Color.green(),
         )
         await ctx.send(embed=embed)
         try:
             await target_channel.send(
-                "🔔 **This is now a one-time message channel!**\nNon-staff members can send only one message here. Staff can restore permissions with `.restore <user>`."
+                "🔔 **This is now a one time message channel!**\nNon staff members can send only one message here. Staff can restore permissions with `.restore <user>`."
             )
         except (discord.HTTPException, discord.Forbidden):
             pass
     else:
-        await ctx.send(f"⚠️ {target_channel.mention} is already a one-time message channel.")
+        await ctx.send(f"⚠️ {target_channel.mention} is already a one time message channel.")
 
 
 @bot.command()
 @staffperm("config")
 @staff_only()
 async def restore(ctx, member: discord.Member, channel: discord.TextChannel = None):
-    """Restore send permissions for a member in a one-time channel so they can message again."""
+    """Restore send permissions for a member in a one time channel so they can message again."""
     target_channel = channel or ctx.channel
     guild_id = str(ctx.guild.id)
     channel_id = str(target_channel.id)
     user_id = str(member.id)
     if guild_id not in onetime_channels or channel_id not in onetime_channels[guild_id]:
-        return await ctx.send(f"⚠️ {target_channel.mention} is not a one-time message channel.")
+        return await ctx.send(f"⚠️ {target_channel.mention} is not a one time message channel.")
     if user_id in onetime_channels[guild_id][channel_id]:
         del onetime_channels[guild_id][channel_id][user_id]
         await settings_col.update_one({"guild": guild_id}, {"$unset": {f"onetime_channels.{channel_id}.{user_id}": ""}})
     try:
-        await target_channel.set_permissions(member, send_messages=None, reason="One-time message permission restored")
+        await target_channel.set_permissions(member, send_messages=None, reason="One time message permission restored")
         embed = discord.Embed(
             title="✅ Permissions Restored",
             description=f"{member.mention} can now send messages in {target_channel.mention} again.",
@@ -11848,12 +11848,12 @@ async def restore(ctx, member: discord.Member, channel: discord.TextChannel = No
 @staffperm("config")
 @staff_only()
 async def disableonetime(ctx, channel: discord.TextChannel = None):
-    """Remove one-time channel restrictions and restore send permissions for all affected members."""
+    """Remove one time channel restrictions and restore send permissions for all affected members."""
     target_channel = channel or ctx.channel
     guild_id = str(ctx.guild.id)
     channel_id = str(target_channel.id)
     if guild_id not in onetime_channels or channel_id not in onetime_channels[guild_id]:
-        return await ctx.send(f"⚠️ {target_channel.mention} is not a one-time message channel.")
+        return await ctx.send(f"⚠️ {target_channel.mention} is not a one time message channel.")
     del onetime_channels[guild_id][channel_id]
     await settings_col.update_one({"guild": guild_id}, {"$unset": {f"onetime_channels.{channel_id}": ""}})
     try:
@@ -11862,14 +11862,14 @@ async def disableonetime(ctx, channel: discord.TextChannel = None):
                 if overwrite.send_messages is False:
                     await target_channel.set_permissions(target, send_messages=None)
         embed = discord.Embed(
-            title="✅ One-Time Channel Disabled",
-            description=f"{target_channel.mention} is no longer a one-time message channel.",
+            title="✅ One Time Channel Disabled",
+            description=f"{target_channel.mention} is no longer a one time message channel.",
             color=discord.Color.green(),
         )
         await ctx.send(embed=embed)
     except Exception as e:
         print(f"[ERROR] disableonetime command: {type(e).__name__}: {e}")
-        await ctx.send("❌ Failed to disable one-time restrictions. Please try again.")
+        await ctx.send("❌ Failed to disable one time restrictions. Please try again.")
 
 
 @bot.command()
@@ -11887,15 +11887,15 @@ async def on_close():
     """Called by discord.py whenever the bot's websocket connection is closing.
     Flush any open HTTP session so no ResourceWarning is raised on exit."""
     global session
-    print("🛑 Bot connection closing — cleaning up resources...")
+    print("🛑 Bot connection closing, cleaning up resources...")
     if session is not None and not session.closed:
         await session.close()
         print("✅ aiohttp session closed.")
 
 
 async def _main() -> None:
-    """Async entry-point.  Using ``async with bot`` guarantees bot.close() is
-    called even if start() raises, which triggers on_close() for clean-up."""
+    """Async entry point.  Using ``async with bot`` guarantees bot.close() is
+    called even if start() raises, which triggers on_close() for clean up."""
     async with bot:
         await bot.start(TOKEN)
 
