@@ -88,3 +88,4 @@ bot/actions.json
 .idea/
 .venv/
 .tests/
+start.sh
