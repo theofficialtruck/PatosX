@@ -4321,13 +4321,13 @@ class InviteLeaderboardView(discord.ui.View):
         )
         return embed
 
-    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="⬅️ Prev", style=discord.ButtonStyle.secondary)
     async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(1, self.page - 1)
         embed = await self.render()
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Next ➡️", style=discord.ButtonStyle.secondary)
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = min(self._total_pages(), self.page + 1)
         embed = await self.render()
@@ -6310,7 +6310,7 @@ class LeaderboardView(discord.ui.View):
         user_total = next((t for uid, t in users if uid == self.ctx.author.id), 0)
         footer_bits = [
             f"Page {self.page}/{total_pages}",
-            f"Showing ranks {start + 1}-{end} of {len(top)} (max {self.max_entries})",
+            f"Showing ranks {start + 1}-{end} of {len(top)}",
         ]
         if overall_rank:
             footer_bits.append(f"Your Rank: #{overall_rank} • 🪙 {user_total} coins")
@@ -6344,7 +6344,7 @@ class LeaderboardView(discord.ui.View):
         user_xp = next((x for uid, x in users if uid == self.ctx.author.id), 0)
         footer_bits = [
             f"Page {self.page}/{total_pages}",
-            f"Showing ranks {start + 1}-{end} of {len(top)} (max {self.max_entries})",
+            f"Showing ranks {start + 1}-{end} of {len(top)}",
         ]
         if overall_rank:
             footer_bits.append(f"Your Rank: #{overall_rank} • ⭐ {user_xp} XP")
@@ -6365,13 +6365,13 @@ class LeaderboardView(discord.ui.View):
         embed = await self.render()
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="⬅️ Prev", style=discord.ButtonStyle.secondary)
     async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(1, self.page - 1)
         embed = await self.render()
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Next ➡️", style=discord.ButtonStyle.secondary)
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page += 1
         embed = await self.render()
@@ -6384,7 +6384,7 @@ class LeaderboardView(discord.ui.View):
 async def leaderboard(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
-    # Pull a bounded top-N from Mongo (default 1000) and paginate it in Discord.
+    # Pull a bounded top N from Mongo (default 1000) and paginate it in discord
     view = LeaderboardView(ctx, page_size=10, max_entries=1000)
     embed = await view.render()
     await ctx.send(embed=embed, view=view)
@@ -9017,7 +9017,7 @@ class TranscriptPaginationView(discord.ui.View):
             embed.add_field(name=f"🎟 Ticket {ticket_id}", value=status, inline=False)
         return embed
 
-    @discord.ui.button(label="⬅ Prev", style=discord.ButtonStyle.gray)
+    @discord.ui.button(label="⬅️ Prev", style=discord.ButtonStyle.gray)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message(
@@ -9028,7 +9028,7 @@ class TranscriptPaginationView(discord.ui.View):
         self.children[1].disabled = self.page == self.max_page
         await interaction.response.edit_message(embed=await self.build_embed(), view=self)
 
-    @discord.ui.button(label="Next ➡", style=discord.ButtonStyle.gray)
+    @discord.ui.button(label="Next ➡️", style=discord.ButtonStyle.gray)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user != self.ctx.author:
             return await interaction.response.send_message(
@@ -11892,7 +11892,7 @@ class CommandPages(discord.ui.View):
         self.update_nav_buttons()
         await interaction.response.edit_message(embed=self.embeds[self.current], view=self)
 
-    @discord.ui.button(label="⏮ Prev", style=discord.ButtonStyle.secondary, custom_id="prev_button_unique")
+    @discord.ui.button(label="⬅️ Prev", style=discord.ButtonStyle.secondary, custom_id="prev_button_unique")
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         start, _ = self.get_section_bounds()
         if self.current > start:
@@ -11902,7 +11902,7 @@ class CommandPages(discord.ui.View):
         else:
             await interaction.response.defer()
 
-    @discord.ui.button(label="⏭ Next", style=discord.ButtonStyle.secondary, custom_id="next_button_unique")
+    @discord.ui.button(label="➡️ Next", style=discord.ButtonStyle.secondary, custom_id="next_button_unique")
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         _, end = self.get_section_bounds()
         if self.current < end - 1:
