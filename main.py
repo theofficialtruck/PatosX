@@ -2609,19 +2609,43 @@ async def get_balance(uid: int, guild_id: int) -> int:
 async def add_balance(uid: int, guild_id: int, amount: int):
     """Atomically increment the wallet balance for a user by amount."""
     user_id = f"{guild_id}-{uid}"
-    await economy_col.update_one({"_id": user_id}, {"$inc": {"wallet": amount}}, upsert=True)
+    await economy_col.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {"wallet": amount},
+            "$set": {"guild": str(guild_id), "user": str(uid)},
+            "$setOnInsert": {"bank": 0, "inventory": []},
+        },
+        upsert=True,
+    )
 
 
 async def subtract_balance(uid: int, guild_id: int, amount: int):
     """Atomically decrement the wallet balance for a user by amount."""
     user_id = f"{guild_id}-{uid}"
-    await economy_col.update_one({"_id": user_id}, {"$inc": {"wallet": -amount}}, upsert=True)
+    await economy_col.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {"wallet": -amount},
+            "$set": {"guild": str(guild_id), "user": str(uid)},
+            "$setOnInsert": {"bank": 0, "inventory": []},
+        },
+        upsert=True,
+    )
 
 
 async def update_user_balance(uid: int, guild_id: int, amount: int):
     """Adjust the wallet balance for a user by amount (positive adds, negative subtracts)."""
     user_id = f"{guild_id}-{uid}"
-    await economy_col.update_one({"_id": user_id}, {"$inc": {"wallet": amount}}, upsert=True)
+    await economy_col.update_one(
+        {"_id": user_id},
+        {
+            "$inc": {"wallet": amount},
+            "$set": {"guild": str(guild_id), "user": str(uid)},
+            "$setOnInsert": {"bank": 0, "inventory": []},
+        },
+        upsert=True,
+    )
 
 
 async def schedule_unmute(guild, member, remaining):
@@ -4228,10 +4252,102 @@ async def removeinvites(ctx, member: discord.Member, amount: int):
     await ctx.send(f"✅ Removed **{amount} invites** from {member.mention}. New total: **{new_total}**")
 
 
-@bot.hybrid_command(name="inviteleaderboard", aliases=["invitelb"], description="Show the top inviters in the server.")
+class InviteLeaderboardView(discord.ui.View):
+    def __init__(self, ctx, entries, page_size: int = 10):
+        super().__init__(timeout=180)
+        self.ctx = ctx
+        self.entries = entries
+        self.page_size = max(1, min(int(page_size), 25))
+        self.page = 1
+        self._name_cache = {}
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message("❌ You can't use these buttons!", ephemeral=True)
+            return False
+        return True
+
+    def _total_pages(self) -> int:
+        if not self.entries:
+            return 1
+        return (len(self.entries) - 1) // self.page_size + 1
+
+    def _sync_nav_buttons(self):
+        total_pages = self._total_pages()
+        self.prev_page.disabled = self.page <= 1
+        self.next_page.disabled = self.page >= total_pages
+
+    async def _resolve_name(self, uid_int: int) -> str:
+        member = self.ctx.guild.get_member(uid_int)
+        if member:
+            return member.display_name
+        cached = self._name_cache.get(uid_int)
+        if cached:
+            return cached
+        try:
+            fetched = await self.ctx.bot.fetch_user(uid_int)
+            name = getattr(fetched, "name", None) or f"Unknown ({uid_int})"
+        except Exception:
+            name = f"Unknown ({uid_int})"
+        self._name_cache[uid_int] = name
+        return name
+
+    async def render(self) -> discord.Embed:
+        total_pages = self._total_pages()
+        self.page = max(1, min(self.page, total_pages))
+        self._sync_nav_buttons()
+
+        embed = discord.Embed(title=f"🏆 Invite Leaderboard - {self.ctx.guild.name}", color=discord.Color.gold())
+        if not self.entries:
+            embed.description = "❌ No invite data found yet."
+            embed.set_footer(text="Page 1/1")
+            return embed
+
+        start = (self.page - 1) * self.page_size
+        end = min(start + self.page_size, len(self.entries))
+
+        for idx in range(start, end):
+            inviter_id, joins, leaves, net = self.entries[idx]
+            username = await self._resolve_name(int(inviter_id))
+            rank = idx + 1
+            embed.add_field(
+                name=f"#{rank} {username}",
+                value=f"✅ {joins} joins | ❌ {leaves} leaves → **{net} net**",
+                inline=False,
+            )
+
+        embed.set_footer(
+            text=f"Page {self.page}/{total_pages} • Showing ranks {start + 1}-{end} of {len(self.entries)}"
+        )
+        return embed
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(1, self.page - 1)
+        embed = await self.render()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self._total_pages(), self.page + 1)
+        embed = await self.render()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+@bot.hybrid_command(
+    name="inviteleaderboard",
+    aliases=["invitelb"],
+    description="Show the server invite leaderboard (paginated, up to top 300).",
+)
 @blacklist_barrier()
-async def inviteleaderboard(ctx, limit: int = 10):
+async def inviteleaderboard(ctx, limit: int = 300):
     guild_id = str(ctx.guild.id)
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 300
+    limit = max(1, min(limit, 300))
+
     totals = {}
     async for code_doc in invites_col.find({"guild_id": guild_id, "inviter_id": {"$ne": None}}):
         inviter_id = code_doc.get("inviter_id")
@@ -4241,30 +4357,25 @@ async def inviteleaderboard(ctx, limit: int = 10):
             totals[inviter_id] = totals.get(inviter_id, 0) + int(code_doc.get("uses", 0))
         except (TypeError, ValueError):
             pass
+
     if not totals:
         return await ctx.send("❌ No invite data found yet.")
+
     leaves_map = {}
     async for stats_doc in invites_col.find({"guild_id": guild_id, "user_id": {"$in": list(totals.keys())}}):
         inviter = stats_doc.get("user_id")
         leaves_map[inviter] = stats_doc.get("leaves", stats_doc.get("left", 0))
+
     sorted_inv = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:limit]
-    embed = discord.Embed(title=f"🏆 Top {limit} Inviters in {ctx.guild.name}", color=discord.Color.gold())
-    rank = 1
+    entries = []
     for inviter_id, joins in sorted_inv:
-        uid_int = int(inviter_id)
-        member = ctx.guild.get_member(uid_int)
-        if member:
-            username = member.display_name
-        else:
-            fetched = await ctx.bot.fetch_user(uid_int)
-            username = getattr(fetched, "name", f"Unknown ({uid_int})") if fetched else f"Unknown ({uid_int})"
         leaves = leaves_map.get(inviter_id, 0)
-        total = max(joins - leaves, 0)
-        embed.add_field(
-            name=f"#{rank} {username}", value=f"✅ {joins} joins | ❌ {leaves} leaves → **{total} net**", inline=False
-        )
-        rank += 1
-    await ctx.send(embed=embed)
+        net = max(joins - leaves, 0)
+        entries.append((inviter_id, joins, leaves, net))
+
+    view = InviteLeaderboardView(ctx, entries, page_size=10)
+    embed = await view.render()
+    await ctx.send(embed=embed, view=view)
 
 
 button_cooldowns = {}
@@ -4312,7 +4423,11 @@ class DoorCountSelect(discord.ui.Select):
         for child in self.view.children:
             child.disabled = True
         embed = discord.Embed(
-            title=f"🚪 Door Game - {doors} Doors', description=f'You've bet **{add_suffix(self.bet)} coins** and will go through **{doors} doors.**\n\nEach door gets harder - more risk, less reward. Good luck!",
+            title=f"🚪 Door Game - {doors} Doors",
+            description=(
+                f"You've bet **{add_suffix(self.bet)} coins** and will go through **{doors} doors.**\n\n"
+                "Each door gets harder - more risk, less reward. Good luck!"
+            ),
             color=16753920,
         )
         embed.set_footer(text="Click a door to begin your journey!")
@@ -6079,61 +6194,188 @@ async def give(ctx, member_name: str, amount: str):
 
 
 class LeaderboardView(discord.ui.View):
-    def __init__(self, ctx):
-        super().__init__(timeout=60)
+    def __init__(self, ctx, page_size: int = 10, max_entries: int = 1000):
+        super().__init__(timeout=180)
         self.ctx = ctx
+        self.page_size = max(1, min(int(page_size), 25))
+        self.max_entries = max(10, int(max_entries))
+
+        self.mode = "money"  # money|xp
+        self.page = 1
+
+        self._money_users = None  # list[(uid, total)] sorted
+        self._xp_users = None  # list[(uid, xp)] sorted
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message("❌ You can't use these buttons!", ephemeral=True)
+            return False
+        return True
+
+    def _total_pages(self, top_n: int) -> int:
+        if top_n <= 0:
+            return 1
+        return (top_n - 1) // self.page_size + 1
+
+    def _sync_nav_buttons(self, total_pages: int):
+        self.prev_page.disabled = self.page <= 1
+        self.next_page.disabled = self.page >= total_pages
+
+    async def _load_money_users(self):
+        # Only pull the top N from Mongo so large servers don't lag the bot process.
+        # Use the _id prefix ("{guildId}-{userId}") to include older docs that may not have guild/user fields set.
+        gid = str(self.ctx.guild.id)
+        pipeline = [
+            {"$match": {"_id": {"$regex": f"^{gid}-"}}},
+            {
+                "$project": {
+                    "_id": 1,
+                    "user": {
+                        "$ifNull": [
+                            "$user",
+                            {"$arrayElemAt": [{"$split": ["$_id", "-"]}, 1]},
+                        ]
+                    },
+                    "total": {
+                        "$add": [
+                            {"$ifNull": ["$wallet", 0]},
+                            {"$ifNull": ["$bank", 0]},
+                        ]
+                    },
+                }
+            },
+            {"$sort": {"total": -1}},
+            {"$limit": int(self.max_entries)},
+        ]
+        users = []
+        cursor = economy_col.aggregate(pipeline, allowDiskUse=True)
+        async for doc in cursor:
+            try:
+                uid = int(doc.get("user"))
+            except (TypeError, ValueError):
+                continue
+            users.append((uid, int(doc.get("total", 0))))
+        self._money_users = users
+
+    async def _load_xp_users(self):
+        gid = str(self.ctx.guild.id)
+        users = []
+        cursor = (
+            xp_col.find({"guild": gid, "user": {"$exists": True}}, {"user": 1, "xp": 1})
+            .sort("xp", -1)
+            .limit(int(self.max_entries))
+        )
+        async for doc in cursor:
+            try:
+                uid = int(doc.get("user"))
+            except (TypeError, ValueError):
+                continue
+            users.append((uid, int(doc.get("xp", 0))))
+        self._xp_users = users
+
+    async def render(self) -> discord.Embed:
+        if self.mode == "xp":
+            if self._xp_users is None:
+                await self._load_xp_users()
+            return await self._render_xp()
+
+        if self._money_users is None:
+            await self._load_money_users()
+        return await self._render_money()
+
+    async def _render_money(self) -> discord.Embed:
+        users = self._money_users or []
+        top = users[: self.max_entries]
+        total_pages = self._total_pages(len(top))
+        self.page = max(1, min(self.page, total_pages))
+        self._sync_nav_buttons(total_pages)
+
+        embed = discord.Embed(title="🏆 Leaderboard - Richest Users", color=discord.Color.teal())
+        if not top:
+            embed.description = "❌ No economy data found yet."
+            embed.set_footer(text="Page 1/1")
+            return embed
+
+        start = (self.page - 1) * self.page_size
+        end = min(start + self.page_size, len(top))
+
+        for idx in range(start, end):
+            uid, total = top[idx]
+            member = self.ctx.guild.get_member(uid)
+            name = member.display_name if member else f"Unknown User ({uid})"
+            rank = idx + 1
+            embed.add_field(name=f"#{rank} {name}", value=f"🪙 {total} coins", inline=False)
+
+        overall_rank = next((i + 1 for i, (uid, _) in enumerate(users) if uid == self.ctx.author.id), None)
+        user_total = next((t for uid, t in users if uid == self.ctx.author.id), 0)
+        footer_bits = [
+            f"Page {self.page}/{total_pages}",
+            f"Showing ranks {start + 1}-{end} of {len(top)} (max {self.max_entries})",
+        ]
+        if overall_rank:
+            footer_bits.append(f"Your Rank: #{overall_rank} • 🪙 {user_total} coins")
+        embed.set_footer(text=" • ".join(footer_bits))
+        return embed
+
+    async def _render_xp(self) -> discord.Embed:
+        users = self._xp_users or []
+        top = users[: self.max_entries]
+        total_pages = self._total_pages(len(top))
+        self.page = max(1, min(self.page, total_pages))
+        self._sync_nav_buttons(total_pages)
+
+        embed = discord.Embed(title="🏆 Leaderboard - Most XP", color=discord.Color.gold())
+        if not top:
+            embed.description = "❌ No XP data found yet."
+            embed.set_footer(text="Page 1/1")
+            return embed
+
+        start = (self.page - 1) * self.page_size
+        end = min(start + self.page_size, len(top))
+
+        for idx in range(start, end):
+            uid, xp = top[idx]
+            member = self.ctx.guild.get_member(uid)
+            name = member.display_name if member else f"Unknown User ({uid})"
+            rank = idx + 1
+            embed.add_field(name=f"#{rank} {name}", value=f"⭐ {xp} XP", inline=False)
+
+        overall_rank = next((i + 1 for i, (uid, _) in enumerate(users) if uid == self.ctx.author.id), None)
+        user_xp = next((x for uid, x in users if uid == self.ctx.author.id), 0)
+        footer_bits = [
+            f"Page {self.page}/{total_pages}",
+            f"Showing ranks {start + 1}-{end} of {len(top)} (max {self.max_entries})",
+        ]
+        if overall_rank:
+            footer_bits.append(f"Your Rank: #{overall_rank} • ⭐ {user_xp} XP")
+        embed.set_footer(text=" • ".join(footer_bits))
+        return embed
 
     @discord.ui.button(label="Money", style=discord.ButtonStyle.primary)
     async def money_lb(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.ctx.author.id:
-            return await interaction.response.send_message("❌ You can't use this button!", ephemeral=True)
-        embed = await self.get_money_embed()
+        self.mode = "money"
+        self.page = 1
+        embed = await self.render()
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="XP", style=discord.ButtonStyle.secondary)
     async def xp_lb(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.ctx.author.id:
-            return await interaction.response.send_message("❌ You can't use this button!", ephemeral=True)
-        embed = await self.get_xp_embed()
+        self.mode = "xp"
+        self.page = 1
+        embed = await self.render()
         await interaction.response.edit_message(embed=embed, view=self)
 
-    async def get_money_embed(self):
-        cursor = economy_col.find({"guild": str(self.ctx.guild.id)})
-        users = []
-        async for doc in cursor:
-            total = doc.get("wallet", 0) + doc.get("bank", 0)
-            if "user" in doc:
-                users.append((int(doc["user"]), total))
-        users.sort(key=lambda x: x[1], reverse=True)
-        embed = discord.Embed(title="🏆 Leaderboard - Richest Users", color=discord.Color.teal())
-        for i, (uid, total) in enumerate(users[:10], start=1):
-            member = self.ctx.guild.get_member(uid)
-            name = member.display_name if member else f"Unknown User ({uid})"
-            embed.add_field(name=f"#{i} {name}", value=f"🪙 {total} coins", inline=False)
-        rank = next((i + 1 for i, (uid, _) in enumerate(users) if uid == self.ctx.author.id), None)
-        user_total = next((total for uid, total in users if uid == self.ctx.author.id), 0)
-        if rank:
-            embed.set_footer(text=f"Your Rank: #{rank} • 🪙 {user_total} coins")
-        return embed
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary)
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(1, self.page - 1)
+        embed = await self.render()
+        await interaction.response.edit_message(embed=embed, view=self)
 
-    async def get_xp_embed(self):
-        cursor = xp_col.find({"guild": str(self.ctx.guild.id)})
-        users = []
-        async for doc in cursor:
-            xp = doc.get("xp", 0)
-            if "user" in doc:
-                users.append((int(doc["user"]), xp))
-        users.sort(key=lambda x: x[1], reverse=True)
-        embed = discord.Embed(title="🏆 Leaderboard - Most XP", color=discord.Color.gold())
-        for i, (uid, xp) in enumerate(users[:10], start=1):
-            member = self.ctx.guild.get_member(uid)
-            name = member.display_name if member else f"Unknown User ({uid})"
-            embed.add_field(name=f"#{i} {name}", value=f"⭐ {xp} XP", inline=False)
-        rank = next((i + 1 for i, (uid, _) in enumerate(users) if uid == self.ctx.author.id), None)
-        user_xp = next((xp for uid, xp in users if uid == self.ctx.author.id), 0)
-        if rank:
-            embed.set_footer(text=f"Your Rank: #{rank} • ⭐ {user_xp} XP")
-        return embed
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page += 1
+        embed = await self.render()
+        await interaction.response.edit_message(embed=embed, view=self)
 
 
 @bot.hybrid_command(name="leaderboard", description="View the top users.", aliases=["lb"])
@@ -6142,8 +6384,9 @@ class LeaderboardView(discord.ui.View):
 async def leaderboard(ctx):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
-    view = LeaderboardView(ctx)
-    embed = await view.get_money_embed()
+    # Pull a bounded top-N from Mongo (default 1000) and paginate it in Discord.
+    view = LeaderboardView(ctx, page_size=10, max_entries=1000)
+    embed = await view.render()
     await ctx.send(embed=embed, view=view)
 
 
