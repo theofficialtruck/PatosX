@@ -50,23 +50,6 @@ Copy-Item .env.example .env
 python main.py
 ```
 
-## Quick start script
-
-You can also use the included startup script. It fetches the specified branch (usage: ./start.sh <branch> [--force]), sets up a venv, installs deps, then runs the bot.
-
-Example:
-```bash
-./start.sh main
-```
-
-To force your local branch to match the remote branch:
-
-```bash
-./start.sh main --force
-```
-
-> Note: `start.sh` requires `git` + `bash` (works on macOS/Linux, and on Windows via WSL or Git Bash).
-
 ## Configuration
 
 PatosX uses environment variables stored in a local `.env` file. `main.py` will fail if required values are missing. View .env.example for a full list of available options.
@@ -99,7 +82,6 @@ NEVER commit your real `.env` file.
 tests/                 Pytest test suite
 .env.example           Example environment template
 main.py                Main bot entry point
-start.sh               Local startup/update script
 requirements.txt       Python dependencies
 duckquiz_questions.py  Quiz question bank
 duckfacts.txt          Duck facts data file
@@ -136,7 +118,7 @@ If PatosX is made available for use over a network, the corresponding source cod
 ## Contact
 
 Project owner: `theofficialtruck`\
-PatosX's Main Discord: [Duck Paradise](https://discord.gg/DuckParadise)
+PatosX's Main Discord: [PatosX](https://discord.gg/DuckParadise)
 
 For questions, permissions, or other inquiries:
 
