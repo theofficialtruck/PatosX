@@ -171,7 +171,7 @@ class _DummyDB:
 # ============================================================
 
 # These five keys must all be present or the bot refuses to start
-required_keys = ["DISCORD_TOKEN", "MONGO_URI", "TENOR_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEYS"]
+required_keys = ["DISCORD_TOKEN", "MONGO_URI", "GIPHY_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEYS"]
 env_vars = {key: os.getenv(key) for key in required_keys}
 missing = [key for key, value in env_vars.items() if not value]
 if missing and (not _running_under_pytest()):
@@ -187,7 +187,7 @@ if not missing:
 # Top level credentials extracted for convenient use throughout the file
 TOKEN = env_vars.get("DISCORD_TOKEN", "")
 MONGO_URI = env_vars.get("MONGO_URI", "")
-TENOR_API_KEY = env_vars.get("TENOR_API_KEY", "")
+GIPHY_API_KEY = env_vars.get("GIPHY_API_KEY", "")
 OPENROUTER_API_KEY = env_vars.get("OPENROUTER_API_KEY", "")
 
 # Multiple Gemini keys can be provided as a comma separated list so that the bot
@@ -8093,7 +8093,8 @@ async def slap(ctx, member: discord.Member = None):
         await ctx.defer()
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"https://tenor.googleapis.com/v2/search?q=anime slap&key={TENOR_API_KEY}&limit=20", timeout=5
+                f"https://api.giphy.com/v1/gifs/search?q=anime%20slap&api_key={GIPHY_API_KEY}&limit=20&rating=g&lang=en",
+                timeout=5,
             ) as r:
                 if r.status != 200:
                     raise Exception(f"HTTP {r.status}")
