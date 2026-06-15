@@ -7496,16 +7496,32 @@ async def slap(ctx, member: discord.Member = None):
         await ctx.defer()
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"https://tenor.googleapis.com/v2/search?q=anime slap&key={TENOR_API_KEY}&limit=20", timeout=5
+                f"https://api.giphy.com/v1/gifs/search?q=anime%20slap&api_key={GIPHY_API_KEY}&limit=20&rating=g&lang=en",
+                timeout=5,
             ) as r:
                 if r.status != 200:
                     raise Exception(f"HTTP {r.status}")
                 data = await r.json()
-        results = data.get("results", [])
+        # Giphy returns results under the "data" key; each item has an "images" map with various sizes.
+        results = data.get("data", [])
         if not results:
             await ctx.send("❌ Couldn't find any slap GIFs right now.")
             return
-        gif_url = random.choice(results)["media_formats"]["gif"]["url"]
+        gif_item = random.choice(results)
+        images = gif_item.get("images", {})
+        gif_url = None
+        # prefer original, then common fallbacks
+        for key in ("original", "downsized", "fixed_height", "fixed_width"):
+            img = images.get(key)
+            if img and img.get("url"):
+                gif_url = img["url"]
+                break
+        # fallback to top level urls
+        if not gif_url:
+            gif_url = gif_item.get("url") or gif_item.get("embed_url")
+        if not gif_url:
+            await ctx.send("❌ Couldn't find any slap GIFs right now.")
+            return
         embed = discord.Embed(
             title="👋 Slap!",
             description=f"{ctx.author.mention} slapped {member.mention}! Ouch!",
