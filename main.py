@@ -988,7 +988,7 @@ ECONOMY_HELP_COMMANDS = {
     "jobstatus",
     "fish",
     "swim",
-    "rob",
+    "attack",
     "crime",
     "passive",
     "sell",
@@ -1760,18 +1760,18 @@ async def configure(ctx):
         if not await check_staff_perm(ctx, "config"):
             return await ctx.send("❌ You don't have permission to configure the bot.")
     prompts = {
-        "welcome_channel": "Enter the **welcome channel ID** (required for welcome system):",
-        "welcome_message": "Enter the **welcome message** (supports `{mention}`, `{username}`, `{server}`, `{membercount}` placeholders - or type `skip` to use the default):",
-        "boost_channel": "Enter the **boost channel ID** (required for boost system):",
-        "boost_message": "Enter the **boost message** (supports `{mention}`, `{username}`, `{server}`, `{boostcount}` placeholders - required):",
-        "ALLOWED_DUCK_CHANNELS": "Enter allowed channel IDs for `.duck` (comma/space separated, required):",
-        "ROLE_ID": "Enter role IDs to award for passing `.duckquiz` (comma/space separated, required):",
-        "QUIZ_CHANNEL": "Enter channel IDs where `.duckquiz` can run (comma/space separated, required):",
-        "allowed_channel_id": "Enter channel IDs where DuckGPT is allowed (comma/space separated, required):",
-        "economy_channel": "Enter the channel ID where the economy game is allowed (required):",
-        "log_channel": "Enter the log channel ID for moderation logs (optional, type `skip` to disable):",
-        "DROP_CHANNELS": "Enter channel IDs where `.drop` can be used by members (comma/space separated, required):",
-        "QUACK_CHANNELS": "Enter channel IDs where the quack counter should activate (comma/space separated, optional, type `skip` to disable):",
+        "welcome_channel": "Enter the **welcome channel ID** (type `skip` to skip — must be paired with a welcome message):",
+        "welcome_message": "Enter the **welcome message** (supports `{mention}`, `{username}`, `{server}`, `{membercount}` — type `skip` to skip):",
+        "boost_channel": "Enter the **boost channel ID** (type `skip` to skip — must be paired with a boost message):",
+        "boost_message": "Enter the **boost message** (supports `{mention}`, `{username}`, `{server}`, `{boostcount}` — type `skip` to skip):",
+        "ALLOWED_DUCK_CHANNELS": "Enter allowed channel IDs for `.duck` (comma/space separated — type `skip` to allow everywhere):",
+        "ROLE_ID": "Enter role IDs to award for passing `.duckquiz` (comma/space separated — type `skip` to skip):",
+        "QUIZ_CHANNEL": "Enter channel IDs where `.duckquiz` can run (comma/space separated — type `skip` to allow everywhere):",
+        "allowed_channel_id": "Enter channel IDs where DuckGPT is allowed (comma/space separated — type `skip` to allow everywhere):",
+        "economy_channel": "Enter the channel ID where economy commands are allowed (type `skip` to allow everywhere):",
+        "log_channel": "Enter the log channel ID for moderation logs (type `skip` to disable):",
+        "DROP_CHANNELS": "Enter channel IDs where `.drop` can be used by members (comma/space separated — type `skip` to allow everywhere):",
+        "QUACK_CHANNELS": "Enter channel IDs where the quack counter should activate (comma/space separated — type `skip` to count everywhere):",
     }
     config_data = {"guild": str(ctx.guild.id)}
 
@@ -1807,27 +1807,14 @@ async def configure(ctx):
         content = msg.content.strip()
         if content.lower() == "cancel":
             return await ctx.send("❌ Configuration cancelled.")
-        if key == "log_channel" and content.lower() == "skip":
-            try:
-                await msg.delete()
-            except discord.HTTPException:
-                pass
-            continue
-        if key == "QUACK_CHANNELS" and content.lower() == "skip":
-            config_data[key] = []
-            try:
-                await msg.delete()
-            except discord.HTTPException:
-                pass
-            continue
-        if key == "welcome_message" and content.lower() == "skip":
+        if content.lower() == "skip":
             try:
                 await msg.delete()
             except discord.HTTPException:
                 pass
             continue
         if not content:
-            return await ctx.send(f"❌ `{key}` cannot be blank. Please run `.configure` again.")
+            return await ctx.send(f"❌ `{key}` cannot be blank. Type `skip` to skip. Please run `.configure` again.")
         try:
             if key in ["log_channel", "economy_channel", "welcome_channel", "boost_channel"]:
                 if not content.isdigit():
@@ -1848,6 +1835,19 @@ async def configure(ctx):
             await msg.delete()
         except discord.HTTPException:
             pass
+    # Validate paired settings — welcome and boost each require both channel and message
+    welcome_ch_set = "welcome_channel" in config_data
+    welcome_msg_set = "welcome_message" in config_data
+    if welcome_ch_set != welcome_msg_set:
+        return await ctx.send(
+            "❌ Welcome channel and welcome message must both be provided or both skipped. Please run `.configure` again."
+        )
+    boost_ch_set = "boost_channel" in config_data
+    boost_msg_set = "boost_message" in config_data
+    if boost_ch_set != boost_msg_set:
+        return await ctx.send(
+            "❌ Boost channel and boost message must both be provided or both skipped. Please run `.configure` again."
+        )
     await config_col.update_one({"guild": config_data["guild"]}, {"$set": config_data}, upsert=True)
     await ctx.send(f"✅ Configuration saved successfully! Staff role set to {staff_role.mention}.", delete_after=7)
     await log_action(ctx, f"Configuration updated for {ctx.guild.name}", action_type="configure")
@@ -3011,30 +3011,31 @@ async def on_message(message):
             if config:
                 boost_channel_id = config.get("boost_channel")
                 boost_message = config.get("boost_message")
-                channel = guild.get_channel(boost_channel_id) if boost_channel_id else message.channel
-                if channel and boost_message:
-                    booster = message.author
-                    msg_content = (
-                        boost_message.replace("{username}", booster.name)
-                        .replace("{mention}", booster.mention)
-                        .replace("{server}", guild.name)
-                        .replace("{boostcount}", str(guild.premium_subscription_count or 0))
-                    )
-                    embed = discord.Embed(
-                        description=msg_content, color=discord.Color.fuchsia(), timestamp=datetime.now(timezone.utc)
-                    )
-                    embed.set_author(name="Boost Alert!", icon_url=booster.display_avatar.url)
-                    embed.set_thumbnail(url=booster.display_avatar.url)
-                    try:
-                        sent = await channel.send(embed=embed)
-                        emoji = config.get("boost_react_emoji")
-                        if emoji:
-                            try:
-                                await sent.add_reaction(emoji)
-                            except (discord.HTTPException, discord.Forbidden):
-                                pass
-                    except Exception as e:
-                        print(f"⚠️ Error sending boost thank you in {guild.name}: {e}")
+                if boost_channel_id and boost_message:
+                    channel = guild.get_channel(boost_channel_id)
+                    if channel:
+                        booster = message.author
+                        msg_content = (
+                            boost_message.replace("{username}", booster.name)
+                            .replace("{mention}", booster.mention)
+                            .replace("{server}", guild.name)
+                            .replace("{boostcount}", str(guild.premium_subscription_count or 0))
+                        )
+                        embed = discord.Embed(
+                            description=msg_content, color=discord.Color.fuchsia(), timestamp=datetime.now(timezone.utc)
+                        )
+                        embed.set_author(name="Boost Alert!", icon_url=booster.display_avatar.url)
+                        embed.set_thumbnail(url=booster.display_avatar.url)
+                        try:
+                            sent = await channel.send(embed=embed)
+                            emoji = config.get("boost_react_emoji")
+                            if emoji:
+                                try:
+                                    await sent.add_reaction(emoji)
+                                except (discord.HTTPException, discord.Forbidden):
+                                    pass
+                        except Exception as e:
+                            print(f"⚠️ Error sending boost thank you in {guild.name}: {e}")
             return
     except Exception as e:
         print(f"[boost message handler error] {e}")
@@ -6984,15 +6985,26 @@ async def swim_error(ctx, error):
         await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
-@bot.hybrid_command(name="rob", description="Attempt to rob another user.", aliases=["steal"])
-@app_commands.describe(member="The user to rob (mention or name)")
+_ATTACK_MESSAGES = [
+    "🍞 {attacker} pelted {victim} with a barrage of breadcrumbs and waddled away with **{amount}** coins!",
+    "🦆 {attacker} body-slammed {victim} with a rubber duck and snatched **{amount}** coins in the chaos!",
+    "💦 {attacker} splashed {victim} with a bucket of pond water, causing **{amount}** coins to spill out!",
+    "🪶 {attacker} unleashed a feather storm on {victim} and pinched **{amount}** coins while they were distracted!",
+    "🌊 {attacker} chased {victim} around the pond, honking aggressively, and pickpocketed **{amount}** coins!",
+    "🥖 {attacker} lured {victim} with moldy bread then grabbed **{amount}** coins when they weren't looking!",
+    "🐾 {attacker} let out the loudest quack ever at {victim}, startling them into dropping **{amount}** coins!",
+]
+
+
+@bot.hybrid_command(name="attack", description="Attack another user and steal their coins.", aliases=["rob", "steal"])
+@app_commands.describe(member="The user to attack (mention or name)")
 @blacklist_barrier()
 @xp_earn(14, 28)
-async def rob(ctx, member: discord.Member):
+async def attack(ctx, member: discord.Member):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     if member == ctx.author:
-        return await ctx.send("❌ You can't rob yourself!")
+        return await ctx.send("❌ You can't attack yourself!")
     now = datetime.now(timezone.utc)
     robber_id = f"{ctx.guild.id}-{ctx.author.id}"
     victim_id = f"{ctx.guild.id}-{member.id}"
@@ -7006,19 +7018,19 @@ async def rob(ctx, member: discord.Member):
         if now < cooldown_dt:
             remaining = cooldown_dt - now
             mins = int(remaining.total_seconds() // 60)
-            return await ctx.send(f"🕒 You can rob again in {mins} minute(s).")
+            return await ctx.send(f"🕒 You can attack again in {mins} minute(s).")
     if r_doc.get("passive_until"):
         until = datetime.fromisoformat(r_doc["passive_until"])
         if until.tzinfo is None:
             until = until.replace(tzinfo=timezone.utc)
         if until > now:
-            return await ctx.send("🔒 You have passive mode enabled, disable it to rob others.")
+            return await ctx.send("🔒 You have passive mode enabled, disable it to attack others.")
     if v_doc.get("passive_until"):
         until = datetime.fromisoformat(v_doc["passive_until"])
         if until.tzinfo is None:
             until = until.replace(tzinfo=timezone.utc)
         if until > now:
-            return await ctx.send("🔒 That user has passive mode enabled, you can't rob them.")
+            return await ctx.send("🔒 That user has passive mode enabled, you can't attack them.")
     last_robbed = v_doc.get("last_robbed")
     if last_robbed:
         if isinstance(last_robbed, str):
@@ -7030,22 +7042,23 @@ async def rob(ctx, member: discord.Member):
             minutes = round(rem.total_seconds() / 60)
             return await ctx.send(f"🛡️ {member.display_name} is under protection. Try again in {minutes} minutes.")
     if r_doc.get("wallet", 0) < 500:
-        return await ctx.send("❌ You need at least 500 coins to rob.")
+        return await ctx.send("❌ You need at least 500 coins to attack.")
     if v_doc.get("wallet", 0) < 300:
-        return await ctx.send("❌ They don't have enough coins to rob.")
+        return await ctx.send("❌ They don't have enough coins to steal from.")
     amount = random.randint(100, min(500, v_doc["wallet"], r_doc["wallet"]))
     await add_balance(ctx.author.id, ctx.guild.id, amount)
     await subtract_balance(member.id, ctx.guild.id, amount)
     await economy_col.update_one({"_id": robber_id}, {"$set": {"rob_cooldown": (now + timedelta(hours=3)).isoformat()}})
     await economy_col.update_one({"_id": victim_id}, {"$set": {"last_robbed": now.isoformat()}})
-    msg = f"💰 You robbed {member.display_name} and stole {amount} coins!"
+    template = random.choice(_ATTACK_MESSAGES)
+    msg = template.format(attacker=ctx.author.display_name, victim=member.display_name, amount=amount)
     await ctx.send(msg)
 
 
-@rob.error
-async def rob_error(ctx, error):
+@attack.error
+async def attack_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
-        await send_hybrid_error(ctx, content="❌ You must mention someone to rob. Example: `.rob @User`")
+        await send_hybrid_error(ctx, content="❌ You must mention someone to attack. Example: `.attack @User`")
     elif isinstance(error, commands.BadArgument):
         await send_hybrid_error(ctx, content="❌ That's not a valid user.")
     else:
@@ -7054,7 +7067,7 @@ async def rob_error(ctx, error):
             return await send_hybrid_error(
                 ctx, content=f"❌ You are on cooldown. Try again in {root_error.retry_after:.2f}s"
             )
-        print(f"[ERROR] rob_error: {root_error}")
+        print(f"[ERROR] attack_error: {root_error}")
         traceback.print_exception(type(root_error), root_error, root_error.__traceback__)
         await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
@@ -7193,7 +7206,7 @@ async def passive(ctx, member: discord.Member = None):
                 {"_id": user_id}, {"$unset": {"passive_until": ""}, "$set": {"last_passive_toggle": now.isoformat()}}
             )
             if target == ctx.author:
-                return await ctx.send("🛡️ Passive mode disabled. You can now rob and be robbed.")
+                return await ctx.send("🛡️ Passive mode disabled. You can now attack and be attacked.")
             else:
                 return await ctx.send(f"🛡️ Disabled passive mode for {target.display_name}.")
     until_time = now + timedelta(hours=24)
@@ -7203,7 +7216,7 @@ async def passive(ctx, member: discord.Member = None):
         upsert=True,
     )
     if target == ctx.author:
-        await ctx.send("🛡️ Passive mode enabled for 24 hours - you can't rob or be robbed.")
+        await ctx.send("🛡️ Passive mode enabled for 24 hours - you can't attack or be attacked.")
     else:
         await ctx.send(f"🛡️ Enabled passive mode for {target.display_name} for 24 hours.")
 
@@ -7892,22 +7905,24 @@ class QuizView(discord.ui.View):
                     config = {}
             if not isinstance(config, dict):
                 config = {}
-            role_ids = config.get("ROLE_ID", [])
-            if isinstance(role_ids, int):
-                role_ids = [role_ids]
-            elif isinstance(role_ids, str) and role_ids.isdigit():
-                role_ids = [int(role_ids)]
-            elif isinstance(role_ids, list):
-                role_ids = [int(r) for r in role_ids if str(r).isdigit()]
+            raw_role_ids = config.get("ROLE_ID")
+            if not raw_role_ids:
+                result += "\n⚠️ Staff have not provided a role to award."
             else:
                 role_ids = []
-            roles_to_add = [self.ctx.guild.get_role(rid) for rid in role_ids if self.ctx.guild.get_role(rid)]
-            if roles_to_add:
-                await self.ctx.author.add_roles(*roles_to_add, reason="Passed duck quiz")
-                role_names = ", ".join([r.name for r in roles_to_add])
-                result += f"\n🎉 You passed and earned the **{role_names}** role!"
-            else:
-                result += "\n⚠️ Role configured, but could not find it on the server."
+                if isinstance(raw_role_ids, int):
+                    role_ids = [raw_role_ids]
+                elif isinstance(raw_role_ids, str) and raw_role_ids.isdigit():
+                    role_ids = [int(raw_role_ids)]
+                elif isinstance(raw_role_ids, list):
+                    role_ids = [int(r) for r in raw_role_ids if str(r).isdigit()]
+                roles_to_add = [self.ctx.guild.get_role(rid) for rid in role_ids if self.ctx.guild.get_role(rid)]
+                if roles_to_add:
+                    await self.ctx.author.add_roles(*roles_to_add, reason="Passed duck quiz")
+                    role_names = ", ".join([r.name for r in roles_to_add])
+                    result += f"\n🎉 You passed and earned the **{role_names}** role!"
+                else:
+                    result += "\n⚠️ Role configured, but could not find it on the server."
         if interaction:
             await interaction.followup.send(result, ephemeral=True)
         else:
@@ -9894,11 +9909,14 @@ async def roleremove(ctx: commands.Context, role: discord.Role):
     await refresh_roles_embed(ctx, guild_id)
 
 
-@bot.hybrid_command(name="addmoney", description="Add money to a user (economy admin only).")
-@app_commands.describe(amount="Amount to add (supports k, m, b suffixes)", user="User to give money to")
+@bot.hybrid_command(name="addmoney", description="Add money to one or more users (economy admin only).")
+@app_commands.describe(
+    amount="Amount to add (supports k, m, b suffixes)",
+    users="User(s) to give money to — mentions or IDs, space/comma separated",
+)
 @staffperm("economy")
 @xp_earn(4, 8)
-async def addmoney(ctx, amount: str, user: discord.Member):
+async def addmoney(ctx, amount: str, *, users: str):
     if ctx.author.id not in (AUTHORIZED_USER_IDS | {ctx.guild.owner_id}):
         return await ctx.send("❌ You are not authorized to use this command.")
     try:
@@ -9907,16 +9925,24 @@ async def addmoney(ctx, amount: str, user: discord.Member):
             raise ValueError
     except Exception:
         return await ctx.send("❌ Invalid amount.\nUse formats like: `100`, `4k`, `2m`, `1.5mil`, `123,456`")
-    try:
-        uid = user.id
-        member = user
-    except Exception:
-        return await ctx.send("❌ Invalid user specified.")
-    user_data = await get_user(ctx, ctx.guild.id, uid)
-    new_bank = user_data.get("bank", 0) + coins
-    await economy_col.update_one({"_id": f"{ctx.guild.id}-{uid}"}, {"$set": {"bank": new_bank}})
-    await log_action(ctx, f"Added 🪙 {coins:,} to {member.mention}'s bank.", user_id=uid, action_type="AddMoney")
-    await ctx.send(f"✅ Added 🪙 {coins:,} to {member.mention} (New bank: {new_bank:,})")
+    uid_list = [int(m) for m in re.findall(r"<@!?(\d+)>", users)]
+    remaining_text = re.sub(r"<@!?\d+>", "", users)
+    for raw in re.findall(r"\b(\d{15,20})\b", remaining_text):
+        uid = int(raw)
+        if uid not in uid_list:
+            uid_list.append(uid)
+    if not uid_list:
+        return await ctx.send("❌ No valid users found. Mention users or provide their IDs.")
+    results = []
+    for uid in uid_list:
+        member = ctx.guild.get_member(uid)
+        display = member.mention if member else f"`{uid}`"
+        user_data = await get_user(ctx, ctx.guild.id, uid)
+        new_bank = user_data.get("bank", 0) + coins
+        await economy_col.update_one({"_id": f"{ctx.guild.id}-{uid}"}, {"$set": {"bank": new_bank}})
+        await log_action(ctx, f"Added 🪙 {coins:,} to {display}'s bank.", user_id=uid, action_type="AddMoney")
+        results.append(f"✅ {display} → new bank: **{new_bank:,}**")
+    await ctx.send(f"Added 🪙 **{coins:,}** to {len(uid_list)} user(s):\n" + "\n".join(results))
 
 
 @addmoney.error
@@ -9928,12 +9954,12 @@ async def addmoney_error(ctx, error):
         if isinstance(error, commands.BadArgument):
             return await send_hybrid_error(
                 ctx,
-                content=f"❌ Invalid arguments. Usage: `{prefix}addmoney <amount> @user`\nExample: `{prefix}addmoney 100 @User`",
+                content=f"❌ Invalid arguments. Usage: `{prefix}addmoney <amount> @user1 @user2 ...`\nExample: `{prefix}addmoney 100 @User1 @User2`",
             )
         elif isinstance(error, commands.MissingRequiredArgument):
             return await send_hybrid_error(
                 ctx,
-                content=f"❌ Missing arguments. Usage: `{prefix}addmoney <amount> @user`\nExample: `{prefix}addmoney 100 @User`",
+                content=f"❌ Missing arguments. Usage: `{prefix}addmoney <amount> @user1 @user2 ...`\nExample: `{prefix}addmoney 100 @User1 @User2`",
             )
         else:
             root_error = unwrap_command_error(error)
@@ -9944,11 +9970,14 @@ async def addmoney_error(ctx, error):
         print(f"[addmoney_error] {e}")
 
 
-@bot.hybrid_command(name="removemoney", description="Remove money from a user (economy admin only).")
-@app_commands.describe(amount="Amount to remove (supports k, m, b suffixes)", user="User to take money from")
+@bot.hybrid_command(name="removemoney", description="Remove money from one or more users (economy admin only).")
+@app_commands.describe(
+    amount="Amount to remove (supports k, m, b suffixes)",
+    users="User(s) to take money from — mentions or IDs, space/comma separated",
+)
 @staffperm("economy")
 @xp_earn(4, 8)
-async def removemoney(ctx, amount: str, user: discord.Member):
+async def removemoney(ctx, amount: str, *, users: str):
     if ctx.author.id not in (AUTHORIZED_USER_IDS | {ctx.guild.owner_id}):
         return await ctx.send("❌ You are not authorized to use this command.")
     try:
@@ -9957,28 +9986,37 @@ async def removemoney(ctx, amount: str, user: discord.Member):
             raise ValueError
     except Exception:
         return await ctx.send("❌ Invalid amount.\nUse formats like: `100`, `4k`, `2m`, `1.5mil`, `123,456`")
-    try:
-        uid = user.id
-        member = user
-    except Exception:
-        return await ctx.send("❌ Invalid user specified.")
-    user_data = await get_user(ctx, ctx.guild.id, uid)
-    wallet = user_data.get("wallet", 0)
-    bank = user_data.get("bank", 0)
-    total = wallet + bank
-    if total < coins:
-        return await ctx.send(f"❌ {member.mention} does not have enough funds.")
-    if wallet >= coins:
-        new_wallet = wallet - coins
-        new_bank = bank
-    else:
-        new_wallet = 0
-        new_bank = bank - (coins - wallet)
-    await economy_col.update_one({"_id": f"{ctx.guild.id}-{uid}"}, {"$set": {"wallet": new_wallet, "bank": new_bank}})
-    await log_action(
-        ctx, f"Removed 🪙 {coins:,} from {member.mention}'s balance.", user_id=uid, action_type="RemoveMoney"
-    )
-    await ctx.send(f"✅ Removed 🪙 {coins:,} from {member.mention} - Wallet: {new_wallet:,} | Bank: {new_bank:,}")
+    uid_list = [int(m) for m in re.findall(r"<@!?(\d+)>", users)]
+    remaining_text = re.sub(r"<@!?\d+>", "", users)
+    for raw in re.findall(r"\b(\d{15,20})\b", remaining_text):
+        uid = int(raw)
+        if uid not in uid_list:
+            uid_list.append(uid)
+    if not uid_list:
+        return await ctx.send("❌ No valid users found. Mention users or provide their IDs.")
+    results = []
+    for uid in uid_list:
+        member = ctx.guild.get_member(uid)
+        display = member.mention if member else f"`{uid}`"
+        user_data = await get_user(ctx, ctx.guild.id, uid)
+        wallet = user_data.get("wallet", 0)
+        bank = user_data.get("bank", 0)
+        total = wallet + bank
+        if total < coins:
+            results.append(f"⚠️ {display} — insufficient funds (has {total:,})")
+            continue
+        if wallet >= coins:
+            new_wallet = wallet - coins
+            new_bank = bank
+        else:
+            new_wallet = 0
+            new_bank = bank - (coins - wallet)
+        await economy_col.update_one(
+            {"_id": f"{ctx.guild.id}-{uid}"}, {"$set": {"wallet": new_wallet, "bank": new_bank}}
+        )
+        await log_action(ctx, f"Removed 🪙 {coins:,} from {display}'s balance.", user_id=uid, action_type="RemoveMoney")
+        results.append(f"✅ {display} → wallet: **{new_wallet:,}** | bank: **{new_bank:,}**")
+    await ctx.send(f"Removed 🪙 **{coins:,}** from user(s):\n" + "\n".join(results))
 
 
 @bot.hybrid_command(name="drop", description="Create a money drop (staff spawns money, members pay).")
@@ -11475,10 +11513,10 @@ async def on_member_join(member):
                         f"👋 Welcome {member.mention}! Invited by {inviter.mention} (now **{used_invite.uses}** uses)"
                     )
         welcome_channel_id = cfg.get("welcome_channel") or doc.get("welcome_channel")
+        welcome_message_template = cfg.get("welcome_message") or doc.get("welcome_message")
         welcome_ch = guild.get_channel(welcome_channel_id) if welcome_channel_id else None
-        if welcome_ch:
-            _DEFAULT_WELCOME = "👋 Welcome {mention} to **{server}**! 🎉\nYou are our **{membercount}**th member. We're happy to have you here!"
-            msg_template = cfg.get("welcome_message") or doc.get("welcome_message") or _DEFAULT_WELCOME
+        if welcome_ch and welcome_message_template:
+            msg_template = welcome_message_template
             welcome_msg = (
                 msg_template.replace("{username}", member.name)
                 .replace("{mention}", member.mention)
@@ -11503,14 +11541,12 @@ async def on_member_join(member):
             boost_key = f"{guild.id}-{member.id}"
             boost_record = await boost_col.find_one({"_id": boost_key})
             if not boost_record or boost_record.get("last_thanked") != member.premium_since.isoformat():
-                boost_ch = guild.get_channel(doc.get("boost_channel"))
-                if boost_ch:
-                    boost_msg = (
-                        doc.get("boost_message")
-                        or f"{member.mention} just boosted the pond! 🌟\nThank you for your support!"
-                    )
+                boost_channel_id = cfg.get("boost_channel") or doc.get("boost_channel")
+                boost_msg_template = cfg.get("boost_message") or doc.get("boost_message")
+                boost_ch = guild.get_channel(boost_channel_id) if boost_channel_id else None
+                if boost_ch and boost_msg_template:
                     text = (
-                        boost_msg.replace("{username}", member.name)
+                        boost_msg_template.replace("{username}", member.name)
                         .replace("{mention}", member.mention)
                         .replace("{server}", guild.name)
                         .replace("{boostcount}", str(guild.premium_subscription_count or 0))
@@ -11523,7 +11559,7 @@ async def on_member_join(member):
                     )
                     boost_embed.set_thumbnail(url=member.display_avatar.url)
                     sent_msg = await boost_ch.send(embed=boost_embed)
-                    emoji = doc.get("boost_react_emoji")
+                    emoji = cfg.get("boost_react_emoji") or doc.get("boost_react_emoji")
                     if emoji:
                         try:
                             await sent_msg.add_reaction(emoji)
