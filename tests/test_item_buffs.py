@@ -330,6 +330,7 @@ async def test_beg_lucky_cookie_doubles_amount(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
+    monkeypatch.setattr(main, "BIRTHDAY_EVENT_ACTIVE", False)  # isolate from birthday event
     monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
     monkeypatch.setattr(main, "economy_col", mock_col)
     monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))

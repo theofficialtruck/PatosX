@@ -333,7 +333,6 @@ async def test_unstickynote_removes_doc_and_cache(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_xp_earn_skips_xp_when_command_sends_error(monkeypatch):
-
     async def _failing_cmd(ctx):
         await ctx.send("❌ You cannot give coins to yourself.")
 
@@ -352,7 +351,6 @@ async def test_xp_earn_skips_xp_when_command_sends_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_xp_earn_awards_xp_on_success(monkeypatch):
-
     async def _successful_cmd(ctx):
         await ctx.send("✅ Success")
 
@@ -424,6 +422,7 @@ async def test_bugcatch_sells_immediately_and_breaks_net(monkeypatch):
     author = SimpleNamespace(id=456)
     command = SimpleNamespace(reset_cooldown=MagicMock())
     ctx = SimpleNamespace(guild=guild, author=author, command=command, send=AsyncMock())
+    monkeypatch.setattr(main, "BIRTHDAY_EVENT_ACTIVE", False)  # isolate from birthday event
     monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
     monkeypatch.setattr(
         main, "get_user", AsyncMock(return_value={"inventory": [{"_id": "butterfly net", "uses_left": 1}]})
