@@ -1784,6 +1784,7 @@ async def configure(ctx):
         "log_channel": "Enter the log channel ID for moderation logs (type `skip` to disable):",
         "DROP_CHANNELS": "Enter channel IDs where `.drop` can be used by members (comma/space separated - type `skip` to allow everywhere):",
         "QUACK_CHANNELS": "Enter channel IDs where the quack counter should activate (comma/space separated - type `skip` to count everywhere):",
+        "pond_royalty_role": "Enter the role for the **Pond Royalty** shop item (mention `@Role` or paste the role ID, type `skip` to disable Pond Royalty in this server):",
     }
     config_data = {"guild": str(ctx.guild.id)}
 
@@ -1834,6 +1835,14 @@ async def configure(ctx):
                 config_data[key] = int(content)
             elif key in ["welcome_message", "boost_message"]:
                 config_data[key] = content
+            elif key == "pond_royalty_role":
+                role_match = re.search(r"\d+", content)
+                if not role_match:
+                    return await ctx.send("❌ Please mention a valid role or provide its ID. Run `.configure` again.")
+                pond_role = ctx.guild.get_role(int(role_match.group()))
+                if not pond_role:
+                    return await ctx.send("❌ That role wasn't found in this server. Run `.configure` again.")
+                config_data["pond_royalty_role"] = pond_role.id
             elif content.lower() == "all":
                 config_data[key] = "all"
             else:
@@ -1907,6 +1916,7 @@ async def editconfig(ctx, *, args: str = None):
         "log_channel": {"desc": "Log channel", "key": "log_channel"},
         "drop_channels": {"desc": "Drop allowed channels", "key": "DROP_CHANNELS"},
         "quack_channels": {"desc": "Quack Counter Channels", "key": "QUACK_CHANNELS"},
+        "pond_royalty_role": {"desc": "Pond Royalty shop role", "key": "pond_royalty_role"},
     }
     if not args:
         return await ctx.send("❌ Please specify a setting and value, e.g. `editconfig welcome_channel #general`")
@@ -2004,6 +2014,14 @@ async def editconfig(ctx, *, args: str = None):
                     await ctx.send("⌛ No emoji selected, skipping reaction setup.")
                 except Exception as e:
                     await ctx.send(f"⚠️ Error while setting emoji: `{e}`")
+        elif canonical_key == "pond_royalty_role":
+            role_match = re.search(r"\d+", value or "")
+            if not role_match:
+                return await ctx.send(f"❌ Please mention a valid role or provide its ID for `{desc}`.")
+            pond_role = ctx.guild.get_role(int(role_match.group()))
+            if not pond_role:
+                return await ctx.send("❌ That role wasn't found in this server.")
+            config[canonical_key] = pond_role.id
         elif canonical_key in ["log_channel", "economy_channel", "welcome_channel", "boost_channel"]:
             match = re.search("\\d+", value or "")
             if not match:
@@ -2091,6 +2109,13 @@ async def viewconfig(ctx: commands.Context):
     embed.add_field(name="Quack Counter Channels", value=format_ids("QUACK_CHANNELS"), inline=False)
     embed.add_field(name="Economy Channel", value=format_ids("economy_channel"), inline=False)
     embed.add_field(name="Log Channel", value=format_ids("log_channel"), inline=False)
+    pond_royalty_role_id = config.get("pond_royalty_role")
+    if pond_royalty_role_id:
+        pond_role = ctx.guild.get_role(pond_royalty_role_id)
+        pond_role_display = pond_role.mention if pond_role else f"<@&{pond_royalty_role_id}> (not found)"
+    else:
+        pond_role_display = "Not set (Pond Royalty hidden from shop)"
+    embed.add_field(name="👑 Pond Royalty Role", value=pond_role_display, inline=False)
     await ctx.send(embed=embed)
 
 
@@ -2839,6 +2864,13 @@ async def ensure_shop_items():
             "description": "☕ Gives 25% bonus on your next crime success chance. One time use.",
             "uses_left": 1,
         },
+        {
+            "_id": "pond_royalty",
+            "name": "Pond Royalty",
+            "name_lower": "pond royalty",
+            "price": 30000,
+            "description": "👑 Claim the title of Pond Royalty! Grants you the exclusive Pond Royalty role.",
+        },
     ]
     for item in initial_items:
         if is_removed_shop_item(item.get("name_lower") or item.get("_id")):
@@ -3318,7 +3350,9 @@ async def on_ready():
             print(f"❌ Failed to fetch invites for guild {guild}: {e}")
     print("✅ Invite cache synced with MongoDB.")
     if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.playing, name="It's my birthday! 🎂"))  # BIRTHDAY_EVENT
+        await bot.change_presence(
+            activity=discord.Activity(type=discord.ActivityType.playing, name="It's my birthday! 🎂")
+        )  # BIRTHDAY_EVENT
     else:
         await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=BOT_ADMIN_NAME))
     if session is None:
@@ -5805,6 +5839,17 @@ async def shop(ctx):
             added_default_item = True
         if added_default_item:
             items_list.sort(key=lambda x: x.get("price", 0))
+        guild_config = await config_col.find_one({"guild": guild_id}) or {}
+        pond_royalty_role_id = guild_config.get("pond_royalty_role")
+        filtered_items = []
+        for item in items_list:
+            if str(item.get("name_lower") or "").strip().lower() == "pond royalty":
+                if not pond_royalty_role_id:
+                    continue
+                item = dict(item)
+                item["role_id"] = pond_royalty_role_id
+            filtered_items.append(item)
+        items_list = filtered_items
         embed = discord.Embed(
             title="🛍️ Shop",
             description=f"💰 Wallet: 🪙 {wallet_balance:,}\n🏦 Bank: 🪙 {bank_balance:,}\n💳 **Total: 🪙 {total_balance:,}**\n\nClick the button below to purchase items! Purchases use wallet coins only.",

@@ -99,7 +99,7 @@ Before committing changes or opening a pull request, run the full test suite and
 pytest
 ruff check . --fix
 ruff format .
-bandit -r . --exclude ./tests,./.venv,./env -s B311,B608
+bandit -r . --exclude ./tests,./.venv,./env -s B311
 ```
 
 ## License
