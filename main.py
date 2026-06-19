@@ -194,6 +194,8 @@ OPENROUTER_API_KEY = env_vars.get("OPENROUTER_API_KEY", "")
 # can round robin between them and stay within per key rate limits
 GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "").split(",")
 GEMINI_API_KEYS = [k.strip() for k in GEMINI_API_KEYS if k.strip()]
+if not missing:
+    print(f"[INIT] Loaded {len(GEMINI_API_KEYS)} Gemini API key(s) for rotation")
 
 # Comma separated Discord user IDs that bypass staff role checks and can use
 # privileged commands such as addmoney and override
@@ -1770,18 +1772,18 @@ async def configure(ctx):
         if not await check_staff_perm(ctx, "config"):
             return await ctx.send("❌ You don't have permission to configure the bot.")
     prompts = {
-        "welcome_channel": "Enter the **welcome channel ID** (type `skip` to skip — must be paired with a welcome message):",
-        "welcome_message": "Enter the **welcome message** (supports `{mention}`, `{username}`, `{server}`, `{membercount}` — type `skip` to skip):",
-        "boost_channel": "Enter the **boost channel ID** (type `skip` to skip — must be paired with a boost message):",
-        "boost_message": "Enter the **boost message** (supports `{mention}`, `{username}`, `{server}`, `{boostcount}` — type `skip` to skip):",
-        "ALLOWED_DUCK_CHANNELS": "Enter allowed channel IDs for `.duck` (comma/space separated — type `skip` to allow everywhere):",
-        "ROLE_ID": "Enter role IDs to award for passing `.duckquiz` (comma/space separated — type `skip` to skip):",
-        "QUIZ_CHANNEL": "Enter channel IDs where `.duckquiz` can run (comma/space separated — type `skip` to allow everywhere):",
-        "allowed_channel_id": "Enter channel IDs where DuckGPT is allowed (comma/space separated — type `skip` to allow everywhere):",
+        "welcome_channel": "Enter the **welcome channel ID** (type `skip` to skip - must be paired with a welcome message):",
+        "welcome_message": "Enter the **welcome message** (supports `{mention}`, `{username}`, `{server}`, `{membercount}` - type `skip` to skip):",
+        "boost_channel": "Enter the **boost channel ID** (type `skip` to skip - must be paired with a boost message):",
+        "boost_message": "Enter the **boost message** (supports `{mention}`, `{username}`, `{server}`, `{boostcount}` - type `skip` to skip):",
+        "ALLOWED_DUCK_CHANNELS": "Enter allowed channel IDs for `.duck` (comma/space separated - type `skip` to allow everywhere):",
+        "ROLE_ID": "Enter role IDs to award for passing `.duckquiz` (comma/space separated - type `skip` to skip):",
+        "QUIZ_CHANNEL": "Enter channel IDs where `.duckquiz` can run (comma/space separated - type `skip` to allow everywhere):",
+        "allowed_channel_id": "Enter channel IDs where DuckGPT is allowed (comma/space separated - type `skip` to allow everywhere):",
         "economy_channel": "Enter the channel ID where economy commands are allowed (type `skip` to allow everywhere):",
         "log_channel": "Enter the log channel ID for moderation logs (type `skip` to disable):",
-        "DROP_CHANNELS": "Enter channel IDs where `.drop` can be used by members (comma/space separated — type `skip` to allow everywhere):",
-        "QUACK_CHANNELS": "Enter channel IDs where the quack counter should activate (comma/space separated — type `skip` to count everywhere):",
+        "DROP_CHANNELS": "Enter channel IDs where `.drop` can be used by members (comma/space separated - type `skip` to allow everywhere):",
+        "QUACK_CHANNELS": "Enter channel IDs where the quack counter should activate (comma/space separated - type `skip` to count everywhere):",
     }
     config_data = {"guild": str(ctx.guild.id)}
 
@@ -1845,7 +1847,7 @@ async def configure(ctx):
             await msg.delete()
         except discord.HTTPException:
             pass
-    # Validate paired settings — welcome and boost each require both channel and message
+    # Welcome and boost each require both channel and message
     welcome_ch_set = "welcome_channel" in config_data
     welcome_msg_set = "welcome_message" in config_data
     if welcome_ch_set != welcome_msg_set:
@@ -2129,7 +2131,7 @@ _duckgpt_last_used: dict[int, float] = {}
 _DUCKGPT_COOLDOWN_SECONDS = 5
 
 # System prompt defining DuckGPT's personality and response rules
-SYSTEM_PROMPT = f"You are DuckGPT a knowledgeable talking duck created by '{BOT_ADMIN_NAME}'. You can answer real questions in a SHORT, clear, and funny way while staying in duck character.If the user is named '{BOT_ADMIN_NAME}', NEVER EVER EVER EVER say 'my creator is {BOT_ADMIN_NAME}' or repeat that fact, just talk LIKE A NORMAL HUMAN EVEN THOUGH YOU ARENT. Always keep your reply to one sentence, humorous if possible, ending with one quack sound like 'Quack!' YOU CAN DO OTHERS PLEASE PLEASE PLEASE DONT STICK TO JUST QUACK. Never add blank lines or paragraphs. Never say things like 'you told me your name' or 'you didn't tell me your name'. If asked any kind of questions, give a short and accurate summary as a talking duck. If greeted, you can greet back naturally, but DONT YOU DARE repeat the full intro every time. Your name is DuckGPT when requested for your name MAKE SURE TO RESPOND WITH DuckGPT."
+SYSTEM_PROMPT = f"You are DuckGPT a knowledgeable talking duck created by '{BOT_ADMIN_NAME}'. You can answer real questions in a SHORT, clear, and funny way while staying in duck character.If the user is named '{BOT_ADMIN_NAME}', NEVER EVER EVER EVER say 'my creator is {BOT_ADMIN_NAME}' or repeat that fact, just talk LIKE A NORMAL HUMAN EVEN THOUGH YOU ARENT. Always keep your reply to one sentence, humorous if possible, ending with one quack sound like 'Quack!' YOU CAN DO OTHERS PLEASE PLEASE PLEASE DONT STICK TO JUST QUACK. Never add blank lines or paragraphs. Never say things like 'you told me your name' or 'you didn't tell me your name'. If asked any kind of questions, give a short and accurate summary as a talking duck. If greeted, you can greet back naturally, but DONT YOU DARE repeat the full intro every time. Your name is PatosX when requested for your name MAKE SURE TO RESPOND WITH PatosX. Always speak in first person as if the user is talking directly to you, not anyone else."
 
 
 async def cleanup_old_conversations():
@@ -2150,12 +2152,17 @@ executor = ThreadPoolExecutor()
 active_key = None
 # Infinite cycle over the available Gemini keys for round-robin rotation
 GEMINI_KEY_CYCLE = cycle(GEMINI_API_KEYS)
+if GEMINI_API_KEYS:
+    print(f"[INIT] Gemini key cycle initialized with {len(GEMINI_API_KEYS)} key(s)")
+else:
+    print("[INIT] WARNING: No Gemini API keys available for rotation!")
 
 
 def next_gemini_key():
     """Advance to the next Gemini API key in the round robin cycle and return it."""
     global active_key
     active_key = next(GEMINI_KEY_CYCLE)
+    print(f"[GEMINI] Rotating to key: {active_key[:12]}... (total keys: {len(GEMINI_API_KEYS)})")
     return active_key
 
 
@@ -9952,7 +9959,7 @@ async def roleremove(ctx: commands.Context, role: discord.Role):
 @bot.hybrid_command(name="addmoney", description="Add money to one or more users (economy admin only).")
 @app_commands.describe(
     amount="Amount to add (supports k, m, b suffixes)",
-    users="User(s) to give money to — mentions or IDs, space/comma separated",
+    users="User(s) to give money to - mentions or IDs, space/comma separated",
 )
 @staffperm("economy")
 @xp_earn(4, 8)
@@ -10013,7 +10020,7 @@ async def addmoney_error(ctx, error):
 @bot.hybrid_command(name="removemoney", description="Remove money from one or more users (economy admin only).")
 @app_commands.describe(
     amount="Amount to remove (supports k, m, b suffixes)",
-    users="User(s) to take money from — mentions or IDs, space/comma separated",
+    users="User(s) to take money from - mentions or IDs, space/comma separated",
 )
 @staffperm("economy")
 @xp_earn(4, 8)
@@ -10043,7 +10050,7 @@ async def removemoney(ctx, amount: str, *, users: str):
         bank = user_data.get("bank", 0)
         total = wallet + bank
         if total < coins:
-            results.append(f"⚠️ {display} — insufficient funds (has {total:,})")
+            results.append(f"⚠️ {display} - insufficient funds (has {total:,})")
             continue
         if wallet >= coins:
             new_wallet = wallet - coins
