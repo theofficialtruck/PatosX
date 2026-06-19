@@ -422,7 +422,6 @@ async def test_bugcatch_sells_immediately_and_breaks_net(monkeypatch):
     author = SimpleNamespace(id=456)
     command = SimpleNamespace(reset_cooldown=MagicMock())
     ctx = SimpleNamespace(guild=guild, author=author, command=command, send=AsyncMock())
-    monkeypatch.setattr(main, "BIRTHDAY_EVENT_ACTIVE", False)  # isolate from birthday event
     monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
     monkeypatch.setattr(
         main, "get_user", AsyncMock(return_value={"inventory": [{"_id": "butterfly net", "uses_left": 1}]})

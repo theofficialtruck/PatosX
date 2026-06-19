@@ -299,15 +299,6 @@ TOOL_DURABILITIES = {
 NUM_Q = 10
 PASS_PCT = 80.0
 
-# ============================================================
-# BIRTHDAY EVENT — to remove tomorrow (2026-06-19):
-#   Option A (quick disable): set BIRTHDAY_EVENT_ACTIVE = False
-#   Option B (full removal): delete this block AND grep for
-#             "# BIRTHDAY_EVENT" and remove every tagged line/block
-# ============================================================
-BIRTHDAY_EVENT_ACTIVE = True
-BIRTHDAY_EVENT_BONUS = 100
-# END BIRTHDAY EVENT
 
 # ============================================================
 # Bot instance and invite cache setup
@@ -3349,12 +3340,7 @@ async def on_ready():
             invite_cache[guild.id] = (0, [])
             print(f"❌ Failed to fetch invites for guild {guild}: {e}")
     print("✅ Invite cache synced with MongoDB.")
-    if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-        await bot.change_presence(
-            activity=discord.Activity(type=discord.ActivityType.playing, name="It's my birthday! 🎂")
-        )  # BIRTHDAY_EVENT
-    else:
-        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=BOT_ADMIN_NAME))
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=BOT_ADMIN_NAME))
     if session is None:
         session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
     panels = await ticket_panels_col.find({}).to_list(length=None)
@@ -5203,8 +5189,6 @@ async def daily(ctx):
             reward = 300
         else:
             reward = 50 * current_streak
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            reward += BIRTHDAY_EVENT_BONUS  # BIRTHDAY_EVENT
         await add_balance(ctx.author.id, ctx.guild.id, reward)
         saved_streak = current_streak + 1 if current_streak == 0 else current_streak
         await economy_col.update_one(
@@ -5227,12 +5211,6 @@ async def daily(ctx):
         progress = current_streak / 30
         progress_bar = "🟦" * int(progress * 10) + "⬜" * (10 - int(progress * 10))
         embed.add_field(name="📊 Monthly Progress", value=f"{progress_bar} ({current_streak}/30 days)", inline=False)
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            embed.add_field(
-                name="🎂 Birthday Event!",
-                value=f"It's the bot's birthday! Your daily was boosted by **+{BIRTHDAY_EVENT_BONUS} coins**!",
-                inline=False,
-            )  # BIRTHDAY_EVENT
         if current_streak == 0:
             embed.set_footer(text="🌟 Welcome bonus! Keep claiming daily for bigger rewards!")
         elif current_streak == 1:
@@ -5291,8 +5269,6 @@ async def beg(ctx):
                 duck_used = True
                 break
         amount = int(amount * earnings_multiplier)
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            amount += BIRTHDAY_EVENT_BONUS  # BIRTHDAY_EVENT
         if duck_used or has_cookie:
             await economy_col.update_one(
                 {"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"inventory": inventory}}, upsert=True
@@ -5305,8 +5281,6 @@ async def beg(ctx):
         msg = f"🙇 {donor} was kind enough to donate **{amount} coins** to you!"
         if has_cookie:
             msg += "\n🍪 **Lucky Cookie consumed!** Earnings doubled!"
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            msg += f"\n🎂 It's the bot's birthday! Your begging was boosted by **+{BIRTHDAY_EVENT_BONUS} coins**!"  # BIRTHDAY_EVENT
         await ctx.send(msg)
     except Exception as e:
         print(f"[ERROR] beg command: {type(e).__name__} - {e}")
@@ -6760,8 +6734,6 @@ async def work(ctx):
         low = int(low * multiplier)
         high = int(high * multiplier)
         earned = random.randint(low, high)
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            earned += BIRTHDAY_EVENT_BONUS  # BIRTHDAY_EVENT
         await add_balance(ctx.author.id, ctx.guild.id, earned)
         effective_ts = datetime.now(timezone.utc) - timedelta(seconds=int(3600 * (1 - cooldown_reduction)))
         await economy_col.update_one(
@@ -6770,8 +6742,6 @@ async def work(ctx):
         msg = f"🧾 {descriptions.get(job, 'You worked hard!')}\n💰 You earned **{earned} coins** as a level `{promo_level}` {job}!"
         if has_cookie:
             msg += "\n🍪 **Lucky Cookie consumed!** Earnings doubled!"
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            msg += f"\n🎂 It's the bot's birthday! Your work was boosted by **+{BIRTHDAY_EVENT_BONUS} coins**!"  # BIRTHDAY_EVENT
         if tool_break_notice:
             msg += tool_break_notice
         await ctx.send(msg)
@@ -6972,15 +6942,11 @@ async def fish(ctx):
             return await ctx.send(f"🐟 You tried fishing, but came up empty handed!{tool_break_notice}")
         catch = random.choice(fishes)
         coins_earned = int(catch[1] * (1 + luck_buff))
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            coins_earned += BIRTHDAY_EVENT_BONUS  # BIRTHDAY_EVENT
         await add_balance(ctx.author.id, ctx.guild.id, coins_earned)
         await economy_col.update_one(
             {"_id": user_id}, {"$set": {"inventory": inventory, "last_fished": now.isoformat()}}
         )
         msg = f"🎣 You caught a **{catch[0]}** and earned **{coins_earned} coins**!"
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            msg += f"\n🎂 It's the bot's birthday! Your fishing was boosted by **+{BIRTHDAY_EVENT_BONUS} coins**!"  # BIRTHDAY_EVENT
         if tool_break_notice:
             msg += tool_break_notice
         await ctx.send(msg)
@@ -7042,13 +7008,9 @@ async def swim(ctx):
             return await ctx.send(f"🌊 You dove deep, but found nothing this time!{tool_break_notice}")
         catch = random.choice(deep_ocean_fishes)
         coins_earned = int(catch[1] * (1 + luck_buff))
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            coins_earned += BIRTHDAY_EVENT_BONUS  # BIRTHDAY_EVENT
         await add_balance(ctx.author.id, ctx.guild.id, coins_earned)
         await economy_col.update_one({"_id": user_id}, {"$set": {"inventory": inventory, "last_swam": now.isoformat()}})
         msg = f"🤿 You swam into the deep ocean and found a **{catch[0]}**! You sold it immediately for **{coins_earned} coins**!"
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            msg += f"\n🎂 It's the bot's birthday! Your dive was boosted by **+{BIRTHDAY_EVENT_BONUS} coins**!"  # BIRTHDAY_EVENT
         if tool_break_notice:
             msg += tool_break_notice
         await ctx.send(msg)
@@ -7215,16 +7177,12 @@ async def crime(ctx, *, choice: str):
         success = random.random() < adjusted_chance
         if success:
             amount = random.randint(*conf["gain"])
-            if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-                amount += BIRTHDAY_EVENT_BONUS  # BIRTHDAY_EVENT
             await add_balance(ctx.author.id, ctx.guild.id, amount)
             await economy_col.update_one(
                 {"_id": f"{ctx.guild.id}-{ctx.author.id}"},
                 {"$set": {"inventory": inventory, "last_crime": now.isoformat()}},
             )
             msg = f"💥 Crime successful! You earned **{amount} coins** via `{choice}` crime."
-            if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-                msg += f"\n🎂 It's the bot's birthday! Your crime earnings were boosted by **+{BIRTHDAY_EVENT_BONUS} coins**!"  # BIRTHDAY_EVENT
             if lockpick_break_notice:
                 msg += lockpick_break_notice
             await ctx.send(msg)
@@ -7886,13 +7844,9 @@ async def bugcatch(ctx):
                 break
         bug_name, base_value = random.choice(bugs_to_catch)
         coins_earned = int(base_value * coins_multiplier)
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            coins_earned += BIRTHDAY_EVENT_BONUS  # BIRTHDAY_EVENT
         await add_balance(ctx.author.id, ctx.guild.id, coins_earned)
         await economy_col.update_one({"_id": user_id}, {"$set": {"inventory": inventory}})
         message = f"🪲 You caught **{bug_name}** and sold it immediately for **{coins_earned} coins**!"
-        if BIRTHDAY_EVENT_ACTIVE:  # BIRTHDAY_EVENT
-            message += f"\n🎂 It's the bot's birthday! Your bug catch was boosted by **+{BIRTHDAY_EVENT_BONUS} coins**!"  # BIRTHDAY_EVENT
         if net_broke:
             message += "\n💥 Your **Butterfly Net** broke. Buy a new one with `.buy butterfly net`."
         await ctx.send(message)
