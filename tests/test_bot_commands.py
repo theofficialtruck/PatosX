@@ -333,7 +333,6 @@ async def test_unstickynote_removes_doc_and_cache(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_xp_earn_skips_xp_when_command_sends_error(monkeypatch):
-
     async def _failing_cmd(ctx):
         await ctx.send("❌ You cannot give coins to yourself.")
 
@@ -352,7 +351,6 @@ async def test_xp_earn_skips_xp_when_command_sends_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_xp_earn_awards_xp_on_success(monkeypatch):
-
     async def _successful_cmd(ctx):
         await ctx.send("✅ Success")
 

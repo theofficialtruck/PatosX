@@ -299,6 +299,7 @@ TOOL_DURABILITIES = {
 NUM_Q = 10
 PASS_PCT = 80.0
 
+
 # ============================================================
 # Bot instance and invite cache setup
 # ============================================================
@@ -1774,6 +1775,7 @@ async def configure(ctx):
         "log_channel": "Enter the log channel ID for moderation logs (type `skip` to disable):",
         "DROP_CHANNELS": "Enter channel IDs where `.drop` can be used by members (comma/space separated - type `skip` to allow everywhere):",
         "QUACK_CHANNELS": "Enter channel IDs where the quack counter should activate (comma/space separated - type `skip` to count everywhere):",
+        "pond_royalty_role": "Enter the role for the **Pond Royalty** shop item (mention `@Role` or paste the role ID, type `skip` to disable Pond Royalty in this server):",
     }
     config_data = {"guild": str(ctx.guild.id)}
 
@@ -1824,6 +1826,14 @@ async def configure(ctx):
                 config_data[key] = int(content)
             elif key in ["welcome_message", "boost_message"]:
                 config_data[key] = content
+            elif key == "pond_royalty_role":
+                role_match = re.search(r"\d+", content)
+                if not role_match:
+                    return await ctx.send("❌ Please mention a valid role or provide its ID. Run `.configure` again.")
+                pond_role = ctx.guild.get_role(int(role_match.group()))
+                if not pond_role:
+                    return await ctx.send("❌ That role wasn't found in this server. Run `.configure` again.")
+                config_data["pond_royalty_role"] = pond_role.id
             elif content.lower() == "all":
                 config_data[key] = "all"
             else:
@@ -1897,6 +1907,7 @@ async def editconfig(ctx, *, args: str = None):
         "log_channel": {"desc": "Log channel", "key": "log_channel"},
         "drop_channels": {"desc": "Drop allowed channels", "key": "DROP_CHANNELS"},
         "quack_channels": {"desc": "Quack Counter Channels", "key": "QUACK_CHANNELS"},
+        "pond_royalty_role": {"desc": "Pond Royalty shop role", "key": "pond_royalty_role"},
     }
     if not args:
         return await ctx.send("❌ Please specify a setting and value, e.g. `editconfig welcome_channel #general`")
@@ -1994,6 +2005,14 @@ async def editconfig(ctx, *, args: str = None):
                     await ctx.send("⌛ No emoji selected, skipping reaction setup.")
                 except Exception as e:
                     await ctx.send(f"⚠️ Error while setting emoji: `{e}`")
+        elif canonical_key == "pond_royalty_role":
+            role_match = re.search(r"\d+", value or "")
+            if not role_match:
+                return await ctx.send(f"❌ Please mention a valid role or provide its ID for `{desc}`.")
+            pond_role = ctx.guild.get_role(int(role_match.group()))
+            if not pond_role:
+                return await ctx.send("❌ That role wasn't found in this server.")
+            config[canonical_key] = pond_role.id
         elif canonical_key in ["log_channel", "economy_channel", "welcome_channel", "boost_channel"]:
             match = re.search("\\d+", value or "")
             if not match:
@@ -2081,6 +2100,13 @@ async def viewconfig(ctx: commands.Context):
     embed.add_field(name="Quack Counter Channels", value=format_ids("QUACK_CHANNELS"), inline=False)
     embed.add_field(name="Economy Channel", value=format_ids("economy_channel"), inline=False)
     embed.add_field(name="Log Channel", value=format_ids("log_channel"), inline=False)
+    pond_royalty_role_id = config.get("pond_royalty_role")
+    if pond_royalty_role_id:
+        pond_role = ctx.guild.get_role(pond_royalty_role_id)
+        pond_role_display = pond_role.mention if pond_role else f"<@&{pond_royalty_role_id}> (not found)"
+    else:
+        pond_role_display = "Not set (Pond Royalty hidden from shop)"
+    embed.add_field(name="👑 Pond Royalty Role", value=pond_role_display, inline=False)
     await ctx.send(embed=embed)
 
 
@@ -2828,6 +2854,13 @@ async def ensure_shop_items():
             "price": 100,
             "description": "☕ Gives 25% bonus on your next crime success chance. One time use.",
             "uses_left": 1,
+        },
+        {
+            "_id": "pond_royalty",
+            "name": "Pond Royalty",
+            "name_lower": "pond royalty",
+            "price": 30000,
+            "description": "👑 Claim the title of Pond Royalty! Grants you the exclusive Pond Royalty role.",
         },
     ]
     for item in initial_items:
@@ -4610,7 +4643,6 @@ async def doorgame(ctx):
 
 
 def calculate_mines_multiplier(minesamount: int, diamonds: int, houseedge: float) -> float:
-
     def nCr(n: int, r: int) -> int:
         if r > n or r < 0:
             return 0
@@ -5781,6 +5813,17 @@ async def shop(ctx):
             added_default_item = True
         if added_default_item:
             items_list.sort(key=lambda x: x.get("price", 0))
+        guild_config = await config_col.find_one({"guild": guild_id}) or {}
+        pond_royalty_role_id = guild_config.get("pond_royalty_role")
+        filtered_items = []
+        for item in items_list:
+            if str(item.get("name_lower") or "").strip().lower() == "pond royalty":
+                if not pond_royalty_role_id:
+                    continue
+                item = dict(item)
+                item["role_id"] = pond_royalty_role_id
+            filtered_items.append(item)
+        items_list = filtered_items
         embed = discord.Embed(
             title="🛍️ Shop",
             description=f"💰 Wallet: 🪙 {wallet_balance:,}\n🏦 Bank: 🪙 {bank_balance:,}\n💳 **Total: 🪙 {total_balance:,}**\n\nClick the button below to purchase items! Purchases use wallet coins only.",
@@ -5812,7 +5855,6 @@ async def shop(ctx):
 
 
 async def prompt_for_role(ctx):
-
     def check(m):
         return m.author == ctx.author and m.channel == ctx.channel
 
@@ -8848,7 +8890,6 @@ async def ticketlist(ctx):
 
 @bot.hybrid_command(name="ticketclose", description="Request to close the current ticket.")
 async def ticketclose(ctx):
-
     async def send_public(*, content=None, embed=None):
         if is_prefix(ctx):
             return await ctx.send(content=content, embed=embed)
@@ -8886,7 +8927,6 @@ async def ticketclose(ctx):
 @bot.hybrid_command(name="ticketforceclose", description="Force close the current ticket.")
 @staff_only()
 async def ticketforceclose(ctx):
-
     async def local_error_handler(func):
         try:
             return await func()
@@ -9817,7 +9857,6 @@ class RoleButtons(View):
             self.add_item(role_button)
 
     def make_callback(self, role_id):
-
         async def callback(interaction: discord.Interaction):
             role = interaction.guild.get_role(role_id)
             if not role:
@@ -10411,7 +10450,6 @@ async def clearwarns(ctx, member: discord.Member):
 @staffperm("other_moderation")
 @staff_only()
 async def purge(ctx, count: int, member: discord.Member = None):
-
     def check(m):
         return m.author == member if member else True
 

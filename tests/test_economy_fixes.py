@@ -122,7 +122,6 @@ async def test_ping_ticket_roles_mentions_staff_with_access(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_fish_resets_cooldown_when_tool_missing(monkeypatch):
-
     async def fake_check_channel(*args, **kwargs):
         return True
 
