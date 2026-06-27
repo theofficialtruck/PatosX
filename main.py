@@ -4029,7 +4029,7 @@ async def vanityroles(ctx, role: discord.Role, log_channel: discord.TextChannel,
         {"$set": {"role": role.id, "log": log_channel.id, "keyword": keyword, "users": []}},
         upsert=True,
     )
-    await ctx.send(f"✅ Vanity role set for '{keyword}' → {role.mention}")
+    await ctx.send(f"✅ Vanity role set for '{keyword}' -> {role.mention}")
 
 
 class PromotersView(View):
@@ -4353,7 +4353,7 @@ class InviteLeaderboardView(discord.ui.View):
             rank = idx + 1
             embed.add_field(
                 name=f"#{rank} {username}",
-                value=f"✅ {joins} joins | ❌ {leaves} leaves → **{net} net**",
+                value=f"✅ {joins} joins | ❌ {leaves} leaves -> **{net} net**",
                 inline=False,
             )
 
@@ -4932,7 +4932,7 @@ class DifficultySelect(discord.ui.Select):
         await subtract_balance(self.ctx.author.id, self.ctx.guild.id, self.bet)
         embed = discord.Embed(
             title="🦆 **Duck Towers**",
-            description=f"**Difficulty:** {difficulty}\n**Bet:** {add_suffix(self.bet)}\n**Multiplier:** 1.00x → {get_towers_stake_multi(0, difficulty)}x\n**Potential:** {add_suffix(round(self.bet * get_towers_stake_multi(0, difficulty)))}",
+            description=f"**Difficulty:** {difficulty}\n**Bet:** {add_suffix(self.bet)}\n**Multiplier:** 1.00x -> {get_towers_stake_multi(0, difficulty)}x\n**Potential:** {add_suffix(round(self.bet * get_towers_stake_multi(0, difficulty)))}",
             color=3437035,
         )
         embed.set_footer(text="Click a tile to begin!")
@@ -4979,7 +4979,7 @@ class DuckTowersView(discord.ui.View):
         potential = round(self.bet * next_multi)
         embed = discord.Embed(
             title="🦆 **Duck Towers**",
-            description=f"**Difficulty:** {self.difficulty}\n**Bet:** {add_suffix(self.bet)}\n**Multiplier:** {self.multi}x → {next_multi}x\n**Potential:** {add_suffix(potential)}",
+            description=f"**Difficulty:** {self.difficulty}\n**Bet:** {add_suffix(self.bet)}\n**Multiplier:** {self.multi}x -> {next_multi}x\n**Potential:** {add_suffix(potential)}",
             color=3437035,
         )
         embed.set_footer(text="Click a tile to continue!")
@@ -7360,7 +7360,7 @@ async def sell(ctx, *, item: str = None):
                 current_value = await calculate_investment_value(inv)
                 total_gain += current_value
                 sold_items.append(
-                    f"Investment in {inv['company']} (ID: {inv['_id']}, {inv['amount']} → {current_value})"
+                    f"Investment in {inv['company']} (ID: {inv['_id']}, {inv['amount']} -> {current_value})"
                 )
             await investments_col.delete_many({"user_id": user_id})
             if total_gain == 0:
@@ -7388,7 +7388,7 @@ async def sell(ctx, *, item: str = None):
                 current_value = await calculate_investment_value(inv)
                 total_gain += current_value
                 sold_items.append(
-                    f"Investment in {inv['company']} (ID: {inv['_id']}, {inv['amount']} → {current_value})"
+                    f"Investment in {inv['company']} (ID: {inv['_id']}, {inv['amount']} -> {current_value})"
                 )
             await investments_col.delete_many({"user_id": user_id})
         else:
@@ -7400,7 +7400,7 @@ async def sell(ctx, *, item: str = None):
                     current_value = await calculate_investment_value(inv)
                     total_gain += current_value
                     sold_items.append(
-                        f"Investment in {inv['company']} (ID: {inv['_id']}, {inv['amount']} → {current_value})"
+                        f"Investment in {inv['company']} (ID: {inv['_id']}, {inv['amount']} -> {current_value})"
                     )
                     await investments_col.delete_one({"_id": inv["_id"]})
                     found_investment = True
@@ -8354,7 +8354,7 @@ class TicketAddButtonModal(discord.ui.Modal, title="Add Ticket Panel Button"):
         )
         embed = discord.Embed(
             title="✅ Button Added",
-            description=f"Added button to panel `{self.panel_name.value}`:\n{self.emoji.value or ''} **{self.button_label.value}** → Category `{self.category_name.value}`",
+            description=f"Added button to panel `{self.panel_name.value}`:\n{self.emoji.value or ''} **{self.button_label.value}** -> Category `{self.category_name.value}`",
             color=discord.Color.green(),
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -8392,7 +8392,7 @@ class TicketEditButtonModal(discord.ui.Modal, title="Edit Ticket Panel Button"):
         )
         embed = discord.Embed(
             title="✅ Button Updated",
-            description=f"Updated button in panel `{self.panel_name}`:\n{self.emoji.value or ''} **{self.button_label.value}** → Category `{self.category_name.value}`",
+            description=f"Updated button in panel `{self.panel_name}`:\n{self.emoji.value or ''} **{self.button_label.value}** -> Category `{self.category_name.value}`",
             color=discord.Color.green(),
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -8740,7 +8740,7 @@ async def ticketaddbutton(ctx):
                 {"guild": str(guild.id), "panel_name": panel_name}, {"$push": {"buttons": new_button}}
             )
             return await ctx.send(
-                f"✅ Added button to panel `{panel_name}`:\n{emoji or ''} **{button_label}** → Category **{category_name}**"
+                f"✅ Added button to panel `{panel_name}`:\n{emoji or ''} **{button_label}** -> Category **{category_name}**"
             )
         await ctx.interaction.response.send_modal(TicketAddButtonModal(ctx))
     except Exception as e:
@@ -9987,7 +9987,7 @@ async def addmoney(ctx, amount: str, *, users: str):
         new_bank = user_data.get("bank", 0) + coins
         await economy_col.update_one({"_id": f"{ctx.guild.id}-{uid}"}, {"$set": {"bank": new_bank}})
         await log_action(ctx, f"Added 🪙 {coins:,} to {display}'s bank.", user_id=uid, action_type="AddMoney")
-        results.append(f"✅ {display} → new bank: **{new_bank:,}**")
+        results.append(f"✅ {display} -> new bank: **{new_bank:,}**")
     await ctx.send(f"Added 🪙 **{coins:,}** to {len(uid_list)} user(s):\n" + "\n".join(results))
 
 
@@ -10061,7 +10061,7 @@ async def removemoney(ctx, amount: str, *, users: str):
             {"_id": f"{ctx.guild.id}-{uid}"}, {"$set": {"wallet": new_wallet, "bank": new_bank}}
         )
         await log_action(ctx, f"Removed 🪙 {coins:,} from {display}'s balance.", user_id=uid, action_type="RemoveMoney")
-        results.append(f"✅ {display} → wallet: **{new_wallet:,}** | bank: **{new_bank:,}**")
+        results.append(f"✅ {display} -> wallet: **{new_wallet:,}** | bank: **{new_bank:,}**")
     await ctx.send(f"Removed 🪙 **{coins:,}** from user(s):\n" + "\n".join(results))
 
 
@@ -11850,7 +11850,7 @@ async def tutorial(ctx):
     pages.append(intro)
     setup_order = discord.Embed(
         title="🧭 Recommended Setup Order",
-        description=f"{bar(2)}\n\n**Best setup order for a fresh server:**\n1. Config → Prefix, staff role, logs\n2. Moderation → Make sure permissions work\n3. Tickets → Create panels\n4. Economy → Add shop items\n5. Sticky Notes → Channel reminders\n6. Invites → Set logging\n7. Vanity → Enable tracking\n8. Roles → Claimable roles\n9. Other → Giveaways & misc tools\n\n**Starter Commands:**\n• `{prefix}setprefix <prefix>`\n• `{prefix}configure`\n",
+        description=f"{bar(2)}\n\n**Best setup order for a fresh server:**\n1. Config -> Prefix, staff role, logs\n2. Moderation -> Make sure permissions work\n3. Tickets -> Create panels\n4. Economy -> Add shop items\n5. Sticky Notes -> Channel reminders\n6. Invites -> Set logging\n7. Vanity -> Enable tracking\n8. Roles -> Claimable roles\n9. Other -> Giveaways & misc tools\n\n**Starter Commands:**\n• `{prefix}setprefix <prefix>`\n• `{prefix}configure`\n",
         color=discord.Color.purple(),
     )
     pages.append(setup_order)
