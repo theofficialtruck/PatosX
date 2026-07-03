@@ -5707,6 +5707,11 @@ class ShopDropdown(discord.ui.View):
                 await interaction.response.send_message(result["message"], ephemeral=True)
                 return
             self.balance = result["new_wallet"]
+            await increment_badge_counter(guild_id, str(interaction.user.id), "shop_purchases")
+            fresh_data = await get_user(None, guild_id, interaction.user.id)
+            await check_and_award_badges(
+                getattr(interaction, "channel", None), interaction.guild, interaction.user, fresh_data
+            )
             embed = discord.Embed(
                 title="✅ Purchase Successful!",
                 description=f"You bought **{result['item_name']}**!\n\nPrice: 🪙 {result['price']:,}\nOld Wallet: 🪙 {result['old_wallet']:,}\nNew Wallet: 🪙 {result['new_wallet']:,}"
@@ -9216,7 +9221,7 @@ class TranscriptPaginationView(discord.ui.View):
         chunk = self.tickets[start:end]
         embed = discord.Embed(
             title="📜 Ticket Overview",
-            description=f"Sorted newest → oldest • **{len(self.tickets)}** ticket{'s' if len(self.tickets) != 1 else ''} total",
+            description=f"Sorted newest to oldest • **{len(self.tickets)}** ticket{'s' if len(self.tickets) != 1 else ''} total",
             color=discord.Color.blurple(),
         )
         for idx, t in enumerate(chunk, start=start + 1):

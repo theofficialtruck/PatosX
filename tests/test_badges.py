@@ -93,6 +93,54 @@ def make_guild_and_member():
 
 
 @pytest.mark.asyncio
+async def test_shop_dropdown_purchases_award_shopaholic_badge(monkeypatch):
+    """Buying items via the /shop select-menu dropdown (ShopDropdown.dropdown_callback)
+    never incremented shop_purchases at all - only the .buy text command did - so anyone
+    who bought exclusively through the dropdown UI could never unlock Shopaholic."""
+    guild, member = make_guild_and_member()
+    store_item = {
+        "_id": "123-coffee cup",
+        "guild": "123",
+        "name": "Coffee Cup",
+        "name_lower": "coffee cup",
+        "price": 50,
+    }
+    economy = StatefulEconomyCol({"wallet": 1000, "inventory": []})
+    badges = FakeBadgesCol()
+    xp = FakeXpCol()
+    monkeypatch.setattr(main, "economy_col", economy)
+    monkeypatch.setattr(main, "badges_col", badges)
+    monkeypatch.setattr(main, "xp_col", xp)
+
+    async def fake_get_user(ctx, guild_id, user_id):
+        return await economy.find_one({"_id": f"{guild_id}-{user_id}"})
+
+    monkeypatch.setattr(main, "get_user", fake_get_user)
+
+    sent_channel_messages = []
+    channel = SimpleNamespace(send=AsyncMock(side_effect=lambda msg: sent_channel_messages.append(msg)))
+    interaction = SimpleNamespace(
+        user=member,
+        guild=guild,
+        channel=channel,
+        response=SimpleNamespace(send_message=AsyncMock()),
+        followup=SimpleNamespace(edit_message=AsyncMock()),
+        message=SimpleNamespace(id=999),
+    )
+    option = main.discord.SelectOption(label="Coffee Cup - 🪙 50", value="123-coffee cup")
+    view = main.ShopDropdown(member.id, str(guild.id), [store_item], 1000, [option])
+    view.dropdown._values = ["123-coffee cup"]
+
+    for _ in range(10):
+        await view.dropdown_callback(interaction)
+
+    assert badges.doc["counters"]["shop_purchases"] == 10
+    assert "shopaholic" in badges.doc["earned"]
+    member.add_roles.assert_awaited_once()
+    assert any("Shopaholic" in m for m in sent_channel_messages)
+
+
+@pytest.mark.asyncio
 async def test_buy_bulk_ten_items_awards_shopaholic_badge(monkeypatch):
     """Buying 10 units of an item in a single `.buy item 10` call must count as 10
     shop purchases (not 1), so the Shopaholic badge (10 purchases) actually unlocks."""
