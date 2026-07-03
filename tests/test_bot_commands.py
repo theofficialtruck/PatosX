@@ -21,6 +21,20 @@ import pytest
 import main
 
 
+def _suppress_xp_earn_side_effect(monkeypatch):
+    """xp_earn only skips its "you earned X xp" bonus message when xp_col looks like a
+    real Motor collection (main._looks_like_motor_collection) - that's the intentional
+    signal it uses to avoid firing that side effect during tests. A disconnected
+    AsyncIOMotorCollection satisfies that check without ever touching the network, since
+    the guard returns before any query would run. Use this in tests for xp_earn-decorated
+    commands that aren't about XP, so an unrelated bonus-message send doesn't get counted
+    alongside the command's own reply."""
+    from motor.motor_asyncio import AsyncIOMotorClient
+
+    lookalike = AsyncIOMotorClient("mongodb://localhost:27017")["test_db"]["xp"]
+    monkeypatch.setattr(main, "xp_col", lookalike)
+
+
 @pytest.mark.asyncio
 async def test_warn_command():
     ctx = MagicMock()
@@ -236,6 +250,7 @@ async def test_investstatus_handles_legacy_timestamp_without_date(monkeypatch):
     investments_col = SimpleNamespace(find=MagicMock(return_value=_Cursor()), update_one=AsyncMock())
     monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
     monkeypatch.setattr(main, "investments_col", investments_col)
+    _suppress_xp_earn_side_effect(monkeypatch)
     await main.investstatus.callback(ctx)
     ctx.send.assert_awaited_once()
     sent_embed = ctx.send.await_args.kwargs["embed"]
@@ -470,6 +485,7 @@ async def test_inventory_shows_tool_durability(monkeypatch):
             return None
 
     monkeypatch.setattr(main, "shop_col", _ShopCol())
+    _suppress_xp_earn_side_effect(monkeypatch)
     await main.inventory.callback(ctx)
     embed = ctx.send.await_args.kwargs["embed"]
     assert embed is not None
