@@ -157,3 +157,104 @@ async def test_ensure_badge_role_for_guild_creates_missing_role():
     role = await main.ensure_badge_role_for_guild(guild, badge)
     assert role is created_role
     guild.create_role.assert_awaited_once()
+
+
+class FakeXpCol:
+    def __init__(self):
+        self.update_calls = []
+
+    async def update_one(self, query, update, upsert=False):
+        self.update_calls.append((query, update, upsert))
+
+
+class FakeInvestmentsCursor:
+    def __init__(self, items):
+        self.items = items
+
+    async def to_list(self, length=None):
+        return list(self.items)
+
+
+class FakeInvestmentsCol:
+    def __init__(self, investments=None):
+        self.investments = investments or []
+
+    def find(self, query):
+        return FakeInvestmentsCursor(self.investments)
+
+    async def delete_many(self, query):
+        pass
+
+
+def _make_fake_confirm_sell_all(value):
+    class FakeConfirmSellAll:
+        def __init__(self, ctx, prices, inventory, user_id, wallet):
+            self.value = value
+
+        async def wait(self):
+            return None
+
+    return FakeConfirmSellAll
+
+
+def _make_sell_ctx():
+    confirm_msg = SimpleNamespace(edit=AsyncMock())
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(id=123),
+        author=SimpleNamespace(id=42),
+        command=SimpleNamespace(name="sell"),
+        send=AsyncMock(return_value=confirm_msg),
+        interaction=None,
+    )
+    return ctx, confirm_msg
+
+
+def _patch_sell_dependencies(monkeypatch, xp_col):
+    async def fake_check_channel(*args, **kwargs):
+        return True
+
+    async def fake_get_user(*args, **kwargs):
+        return {"wallet": 0, "bank": 0, "inventory": []}
+
+    async def fake_refresh(investments):
+        return investments
+
+    monkeypatch.setattr(main, "check_channel", fake_check_channel)
+    monkeypatch.setattr(main, "get_user", fake_get_user)
+    monkeypatch.setattr(main, "refresh_user_investments_for_today", fake_refresh)
+    monkeypatch.setattr(main, "investments_col", FakeInvestmentsCol())
+    monkeypatch.setattr(main, "xp_col", xp_col)
+
+
+@pytest.mark.asyncio
+async def test_sell_all_nothing_to_sell_awards_no_xp(monkeypatch):
+    xp_col = FakeXpCol()
+    _patch_sell_dependencies(monkeypatch, xp_col)
+    monkeypatch.setattr(main, "ConfirmSellAll", _make_fake_confirm_sell_all(True))
+    ctx, confirm_msg = _make_sell_ctx()
+    await main.sell.callback(ctx, item="all")
+    confirm_msg.edit.assert_awaited_once()
+    assert "nothing to sell" in confirm_msg.edit.call_args.kwargs["content"].lower()
+    assert xp_col.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_all_cancelled_awards_no_xp(monkeypatch):
+    xp_col = FakeXpCol()
+    _patch_sell_dependencies(monkeypatch, xp_col)
+    monkeypatch.setattr(main, "ConfirmSellAll", _make_fake_confirm_sell_all(False))
+    ctx, confirm_msg = _make_sell_ctx()
+    await main.sell.callback(ctx, item="all")
+    confirm_msg.edit.assert_awaited_once()
+    assert "cancelled" in confirm_msg.edit.call_args.kwargs["content"].lower()
+    assert xp_col.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sell_inventory_empty_awards_no_xp(monkeypatch):
+    xp_col = FakeXpCol()
+    _patch_sell_dependencies(monkeypatch, xp_col)
+    ctx, _ = _make_sell_ctx()
+    await main.sell.callback(ctx, item="inv")
+    assert any("nothing to sell" in str(c.args[0]).lower() for c in ctx.send.await_args_list if c.args)
+    assert xp_col.update_calls == []
