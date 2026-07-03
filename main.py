@@ -1328,7 +1328,7 @@ def xp_earn(min_xp: int, max_xp: int):
                     {"_id": key}, {"$inc": {"xp": xp_gained}, "$set": {"guild": guild_id, "user": user_id}}, upsert=True
                 )
                 try:
-                    xp_msg = f"{ctx.author.mention}, you earned **{xp_gained} xp** by using `/{command_name}`"
+                    xp_msg = f"{ctx.author.display_name}, you earned **{xp_gained} xp** by using `/{command_name}`"
                     if hasattr(ctx, "interaction") and ctx.interaction and ctx.interaction.response.is_done():
                         await ctx.interaction.followup.send(xp_msg)
                     else:
@@ -1749,6 +1749,50 @@ async def before_unmute_loop():
 # ============================================================
 
 
+class _ConfigAborted(Exception):
+    """Raised to unwind out of the .configure wizard (timeout/cancel/attempts exhausted)."""
+
+
+_CONFIG_SKIP = object()
+
+
+async def _prompt_config_value(ctx, check, question, parse_fn, *, allow_skip=True, max_attempts=3):
+    """Ask `question` and wait for a reply, retrying invalid input up to `max_attempts` times.
+
+    parse_fn(content) -> (True, value) on success or (False, error_message) on
+    invalid input. Invalid input re-asks the same question (up to max_attempts
+    total) instead of aborting the wizard on the first bad reply. Timeout and
+    `cancel` still abort immediately - only bad input is retried.
+    """
+    await ctx.send(question)
+    attempts_left = max_attempts
+    while True:
+        try:
+            msg = await bot.wait_for("message", timeout=90, check=check)
+        except asyncio.TimeoutError:
+            await ctx.send("⌛ Timed out. Configuration cancelled.")
+            raise _ConfigAborted
+        content = msg.content.strip()
+        try:
+            await msg.delete()
+        except discord.HTTPException:
+            pass
+        if content.lower() == "cancel":
+            await ctx.send("❌ Configuration cancelled.")
+            raise _ConfigAborted
+        if allow_skip and content.lower() == "skip":
+            return _CONFIG_SKIP
+        ok, result = parse_fn(content)
+        if ok:
+            return result
+        attempts_left -= 1
+        if attempts_left <= 0:
+            await ctx.send(f"{result} No attempts remaining - configuration cancelled.")
+            raise _ConfigAborted
+        plural = "s" if attempts_left != 1 else ""
+        await ctx.send(f"{result} You have {attempts_left} attempt{plural} left.\n{question}")
+
+
 @bot.command(name="configure", aliases=["config"])
 async def configure(ctx):
     """Interactive setup wizard that walks guild admins through all bot configuration options."""
@@ -1767,14 +1811,14 @@ async def configure(ctx):
         "welcome_message": "Enter the **welcome message** (supports `{mention}`, `{username}`, `{server}`, `{membercount}` - type `skip` to skip):",
         "boost_channel": "Enter the **boost channel ID** (type `skip` to skip - must be paired with a boost message):",
         "boost_message": "Enter the **boost message** (supports `{mention}`, `{username}`, `{server}`, `{boostcount}` - type `skip` to skip):",
-        "ALLOWED_DUCK_CHANNELS": "Enter allowed channel IDs for `.duck` (comma/space separated - type `skip` to allow everywhere):",
-        "ROLE_ID": "Enter role IDs to award for passing `.duckquiz` (comma/space separated - type `skip` to skip):",
-        "QUIZ_CHANNEL": "Enter channel IDs where `.duckquiz` can run (comma/space separated - type `skip` to allow everywhere):",
-        "allowed_channel_id": "Enter channel IDs where DuckGPT is allowed (comma/space separated - type `skip` to allow everywhere):",
-        "economy_channel": "Enter the channel ID where economy commands are allowed (type `skip` to allow everywhere):",
-        "log_channel": "Enter the log channel ID for moderation logs (type `skip` to disable):",
-        "DROP_CHANNELS": "Enter channel IDs where `.drop` can be used by members (comma/space separated - type `skip` to allow everywhere):",
-        "QUACK_CHANNELS": "Enter channel IDs where the quack counter should activate (comma/space separated - type `skip` to count everywhere):",
+        "ALLOWED_DUCK_CHANNELS": "Enter **allowed channel IDs for `.duck`** (comma/space separated - type `skip` to allow everywhere):",
+        "ROLE_ID": "Enter **role IDs to award for passing `.duckquiz`** (comma/space separated - type `skip` to skip):",
+        "QUIZ_CHANNEL": "Enter **channel IDs where `.duckquiz` can run** (comma/space separated - type `skip` to allow everywhere):",
+        "allowed_channel_id": "Enter **channel IDs where DuckGPT is allowed** (comma/space separated - type `skip` to allow everywhere):",
+        "economy_channel": "Enter the **channel ID where economy commands are allowed** (type `skip` to allow everywhere):",
+        "log_channel": "Enter the **log channel ID** for moderation logs (type `skip` to disable):",
+        "DROP_CHANNELS": "Enter **channel IDs where `.drop` can be used by members** (comma/space separated - type `skip` to allow everywhere):",
+        "QUACK_CHANNELS": "Enter **channel IDs where the quack counter should activate** (comma/space separated - type `skip` to count everywhere):",
         "pond_royalty_role": "Enter the role for the **Pond Royalty** shop item (mention `@Role` or paste the role ID, type `skip` to disable Pond Royalty in this server):",
     }
     config_data = {"guild": str(ctx.guild.id)}
@@ -1782,71 +1826,64 @@ async def configure(ctx):
     def check(m):
         return m.author == ctx.author and m.channel == ctx.channel
 
-    await ctx.send("🛠 Starting configuration. Type `cancel` to abort at any time.")
-    await ctx.send("Enter the **staff role** (mention it like `@Staff` or paste the role ID). **Required**:")
+    await ctx.send("🛠 Starting configuration. Type `cancel` to abort at any time. Invalid answers get up to 3 tries.")
+
+    def _parse_staff_role(content):
+        match = re.search(r"\d+", content)
+        if not match:
+            return False, "❌ Please mention a valid role or provide its ID."
+        staff_role = ctx.guild.get_role(int(match.group()))
+        if not staff_role:
+            return False, "❌ That role wasn't found in this server."
+        return True, staff_role
+
     try:
-        msg = await bot.wait_for("message", timeout=90, check=check)
-    except asyncio.TimeoutError:
-        return await ctx.send("⌛ Timed out. Configuration cancelled.")
-    content = msg.content.strip()
-    if content.lower() == "cancel":
-        return await ctx.send("❌ Configuration cancelled.")
-    match = re.search("\\d+", content)
-    if not match:
-        return await ctx.send("❌ Please mention a valid role or provide its ID. Run `.configure` again.")
-    staff_role = ctx.guild.get_role(int(match.group()))
-    if not staff_role:
-        return await ctx.send("❌ That role wasn't found in this server. Run `.configure` again.")
+        staff_role = await _prompt_config_value(
+            ctx,
+            check,
+            "Enter the **staff role** (mention it like `@Staff` or paste the role ID). **Required**:",
+            _parse_staff_role,
+            allow_skip=False,
+        )
+    except _ConfigAborted:
+        return
     await settings_col.update_one({"guild": str(ctx.guild.id)}, {"$set": {"staff_role": staff_role.id}}, upsert=True)
-    try:
-        await msg.delete()
-    except discord.HTTPException:
-        pass
+
     for key, question in prompts.items():
-        await ctx.send(question)
-        try:
-            msg = await bot.wait_for("message", timeout=90, check=check)
-        except asyncio.TimeoutError:
-            return await ctx.send("⌛ Timed out. Configuration cancelled.")
-        content = msg.content.strip()
-        if content.lower() == "cancel":
-            return await ctx.send("❌ Configuration cancelled.")
-        if content.lower() == "skip":
-            try:
-                await msg.delete()
-            except discord.HTTPException:
-                pass
-            continue
-        if not content:
-            return await ctx.send(f"❌ `{key}` cannot be blank. Type `skip` to skip. Please run `.configure` again.")
-        try:
+
+        def _parse_value(content, key=key):
+            if not content:
+                return False, f"❌ `{key}` cannot be blank. Type `skip` to skip."
             if key in ["log_channel", "economy_channel", "welcome_channel", "boost_channel"]:
                 if not content.isdigit():
-                    return await ctx.send(f"❌ Please provide a valid channel ID for `{key}`.")
-                config_data[key] = int(content)
-            elif key in ["welcome_message", "boost_message"]:
-                config_data[key] = content
-            elif key == "pond_royalty_role":
+                    return False, f"❌ Please provide a valid channel ID for `{key}`."
+                return True, int(content)
+            if key in ["welcome_message", "boost_message"]:
+                return True, content
+            if key == "pond_royalty_role":
                 role_match = re.search(r"\d+", content)
                 if not role_match:
-                    return await ctx.send("❌ Please mention a valid role or provide its ID. Run `.configure` again.")
+                    return False, "❌ Please mention a valid role or provide its ID."
                 pond_role = ctx.guild.get_role(int(role_match.group()))
                 if not pond_role:
-                    return await ctx.send("❌ That role wasn't found in this server. Run `.configure` again.")
-                config_data["pond_royalty_role"] = pond_role.id
-            elif content.lower() == "all":
-                config_data[key] = "all"
-            else:
-                ids = [int(x) for x in re.split("[,\\s]+", content) if x.isdigit()]
-                if not ids:
-                    return await ctx.send(f"❌ No valid IDs entered for `{key}`.")
-                config_data[key] = ids
-        except ValueError:
-            return await ctx.send(f"❌ Couldn't parse IDs for `{key}`.")
+                    return False, "❌ That role wasn't found in this server."
+                return True, pond_role.id
+            if content.lower() == "all":
+                return True, "all"
+            try:
+                ids = [int(x) for x in re.split(r"[,\s]+", content) if x.isdigit()]
+            except ValueError:
+                return False, f"❌ Couldn't parse IDs for `{key}`."
+            if not ids:
+                return False, f"❌ No valid IDs entered for `{key}`."
+            return True, ids
+
         try:
-            await msg.delete()
-        except discord.HTTPException:
-            pass
+            value = await _prompt_config_value(ctx, check, question, _parse_value)
+        except _ConfigAborted:
+            return
+        if value is not _CONFIG_SKIP:
+            config_data[key] = value
     # Welcome and boost each require both channel and message
     welcome_ch_set = "welcome_channel" in config_data
     welcome_msg_set = "welcome_message" in config_data
@@ -2229,6 +2266,34 @@ def gemini_generate_once(client_info, prompt: str):
         return model.generate_content(prompt)
 
 
+GEMINI_MODEL_NAME = "gemini-2.5-flash-lite"
+
+# Error substrings that mean "this specific key is out of quota / invalid" - worth
+# rotating to the next key for. Distinct from _is_transient_gemini_error below,
+# which covers blips that are worth retrying on the *same* key.
+_QUOTA_ERROR_MARKERS = ("429", "quota", "api key not valid", "exceeded")
+
+# Error substrings for transient failures (brief outages, timeouts, rate limiting
+# at the infra level) that are worth retrying rather than giving up immediately.
+# Giving up on the first attempt for these is what caused DuckGPT to intermittently
+# fail with "the duck slipped on a banana peel" even though the very next query -
+# a fresh attempt against the same flaky backend - would succeed.
+_TRANSIENT_ERROR_MARKERS = (
+    "500",
+    "502",
+    "503",
+    "504",
+    "timeout",
+    "timed out",
+    "deadline",
+    "unavailable",
+    "connection",
+    "reset by peer",
+    "temporarily",
+    "internal error",
+)
+
+
 async def get_gemini_client():
     """Cycle through available Gemini keys and return the first working client info dict.
     Returns None when all keys fail."""
@@ -2236,7 +2301,7 @@ async def get_gemini_client():
     for _ in range(len(GEMINI_API_KEYS)):
         key = next_gemini_key()
         try:
-            client_info = build_gemini_client_for_key(key, "gemini-2.5-flash-lite")
+            client_info = build_gemini_client_for_key(key, GEMINI_MODEL_NAME)
             return client_info
         except Exception as e:
             print(f"❌ Gemini key {key[:8]} failed: {e}")
@@ -2253,7 +2318,8 @@ async def generate_gemini_response(messages):
     client_info = await get_gemini_client()
     if not client_info:
         return "🦆 The duck slipped on a banana peel and can't respond right now."
-    for attempt in range(len(GEMINI_API_KEYS)):
+    max_attempts = max(len(GEMINI_API_KEYS), 1) + 2
+    for attempt in range(max_attempts):
         try:
             response = await loop.run_in_executor(executor, lambda: gemini_generate_once(client_info, prompt))
             if hasattr(response, "text") and response.text:
@@ -2265,21 +2331,26 @@ async def generate_gemini_response(messages):
         except Exception as e:
             err_str = str(e)
             print(f"[DuckGPT Gemini Error] {err_str}")
-            if any((word in err_str.lower() for word in ["429", "quota", "api key not valid", "exceeded"])):
+            lower_err = err_str.lower()
+            is_quota_error = any((word in lower_err for word in _QUOTA_ERROR_MARKERS))
+            is_transient_error = any((word in lower_err for word in _TRANSIENT_ERROR_MARKERS))
+            if not (is_quota_error or is_transient_error) or attempt == max_attempts - 1:
+                print("💥 Non-recoverable Gemini error (or out of retries), stopping attempts.")
+                break
+            delay = 2**attempt + random.uniform(0, 1)
+            if is_quota_error:
                 print("⚠️ Gemini key hit limit or failed, switching key...")
-                delay = 2**attempt + random.uniform(0, 1)
                 print(f"🕒 Waiting {delay:.1f}s before switching...")
                 await asyncio.sleep(delay)
                 new_key = next_gemini_key()
                 try:
-                    client_info = build_gemini_client_for_key(new_key, "gemini-2.0-flash")
+                    client_info = build_gemini_client_for_key(new_key, GEMINI_MODEL_NAME)
                 except Exception as e2:
                     print(f"❌ Failed to switch Gemini key: {e2}")
-                    continue
-                continue
-            print("💥 Non-recoverable Gemini error, stopping attempts.")
-            break
-    print("❌ All Gemini keys failed.")
+            else:
+                print(f"🕒 Transient Gemini error, retrying in {delay:.1f}s...")
+                await asyncio.sleep(delay)
+    print("❌ All Gemini attempts failed.")
     return "🦆 The duck slipped on a banana peel and can't respond right now."
 
 
@@ -3036,7 +3107,8 @@ async def on_message(message):
     quack counting, one time channel deletions, AFK detection, and sticky note re posting."""
     if message.author.bot:
         return
-    await bot.process_commands(message)
+    ctx = await bot.get_context(message)
+    await bot.invoke(ctx)
     if not message.guild:
         return
     try:
@@ -3081,10 +3153,12 @@ async def on_message(message):
         print(f"[boost message handler error] {e}")
     try:
         guild_id = str(message.guild.id)
-        settings_doc = await settings_col.find_one({"guild": guild_id}) or {}
-        prefix = settings_doc.get("prefix", "?")
         content = getattr(message, "content", "") or ""
-        if not content.lower().startswith(str(prefix).lower()):
+        if not ctx.valid:
+            # ctx.valid means discord.py resolved this message to a real command
+            # (e.g. `.quackcount`/`.quacktop`) - checking that directly instead of
+            # re-implementing prefix matching here means we can't drift out of sync
+            # with what actually counts as a command invocation.
             await config_col.update_one(
                 {"guild": guild_id},
                 {"$setOnInsert": {"quack_count": 0, "quacks": {}, "QUACK_CHANNELS": "all"}},
@@ -3219,7 +3293,7 @@ async def on_message(message):
                     await message.channel.send("❌ Ticket close request canceled.")
                     return
                 if message.content.lower() == "confirm":
-                    opener = message.guild.get_member(opener_id)
+                    opener = await resolve_ticket_opener(message.guild, opener_id)
                     if opener:
 
                         class DummyCtx:
@@ -4135,47 +4209,83 @@ async def resetpromoters(ctx):
     )
 
 
+async def _sync_vanity_role(guild, member, data, *, repost_sticky=False):
+    """Award/revoke the vanity (Pond Promoters) role for a single member.
+
+    Both the on_presence_update event and the check_all_statuses polling loop
+    call this for the same member/guild, so the DB update below has to be the
+    single source of truth for "did this call actually cause the change" -
+    otherwise both callers can race past the in-memory role check before
+    either one's add_roles/remove_roles call resolves, and both send a log
+    message for the same award. find_one_and_update's filter only matches
+    once (Mongo serializes writes to a document), so only the winner of the
+    race proceeds to touch the role and send a message.
+    """
+    if member.bot:
+        return
+    role = guild.get_role(data["role"])
+    if not role:
+        return
+    log_ch = guild.get_channel(data["log"])
+    keyword = data["keyword"].lower()
+    is_online = member.status != discord.Status.offline
+    activity_text = member.activity.name.lower() if member.activity and member.activity.name else ""
+    has_keyword = keyword in activity_text
+    has_role = role in member.roles
+
+    if is_online and has_keyword and not has_role:
+        won = await vanity_col.find_one_and_update(
+            {"guild": str(guild.id), "users": {"$ne": member.id}},
+            {"$addToSet": {"users": member.id}},
+        )
+        if won is None:
+            return
+        await member.add_roles(role, reason="vanity match")
+        if log_ch:
+            await log_ch.send(
+                embed=discord.Embed(
+                    title="Vanity Added ✨",
+                    description=f"{member.mention} has been awarded **{role.name}** for proudly displaying our vanity `{keyword}` in their status!",
+                    color=discord.Color.magenta(),
+                    timestamp=datetime.now(timezone.utc),
+                ).set_thumbnail(url=member.display_avatar.url)
+            )
+            if repost_sticky:
+                await repost_sticky_note(log_ch.id, guild.id)
+    elif is_online and not has_keyword and has_role:
+        # Only revoke when the member is online without the keyword - never
+        # because they went offline (their activity briefly disappearing on
+        # disconnect should not be treated as "lost the vanity").
+        won = await vanity_col.find_one_and_update(
+            {"guild": str(guild.id), "users": member.id},
+            {"$pull": {"users": member.id}},
+        )
+        if won is None:
+            return
+        await member.remove_roles(role, reason="vanity lost")
+        if log_ch:
+            await log_ch.send(
+                embed=discord.Embed(
+                    title="Vanity Removed",
+                    description=f"{member.mention} has lost **{role.name}** for no longer displaying our vanity `{keyword}`.",
+                    color=discord.Color.light_gray(),
+                    timestamp=datetime.now(timezone.utc),
+                ).set_thumbnail(url=member.display_avatar.url)
+            )
+            if repost_sticky:
+                await repost_sticky_note(log_ch.id, guild.id)
+
+
 @bot.event
 async def on_presence_update(before, after):
     if not check_all_statuses.is_running():
         check_all_statuses.start()
     if after.bot or not after.guild:
         return
-    if after.status == discord.Status.offline:
-        return
     data = await vanity_col.find_one({"guild": str(after.guild.id)})
     if not data:
         return
-    keyword = data["keyword"].lower()
-    status = before.activity.name.lower() if before.activity and before.activity.name else ""
-    new_status = after.activity.name.lower() if after.activity and after.activity.name else ""
-    role = after.guild.get_role(data["role"])
-    log_ch = after.guild.get_channel(data["log"])
-    has_role = role in after.roles
-    if keyword not in status and keyword in new_status and (not has_role):
-        await after.add_roles(role, reason="vanity match")
-        await vanity_col.update_one({"guild": str(after.guild.id)}, {"$addToSet": {"users": after.id}})
-        if log_ch:
-            await log_ch.send(
-                embed=discord.Embed(
-                    title="Vanity Added ✨",
-                    description=f"{after.mention} has been awarded **{role.name}** for proudly displaying our vanity `{keyword}` in their status!",
-                    color=discord.Color.magenta(),
-                    timestamp=datetime.now(timezone.utc),
-                ).set_thumbnail(url=after.display_avatar.url)
-            )
-    elif keyword in status and keyword not in new_status and has_role:
-        await after.remove_roles(role, reason="vanity lost")
-        await vanity_col.update_one({"guild": str(after.guild.id)}, {"$pull": {"users": after.id}})
-        if log_ch:
-            await log_ch.send(
-                embed=discord.Embed(
-                    title="Vanity Removed",
-                    description=f"{after.mention} has lost **{role.name}** for no longer displaying our vanity `{keyword}`.",
-                    color=discord.Color.light_gray(),
-                    timestamp=datetime.now(timezone.utc),
-                ).set_thumbnail(url=after.display_avatar.url)
-            )
+    await _sync_vanity_role(after.guild, after, data)
 
 
 @tasks.loop(seconds=0.01)
@@ -4184,42 +4294,10 @@ async def check_all_statuses():
         data = await vanity_col.find_one({"guild": str(guild.id)})
         if not data:
             continue
-        keyword = data["keyword"].lower()
-        role = guild.get_role(data["role"])
-        log_ch = guild.get_channel(data["log"])
-        if not role:
-            continue
         for member in guild.members:
-            if member.bot or member.status == discord.Status.offline:
+            if member.bot:
                 continue
-            status = member.activity.name.lower() if member.activity and member.activity.name else ""
-            has_role = role in member.roles
-            if keyword in status and (not has_role):
-                await member.add_roles(role, reason="Vanity match (auto check)")
-                await vanity_col.update_one({"guild": str(guild.id)}, {"$addToSet": {"users": member.id}})
-                if log_ch:
-                    await log_ch.send(
-                        embed=discord.Embed(
-                            title="Vanity Added ✨",
-                            description=f"{member.mention} has been awarded **{role.name}**\nFor displaying `{keyword}` in their status!",
-                            color=discord.Color.magenta(),
-                            timestamp=datetime.now(UTC),
-                        ).set_thumbnail(url=member.display_avatar.url)
-                    )
-                    await repost_sticky_note(log_ch.id, guild.id)
-            elif keyword not in status and has_role:
-                await member.remove_roles(role, reason="Vanity removed (auto check)")
-                await vanity_col.update_one({"guild": str(guild.id)}, {"$pull": {"users": member.id}})
-                if log_ch:
-                    await log_ch.send(
-                        embed=discord.Embed(
-                            title="Vanity Removed",
-                            description=f"{member.mention} lost **{role.name}** for no longer displaying `{keyword}` in their status.",
-                            color=discord.Color.light_gray(),
-                            timestamp=datetime.now(UTC),
-                        ).set_thumbnail(url=member.display_avatar.url)
-                    )
-                    await repost_sticky_note(log_ch.id, guild.id)
+            await _sync_vanity_role(guild, member, data, repost_sticky=True)
 
 
 @bot.hybrid_command(name="invitechannel", description="Set the channel where invite joins are announced.")
@@ -6084,7 +6162,7 @@ async def buy(ctx, *, item: str = None):
             summary += f" Total cost: {total_cost} coins. ({price} each)"
         await ctx.send(summary)
     if bought > 0:
-        await increment_badge_counter(str(ctx.guild.id), str(ctx.author.id), "shop_purchases")
+        await increment_badge_counter(str(ctx.guild.id), str(ctx.author.id), "shop_purchases", amount=bought)
         fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
         await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
 
@@ -7341,8 +7419,10 @@ async def sell(ctx, *, item: str = None):
             confirm_msg = await ctx.send(embed=confirm_embed, view=confirm_view)
             await confirm_view.wait()
             if confirm_view.value is None:
+                ctx._skip_xp_award = True
                 return await confirm_msg.edit(content="⌛ Timed out. No items were sold.", embed=None, view=None)
             elif confirm_view.value is False:
+                ctx._skip_xp_award = True
                 return await confirm_msg.edit(content="❌ Cancelled. No items were sold.", embed=None, view=None)
             total_gain = 0
             sold_items = []
@@ -7364,6 +7444,7 @@ async def sell(ctx, *, item: str = None):
                 )
             await investments_col.delete_many({"user_id": user_id})
             if total_gain == 0:
+                ctx._skip_xp_award = True
                 return await confirm_msg.edit(content="❌ You had nothing to sell.", embed=None, view=None)
             await economy_col.update_one(
                 {"_id": user_id}, {"$set": {"wallet": wallet + total_gain, "inventory": inventory}}
@@ -8621,6 +8702,32 @@ async def send_hybrid_error(ctx, *, content=None, embed=None, delete_after=None)
     return await ctx.interaction.response.send_message(content=content, embed=embed, ephemeral=True)
 
 
+async def resolve_ticket_opener(guild: discord.Guild, user_id):
+    """Resolve a ticket opener to a Member/User object. guild.get_member() only checks the
+    local member cache, which misses members who haven't been active recently - that cache
+    miss was silently turning into a None opener, which is why closed ticket transcripts
+    recorded no opener_id and showed "Opened by: Unknown" for practically every ticket.
+    Falls back to an API fetch, and finally to a global user fetch for members who have
+    since left the guild (still valid for DMing the transcript and displaying who it was)."""
+    if not user_id:
+        return None
+    try:
+        user_id_int = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    member = guild.get_member(user_id_int)
+    if member:
+        return member
+    try:
+        return await guild.fetch_member(user_id_int)
+    except (discord.NotFound, discord.HTTPException):
+        pass
+    try:
+        return await bot.fetch_user(user_id_int)
+    except (discord.NotFound, discord.HTTPException):
+        return None
+
+
 async def ping_ticket_roles(channel: discord.TextChannel, guild_id: str, opener_id: int = None):
     """Mention any staff members with ticket permissions in the newly created ticket channel."""
     try:
@@ -8913,7 +9020,7 @@ async def ticketclose(ctx):
         ticket_entry = await tickets_col.find_one({"guild": str(ctx.guild.id), "channel_id": str(channel.id)})
         if not ticket_entry:
             return await send_hybrid_error(ctx, content="❌ This command can only be used inside a ticket channel.")
-        opener = channel.guild.get_member(int(ticket_entry.get("owner_id"))) if ticket_entry.get("owner_id") else None
+        opener = await resolve_ticket_opener(channel.guild, ticket_entry.get("owner_id"))
         if not opener:
             return await send_hybrid_error(ctx, content="⚠️ Could not find the ticket opener.")
         await tickets_col.update_one({"_id": ticket_entry["_id"]}, {"$set": {"close_pending": True}})
@@ -8943,7 +9050,7 @@ async def ticketforceclose(ctx):
         ticket_entry = await tickets_col.find_one({"guild": str(ctx.guild.id), "channel_id": str(channel.id)})
         if not ticket_entry:
             return await send_hybrid_error(ctx, content="❌ This command can only be used inside a ticket channel.")
-        opener = channel.guild.get_member(int(ticket_entry.get("owner_id"))) if ticket_entry.get("owner_id") else None
+        opener = await resolve_ticket_opener(channel.guild, ticket_entry.get("owner_id"))
         await actually_close_ticket(ctx, opener, forced=True)
         await tickets_col.delete_one({"_id": ticket_entry["_id"]})
 
@@ -9034,8 +9141,36 @@ async def transcriptsearch(ctx, username: str):
         print("transcriptsearch ERROR:", traceback.format_exc())
 
 
+def _normalize_open_ticket(t: dict) -> dict:
+    """Still-open ticket documents use a different schema than closed-ticket transcript
+    records (guild/owner_id vs guild_id/opener_id) because actually_close_ticket writes a
+    brand new document instead of updating the original one, and the original is only
+    deleted once the ticket closes. Normalize field names so both schemas can be merged
+    into a single list for display."""
+    return {
+        "channel_id": t.get("channel_id"),
+        "opener_id": t.get("owner_id"),
+        "created_at": t.get("created_at"),
+    }
+
+
+def _ticket_sort_key(t: dict) -> datetime:
+    """Sort key used to merge open and closed tickets into one newest-to-oldest list:
+    closed tickets sort by when they closed, open ones by when they were opened."""
+    raw = t.get("closed_at") or t.get("created_at")
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    if isinstance(raw, str):
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
 class TranscriptPaginationView(discord.ui.View):
-    def __init__(self, ctx, tickets, per_page=25):
+    def __init__(self, ctx, tickets, per_page=8):
         super().__init__(timeout=120)
         self.ctx = ctx
         self.tickets = tickets
@@ -9080,19 +9215,25 @@ class TranscriptPaginationView(discord.ui.View):
         end = start + self.per_page
         chunk = self.tickets[start:end]
         embed = discord.Embed(
-            title=f"📜 Ticket Overview ({len(self.tickets)} total) - Page {self.page + 1}/{self.max_page + 1}",
+            title="📜 Ticket Overview",
+            description=f"Sorted newest → oldest • **{len(self.tickets)}** ticket{'s' if len(self.tickets) != 1 else ''} total",
             color=discord.Color.blurple(),
         )
-        for t in chunk:
-            ticket_id = t.get("ticket_id", "Unknown")
+        for idx, t in enumerate(chunk, start=start + 1):
             opener = await self.format_user(t.get("opener_id"))
-            opened_at = self.format_time(t.get("created_at"), "both")
-            status = f"🟢 Ongoing\nOpened by: {opener}\nOpened at: {opened_at}"
-            if t.get("closed_at"):
+            opened_at = self.format_time(t.get("created_at"), "relative")
+            is_closed = bool(t.get("closed_at"))
+            lines = [f"👤 Opened by {opener} • {opened_at}"]
+            if is_closed:
                 closer = await self.format_user(t.get("closer_id"))
-                closed_at = self.format_time(t.get("closed_at"), "both")
-                status = f"🔴 Closed\nOpened by: {opener}\nOpened at: {opened_at}\nClosed by: {closer}\nClosed at: {closed_at}"
-            embed.add_field(name=f"🎟 Ticket {ticket_id}", value=status, inline=False)
+                closed_at = self.format_time(t.get("closed_at"), "relative")
+                lines.append(f"🔒 Closed by {closer} • {closed_at}")
+                lines.append(f"`{t.get('ticket_id', 'Unknown')}`")
+            elif t.get("channel_id"):
+                lines.append(f"📍 <#{t['channel_id']}>")
+            badge = "🔴 Closed" if is_closed else "🟢 Ongoing"
+            embed.add_field(name=f"{badge} • Ticket #{idx}", value="\n".join(lines), inline=False)
+        embed.set_footer(text=f"Page {self.page + 1}/{self.max_page + 1}")
         return embed
 
     @discord.ui.button(label="⬅️ Prev", style=discord.ButtonStyle.gray)
@@ -9130,7 +9271,12 @@ class TranscriptPaginationView(discord.ui.View):
 @staff_only()
 async def transcriptlist(ctx):
     try:
-        tickets = await tickets_col.find({"guild_id": str(ctx.guild.id)}).to_list(length=200)
+        guild_id = str(ctx.guild.id)
+        closed_tickets = await tickets_col.find({"guild_id": guild_id}).to_list(length=200)
+        open_tickets = await tickets_col.find({"guild": guild_id}).to_list(length=200)
+        tickets = closed_tickets + [_normalize_open_ticket(t) for t in open_tickets]
+        tickets.sort(key=_ticket_sort_key, reverse=True)
+        tickets = tickets[:200]
         if not tickets:
             msg = "❌ No tickets found in this server."
             if is_prefix(ctx):
@@ -11683,7 +11829,7 @@ async def duck(ctx):
                 return await ctx.send("❌ Duck image not found, sorry!")
     embed = discord.Embed(title="🦆 Quack!", color=discord.Color.blue())
     embed.set_image(url=url)
-    await ctx.send(embed=embed)
+    await ctx.send(embed=embed, ephemeral=False)
 
 
 @bot.hybrid_command(name="quote", description="Get a random quote.")
