@@ -16,7 +16,7 @@ flake8==7.3.0
 black==26.5.1
 isort==8.0.1
 ruff==0.15.22
-codespell==2.4.2
+codespell==2.4.3
 
 pytest==9.1.1
 bandit==1.9.4
