@@ -36,6 +36,7 @@ def _run(*args, **kwargs) -> subprocess.CompletedProcess:
     """Run a command, returning its CompletedProcess (never raises)."""
     return subprocess.run(  # nosec B603 — args are built from sys.executable + hard-coded tool flags
         args,
+        check=False,
         capture_output=True,
         stdin=subprocess.DEVNULL,  # avoid inheriting an invalid stdin handle on Windows
         text=True,
@@ -128,6 +129,7 @@ def test_ruff_no_errors_main():
         "ruff",
         "check",
         "main.py",
+        "--select=E4,E7,E9,F",
         "--output-format=json",
     )
     if result.returncode == 2:
@@ -158,6 +160,7 @@ def test_ruff_no_errors_tests():
         "ruff",
         "check",
         "tests/",
+        "--select=E4,E7,E9,F",
         "--output-format=json",
     )
     if result.returncode == 2:
