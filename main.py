@@ -255,6 +255,7 @@ staffperms_col = db["staffperms"]  # granular staff permission grants per user
 minigameplayerdata_col = db["minigameplayerdata"]  # persistent minigame state
 xp_col = db["xp"]  # experience point totals per user per guild
 badges_col = db["badges"]  # earned badge IDs and activity counters
+monthly_rewards_col = db["monthly_rewards"]  # monthly reward goal progress and claims per user
 # ============================================================
 # Economy and game constants
 # ============================================================
@@ -281,6 +282,48 @@ bugs_to_catch = [
     ("🕷️ spider", 160),
     ("🦗 cricket", 150),
 ]
+
+# Riddle bank for the .riddle command, grouped by difficulty.
+# "answers" lists every acceptable phrasing; index 0 is shown to the user as the canonical answer.
+RIDDLES = {
+    "easy": [
+        {"question": "What has to be broken before you can use it?", "answers": ["an egg", "egg"]},
+        {"question": "What has keys but can't open locks?", "answers": ["a piano", "piano"]},
+        {"question": "What gets wetter the more it dries?", "answers": ["a towel", "towel"]},
+        {"question": "What has a neck but no head?", "answers": ["a bottle", "bottle"]},
+        {"question": "I waddle on land, swim in a pond, and say 'quack'. What am I?", "answers": ["a duck", "duck"]},
+        {"question": "What has hands but cannot clap?", "answers": ["a clock", "clock"]},
+    ],
+    "medium": [
+        {"question": "The more you take, the more you leave behind. What am I?", "answers": ["footsteps"]},
+        {"question": "What can travel around the world while staying in a corner?", "answers": ["a stamp", "stamp"]},
+        {"question": "What has many teeth but cannot bite?", "answers": ["a comb", "comb"]},
+        {"question": "What has one eye but cannot see?", "answers": ["a needle", "needle"]},
+        {
+            "question": "I'm light as a feather, yet even the strongest person can't hold me for more than a few minutes. What am I?",
+            "answers": ["breath", "your breath", "breathing"],
+        },
+        {"question": "What kind of room has no doors or windows?", "answers": ["a mushroom", "mushroom"]},
+    ],
+    "hard": [
+        {"question": "What can fill a room but takes up no space?", "answers": ["light"]},
+        {"question": "What word becomes shorter when you add two letters to it?", "answers": ["short"]},
+        {"question": "What has a heart that doesn't beat?", "answers": ["an artichoke", "artichoke"]},
+        {"question": "What begins with T, ends with T, and has T in it?", "answers": ["a teapot", "teapot"]},
+        {"question": "What is so fragile that saying its name breaks it?", "answers": ["silence"]},
+        {
+            "question": "I am taken from a mine and shut in a wooden case, never released, yet used by almost everyone. What am I?",
+            "answers": ["pencil lead", "graphite", "a pencil", "pencil"],
+        },
+    ],
+}
+
+# Difficulty configuration for .riddle: how long the user has to answer and the coin reward range.
+RIDDLE_LEVELS = {
+    "easy": {"label": "Easy", "emoji": "🟢", "time_limit": 30, "reward_range": (75, 150)},
+    "medium": {"label": "Medium", "emoji": "🟡", "time_limit": 25, "reward_range": (150, 300)},
+    "hard": {"label": "Hard", "emoji": "🔴", "time_limit": 20, "reward_range": (300, 550)},
+}
 
 # How many uses each durable tool has before it breaks.
 # Values are total uses, not hours or minutes.
@@ -917,6 +960,7 @@ STAFF_HELP_COMMANDS = {
     "transcriptsearch",
     "transcriptlist",
     "ticketaddbutton",
+    "ticketremovebutton",
     "ticketeditbutton",
     "ticketpanel",
     "transcript",
@@ -1004,6 +1048,8 @@ ECONOMY_HELP_COMMANDS = {
     "doorgame",
     "ducktowers",
     "mines",
+    "riddle",
+    "monthlyrewards",
 }
 # Commands that should not appear in any section of the help embed
 HELP_EXCLUDED_COMMANDS = {"override"}
@@ -1145,6 +1191,109 @@ BADGES = {
 
 
 # ============================================================
+# Monthly rewards system
+# 10 goals users can work toward each calendar month (UTC). Progress is stored
+# per user per guild in monthly_rewards_col and lazily reset when a new month
+# begins (see get_monthly_rewards_doc). Claiming a goal pays out a fixed coin
+# reward once; the goal cannot be claimed again until next month's reset.
+# ============================================================
+
+MONTHLY_REWARD_GOALS = [
+    {
+        "key": "commands_used",
+        "title": "Command Enthusiast",
+        "emoji": "🤖",
+        "description": "Use 150 commands.",
+        "target": 150,
+        "reward": 750,
+    },
+    {
+        "key": "coins_collected",
+        "title": "Coin Collector",
+        "emoji": "🪙",
+        "description": "Earn 10,000 coins.",
+        "target": 10000,
+        "reward": 1000,
+    },
+    {
+        "key": "duck_uses",
+        "title": "Duck Fanatic",
+        "emoji": "🦆",
+        "description": "Use the `.duck` command 50 times.",
+        "target": 50,
+        "reward": 400,
+    },
+    {
+        "key": "work_uses",
+        "title": "Hard Worker",
+        "emoji": "💼",
+        "description": "Use the `.work` command 20 times.",
+        "target": 20,
+        "reward": 800,
+    },
+    {
+        "key": "fish_uses",
+        "title": "Master Angler",
+        "emoji": "🎣",
+        "description": "Go fishing 25 times.",
+        "target": 25,
+        "reward": 600,
+    },
+    {
+        "key": "swim_uses",
+        "title": "Deep Diver",
+        "emoji": "🤿",
+        "description": "Swim in the deep ocean 20 times.",
+        "target": 20,
+        "reward": 650,
+    },
+    {
+        "key": "daily_uses",
+        "title": "Daily Devotee",
+        "emoji": "📅",
+        "description": "Claim your `.daily` reward 20 times.",
+        "target": 20,
+        "reward": 700,
+    },
+    {
+        "key": "beg_uses",
+        "title": "Persistent Beggar",
+        "emoji": "🙏",
+        "description": "Use the `.beg` command 30 times.",
+        "target": 30,
+        "reward": 350,
+    },
+    {
+        "key": "riddles_solved",
+        "title": "Riddle Master",
+        "emoji": "🧩",
+        "description": "Correctly solve 10 riddles.",
+        "target": 10,
+        "reward": 900,
+    },
+    {
+        "key": "quiz_passes",
+        "title": "Quiz Champion",
+        "emoji": "🎓",
+        "description": "Pass the `.duckquiz` 5 times.",
+        "target": 5,
+        "reward": 850,
+    },
+]
+
+# Commands whose successful completion increments a dedicated monthly counter,
+# tracked centrally by the on_command_completion listener below.
+MONTHLY_COMMAND_COUNTER_MAP = {
+    "duck": "duck_uses",
+    "work": "work_uses",
+    "fish": "fish_uses",
+    "swim": "swim_uses",
+    "daily": "daily_uses",
+    "beg": "beg_uses",
+}
+
+
+# ============================================================
 # Badge role management helpers
 # ============================================================
 
@@ -1255,6 +1404,123 @@ async def increment_badge_counter(guild_id: str, user_id: str, counter: str, amo
 
 
 # ============================================================
+# Monthly rewards helpers
+# ============================================================
+
+
+def _current_month_key() -> str:
+    """Return the current calendar month as 'YYYY-MM' in UTC, used to detect month rollover."""
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _monthly_rewards_default_doc(guild_id: str, user_id: str, month: str) -> dict:
+    """Build a fresh monthly rewards document with every goal counter at zero and unclaimed."""
+    return {
+        "_id": f"{guild_id}-{user_id}",
+        "guild": guild_id,
+        "user": user_id,
+        "month": month,
+        "counters": {goal["key"]: 0 for goal in MONTHLY_REWARD_GOALS},
+        "claimed": {goal["key"]: False for goal in MONTHLY_REWARD_GOALS},
+    }
+
+
+def _monthly_rewards_col_live_in_tests() -> bool:
+    """Return True when running under pytest but monthly_rewards_col was not swapped for a
+    test double, meaning it is still the real Motor collection. Callers use this to skip all
+    database access entirely rather than risk touching the live database during a test run."""
+    return _running_under_pytest() and _looks_like_motor_collection(monthly_rewards_col)
+
+
+async def get_monthly_rewards_doc(guild_id, user_id) -> dict:
+    """Return the caller's monthly rewards document, lazily resetting counters and claims
+    when the stored month no longer matches the current UTC month. Missing goal keys (e.g. on
+    a document saved before a new goal was added) are backfilled with zero/unclaimed defaults."""
+    guild_id, user_id = (str(guild_id), str(user_id))
+    current_month = _current_month_key()
+    default_doc = _monthly_rewards_default_doc(guild_id, user_id, current_month)
+    if _monthly_rewards_col_live_in_tests():
+        return default_doc
+    await monthly_rewards_col.update_one(
+        {"_id": default_doc["_id"], "month": {"$ne": current_month}},
+        {"$set": {k: v for k, v in default_doc.items() if k != "_id"}},
+        upsert=True,
+    )
+    doc = await monthly_rewards_col.find_one({"_id": default_doc["_id"]}) or default_doc
+    counters = dict(doc.get("counters") or {})
+    claimed = dict(doc.get("claimed") or {})
+    for goal in MONTHLY_REWARD_GOALS:
+        counters.setdefault(goal["key"], 0)
+        claimed.setdefault(goal["key"], False)
+    doc["counters"] = counters
+    doc["claimed"] = claimed
+    return doc
+
+
+async def increment_monthly_goal(guild_id, user_id, counter_key: str, amount: int = 1) -> None:
+    """Add amount to a single monthly reward counter for a user, resetting the document
+    first if a new month has begun since it was last touched."""
+    if _monthly_rewards_col_live_in_tests():
+        return
+    guild_id, user_id = (str(guild_id), str(user_id))
+    try:
+        await get_monthly_rewards_doc(guild_id, user_id)
+        await monthly_rewards_col.update_one(
+            {"_id": f"{guild_id}-{user_id}"}, {"$inc": {f"counters.{counter_key}": amount}}
+        )
+    except Exception as e:
+        print(f"[Monthly Rewards] Failed to increment {counter_key} for {guild_id}-{user_id}: {e}")
+
+
+async def check_and_award_monthly_rewards(ctx_or_channel, guild: discord.Guild, member: discord.Member) -> None:
+    """Check every monthly goal for member, mark any newly reached goal as claimed, pay out its
+    coin reward, and announce it. Already-claimed goals are skipped so a goal can only ever pay
+    out once per month. Skipped entirely under pytest unless the collection was test-doubled."""
+    if _monthly_rewards_col_live_in_tests():
+        return
+    try:
+        guild_id, user_id = (str(guild.id), str(member.id))
+        doc = await get_monthly_rewards_doc(guild_id, user_id)
+        counters = doc.get("counters", {})
+        claimed = doc.get("claimed", {})
+        newly_completed = [
+            goal
+            for goal in MONTHLY_REWARD_GOALS
+            if not claimed.get(goal["key"]) and counters.get(goal["key"], 0) >= goal["target"]
+        ]
+        if not newly_completed:
+            return
+        await monthly_rewards_col.update_one(
+            {"_id": f"{guild_id}-{user_id}"},
+            {"$set": {f"claimed.{goal['key']}": True for goal in newly_completed}},
+        )
+        total_reward = sum(goal["reward"] for goal in newly_completed)
+        # Credited directly rather than via add_balance() so payouts don't feed back into
+        # (and inflate) the coins_collected counter they may have just helped complete.
+        await economy_col.update_one(
+            {"_id": f"{guild_id}-{user_id}"},
+            {
+                "$inc": {"wallet": total_reward},
+                "$set": {"guild": guild_id, "user": user_id},
+                "$setOnInsert": {"bank": 0, "inventory": []},
+            },
+            upsert=True,
+        )
+        for goal in newly_completed:
+            announcement = (
+                f"{goal['emoji']} {member.mention} completed the monthly goal **{goal['title']}** "
+                f"and earned **{goal['reward']} coins**!"
+            )
+            try:
+                if hasattr(ctx_or_channel, "send"):
+                    await ctx_or_channel.send(announcement)
+            except (discord.Forbidden, discord.HTTPException):
+                print(f"[Monthly Rewards] Could not announce goal {goal['key']} in guild {guild_id}.")
+    except Exception as e:
+        print(f"[Monthly Rewards check error] {type(e).__name__}: {e}")
+
+
+# ============================================================
 # XP system, decorator that awards experience on successful commands
 # ============================================================
 
@@ -1340,6 +1606,33 @@ def xp_earn(min_xp: int, max_xp: int):
         return wrapper
 
     return decorator
+
+
+@bot.event
+async def on_command_completion(ctx):
+    """Fired by discord.py after any command (prefix or hybrid/slash) finishes without raising.
+    Drives the generic side of the monthly rewards system: every completed command bumps the
+    commands_used goal, and a handful of specific commands also bump their own dedicated
+    counter (see MONTHLY_COMMAND_COUNTER_MAP). Goal completion is then checked immediately so
+    rewards pay out the moment a threshold is crossed instead of waiting for the next command."""
+    guild = getattr(ctx, "guild", None)
+    if guild is None:
+        return
+    if _monthly_rewards_col_live_in_tests():
+        return
+    cmd_obj = getattr(ctx, "command", None)
+    command_name = str(getattr(cmd_obj, "name", "") or "").lower()
+    if not command_name or command_name in STAFF_HELP_COMMANDS:
+        return
+    try:
+        guild_id, user_id = (str(guild.id), str(ctx.author.id))
+        await increment_monthly_goal(guild_id, user_id, "commands_used", 1)
+        mapped_counter = MONTHLY_COMMAND_COUNTER_MAP.get(command_name)
+        if mapped_counter:
+            await increment_monthly_goal(guild_id, user_id, mapped_counter, 1)
+        await check_and_award_monthly_rewards(ctx, guild, ctx.author)
+    except Exception as e:
+        print(f"[Monthly Rewards completion hook error] {type(e).__name__}: {e}")
 
 
 # ============================================================
@@ -2722,6 +3015,8 @@ async def add_balance(uid: int, guild_id: int, amount: int):
         },
         upsert=True,
     )
+    if amount > 0:
+        await increment_monthly_goal(guild_id, uid, "coins_collected", amount)
 
 
 async def subtract_balance(uid: int, guild_id: int, amount: int):
@@ -2750,6 +3045,8 @@ async def update_user_balance(uid: int, guild_id: int, amount: int):
         },
         upsert=True,
     )
+    if amount > 0:
+        await increment_monthly_goal(guild_id, uid, "coins_collected", amount)
 
 
 async def schedule_unmute(guild, member, remaining):
@@ -3805,6 +4102,7 @@ PERMISSION_COMMAND_MAP = {
         "ticketsetup",
         "ticketpanel",
         "ticketaddbutton",
+        "ticketremovebutton",
         "ticketeditbutton",
         "ticketdeletepanel",
         "ticketlist",
@@ -7117,6 +7415,207 @@ async def swim_error(ctx, error):
         await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
 
 
+def _normalize_riddle_answer(text: str) -> str:
+    """Lowercase, strip a leading article, and drop trailing punctuation so answers like
+    'It's an egg!' and 'egg' compare equal."""
+    text = (text or "").strip().lower()
+    text = re.sub(r"^(a|an|the)\s+", "", text)
+    text = re.sub(r"[.!?,'\"]+$", "", text)
+    return text.strip()
+
+
+def _riddle_answer_matches(user_text: str, accepted_answers: list) -> bool:
+    """Return True if user_text matches any accepted answer, either exactly or as a whole
+    word/phrase within a longer reply (e.g. 'I think it's a piano' still matches 'piano')."""
+    normalized_user = _normalize_riddle_answer(user_text)
+    if not normalized_user:
+        return False
+    for accepted in accepted_answers:
+        normalized_accepted = _normalize_riddle_answer(accepted)
+        if not normalized_accepted:
+            continue
+        if normalized_user == normalized_accepted:
+            return True
+        if re.search(rf"\b{re.escape(normalized_accepted)}\b", normalized_user):
+            return True
+    return False
+
+
+class RiddleLevelView(discord.ui.View):
+    """Lets the command invoker pick a riddle difficulty via buttons before the riddle is shown."""
+
+    def __init__(self, ctx):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.choice = None
+        self.message = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message("This riddle prompt isn't yours.", ephemeral=True)
+            return False
+        return True
+
+    def _disable_all(self):
+        for item in self.children:
+            item.disabled = True
+
+    async def _pick(self, interaction: discord.Interaction, level: str):
+        self.choice = level
+        self._disable_all()
+        label = RIDDLE_LEVELS[level]["label"]
+        await interaction.response.edit_message(
+            content=f"🧩 Level selected: **{label}**. Here's your riddle...", view=self
+        )
+        self.stop()
+
+    @discord.ui.button(label="Easy", style=discord.ButtonStyle.green, emoji="🟢")
+    async def easy_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, "easy")
+
+    @discord.ui.button(label="Medium", style=discord.ButtonStyle.blurple, emoji="🟡")
+    async def medium_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, "medium")
+
+    @discord.ui.button(label="Hard", style=discord.ButtonStyle.red, emoji="🔴")
+    async def hard_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._pick(interaction, "hard")
+
+    async def on_timeout(self):
+        if self.choice is None and self.message is not None:
+            self._disable_all()
+            try:
+                await self.message.edit(
+                    content="⏰ You didn't pick a difficulty in time. Run the command again.", view=self
+                )
+            except (discord.HTTPException, discord.NotFound):
+                pass
+
+
+@bot.hybrid_command(name="riddle", description="Answer a riddle correctly within the time limit to earn coins.")
+@commands.cooldown(1, 3600, commands.BucketType.member)
+@blacklist_barrier()
+@xp_earn(10, 20)
+async def riddle(ctx):
+    """Let the user pick a difficulty, pose a random riddle from that difficulty's bank, then
+    wait for their answer within the difficulty's time limit. A correct answer pays out a
+    random amount of coins from the difficulty's reward range; a wrong or missed answer pays
+    nothing and, via xp_earn's failure-message detection, awards no XP either."""
+    if not await check_channel(ctx, "economy_channel", "Economy"):
+        return
+    try:
+        view = RiddleLevelView(ctx)
+        prompt_msg = await ctx.send(
+            "🧩 Pick a difficulty for your riddle:\n"
+            "🟢 **Easy** — smaller reward, more time to answer\n"
+            "🟡 **Medium** — bigger reward, less time to answer\n"
+            "🔴 **Hard** — biggest reward, least time to answer",
+            view=view,
+        )
+        view.message = prompt_msg
+        await view.wait()
+        if view.choice is None:
+            setattr(ctx, "_skip_xp_award", True)
+            ctx.command.reset_cooldown(ctx)
+            return
+        level = view.choice
+        level_data = RIDDLE_LEVELS[level]
+        riddle_data = random.choice(RIDDLES[level])
+        min_reward, max_reward = level_data["reward_range"]
+        time_limit = level_data["time_limit"]
+        embed = discord.Embed(
+            title=f"{level_data['emoji']} {level_data['label']} Riddle",
+            description=riddle_data["question"],
+            color=discord.Color.teal(),
+        )
+        embed.set_footer(text=f"You have {time_limit} seconds to answer. Reward: {min_reward}-{max_reward} coins.")
+        await ctx.send(embed=embed)
+
+        def answer_check(m):
+            return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id
+
+        try:
+            answer_msg = await bot.wait_for("message", timeout=time_limit, check=answer_check)
+        except asyncio.TimeoutError:
+            return await ctx.send(f"⏰ Time's up! The answer was **{riddle_data['answers'][0]}**. No coins this time.")
+
+        if _riddle_answer_matches(answer_msg.content, riddle_data["answers"]):
+            reward = random.randint(min_reward, max_reward)
+            await add_balance(ctx.author.id, ctx.guild.id, reward)
+            await increment_monthly_goal(str(ctx.guild.id), str(ctx.author.id), "riddles_solved", 1)
+            await check_and_award_monthly_rewards(ctx, ctx.guild, ctx.author)
+            await ctx.send(f"✅ Correct! You earned **{reward} coins**! 🎉")
+            fresh_data = await get_user(ctx, ctx.guild.id, ctx.author.id)
+            await check_and_award_badges(ctx, ctx.guild, ctx.author, fresh_data)
+        else:
+            await ctx.send(
+                f"❌ Wrong answer! The correct answer was **{riddle_data['answers'][0]}**. No coins this time."
+            )
+    except Exception as e:
+        ctx.command.reset_cooldown(ctx)
+        print(f"[ERROR] riddle command: {type(e).__name__} - {e}")
+        traceback.print_exc()
+        await ctx.send("⚠️ Something went wrong with your riddle. Please contact " + BOT_ADMIN_NAME + ".")
+
+
+@riddle.error
+async def riddle_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        total_seconds = int(error.retry_after)
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return await send_hybrid_error(ctx, content=f"🕒 You can try another riddle in {minutes}m {seconds}s.")
+    else:
+        await send_hybrid_error(ctx, content="⚠️ An unexpected error occurred. Please contact " + BOT_ADMIN_NAME + ".")
+
+
+@bot.hybrid_command(
+    name="monthlyrewards",
+    description="Check your monthly reward goal progress.",
+    aliases=["monthlygoals"],
+)
+@blacklist_barrier()
+async def monthlyrewards(ctx):
+    """Show the invoker's progress on every monthly reward goal, along with how many coins
+    they've already claimed this month. No xp_earn decorator - checking progress isn't itself
+    an activity that should earn XP."""
+    if not await check_channel(ctx, "economy_channel", "Economy"):
+        return
+    try:
+        doc = await get_monthly_rewards_doc(ctx.guild.id, ctx.author.id)
+        counters = doc.get("counters", {})
+        claimed = doc.get("claimed", {})
+        month_label = datetime.now(timezone.utc).strftime("%B %Y")
+        embed = discord.Embed(
+            title=f"🗓️ Monthly Rewards — {month_label}",
+            description="Complete goals before the month ends to earn bonus coins. Progress resets on the 1st.",
+            color=discord.Color.gold(),
+        )
+        total_claimed_coins = 0
+        for goal in MONTHLY_REWARD_GOALS:
+            key = goal["key"]
+            target = goal["target"]
+            progress = min(counters.get(key, 0), target)
+            if claimed.get(key):
+                total_claimed_coins += goal["reward"]
+                status = f"✅ Claimed — **{goal['reward']} coins**"
+            else:
+                filled = int((progress / target) * 10) if target else 0
+                bar = "🟩" * filled + "⬜" * (10 - filled)
+                status = f"{bar} {progress}/{target} — **{goal['reward']} coins**"
+            embed.add_field(
+                name=f"{goal['emoji']} {goal['title']}", value=f"{goal['description']}\n{status}", inline=False
+            )
+        embed.set_footer(text=f"Earned this month: {total_claimed_coins} coins")
+        await ctx.send(embed=embed)
+    except Exception as e:
+        print(f"[ERROR] monthlyrewards command: {type(e).__name__} - {e}")
+        traceback.print_exc()
+        await ctx.send(
+            "⚠️ Something went wrong while checking your monthly rewards. Please contact " + BOT_ADMIN_NAME + "."
+        )
+
+
 _ATTACK_MESSAGES = [
     "🍞 {attacker} pelted {victim} with a barrage of breadcrumbs and waddled away with **{amount}** coins!",
     "🦆 {attacker} body-slammed {victim} with a rubber duck and snatched **{amount}** coins in the chaos!",
@@ -8032,6 +8531,8 @@ class QuizView(discord.ui.View):
         )
         result = f"📊 You scored **{self.score}/{len(self.questions)}** = **{pct:.1f}%**"
         if passed:
+            await increment_monthly_goal(str(self.ctx.guild.id), str(self.ctx.author.id), "quiz_passes", 1)
+            await check_and_award_monthly_rewards(self.ctx, self.ctx.guild, self.ctx.author)
             config = await config_col.find_one({"guild": str(self.ctx.guild.id)}) or {}
             if isinstance(config, str):
                 try:
@@ -8860,6 +9361,84 @@ async def ticketaddbutton(ctx):
         if ctx.interaction:
             if not ctx.interaction.response.is_done():
                 await ctx.interaction.response.send_message(f"❌ Error:\n```{e}```", ephemeral=True)
+
+
+class TicketRemoveButtonSelect(discord.ui.Select):
+    """Dropdown listing every button on a panel, used to pick which one to delete."""
+
+    def __init__(self, ctx, panel_data):
+        self.ctx = ctx
+        self.panel_data = panel_data
+        buttons = panel_data.get("buttons", [])
+        options = [
+            discord.SelectOption(
+                label=(btn.get("label") or "Unnamed")[:100],
+                description=f"Category: {btn.get('category_name', 'Unknown')}"[:100],
+                emoji=btn.get("emoji") or None,
+                value=str(i),
+            )
+            # Discord select menus support at most 25 options.
+            for i, btn in enumerate(buttons[:25])
+        ]
+        super().__init__(placeholder="Select a button to remove...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await ticket_error(interaction, lambda: self._callback(interaction))
+
+    async def _callback(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            return await interaction.response.send_message(
+                "❌ Only the staff member who ran the command can remove a button.", ephemeral=True
+            )
+        buttons = self.panel_data.get("buttons", [])
+        idx = int(self.values[0])
+        if idx >= len(buttons):
+            return await interaction.response.send_message("❌ That button no longer exists.", ephemeral=True)
+        btn_data = buttons[idx]
+        await ticket_panels_col.update_one(
+            {"guild": str(self.ctx.guild.id), "panel_name": self.panel_data["panel_name"]},
+            {"$pull": {"buttons": {"label": btn_data.get("label")}}},
+        )
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="🗑 Button Removed",
+                description=f"Removed **{btn_data.get('label', 'Unnamed')}** from panel `{self.panel_data['panel_name']}`.",
+                color=discord.Color.red(),
+            ),
+            view=None,
+        )
+
+
+class TicketRemoveButtonView(discord.ui.View):
+    def __init__(self, ctx, panel_data):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.add_item(TicketRemoveButtonSelect(ctx, panel_data))
+
+
+@bot.command(name="ticketremovebutton", description="Remove a button from an existing ticket panel (form). Staff only.")
+@staffperm("tickets:admin")
+@staff_only()
+async def ticketremovebutton(ctx, *, panel_name: str):
+    # Prefix-only (unlike its sibling ticket commands): the bot is already at Discord's
+    # 100 global slash-command cap, so this staff-only utility skips slash registration.
+    try:
+        guild = ctx.guild
+        panel_data = await ticket_panels_col.find_one({"guild": str(guild.id), "panel_name": panel_name})
+        if not panel_data:
+            return await ctx.send(f"❌ No panel found with name `{panel_name}`.")
+        if not panel_data.get("buttons"):
+            return await ctx.send(f"❌ Panel `{panel_name}` has no buttons to remove.")
+        embed = discord.Embed(
+            title=f"🗑 Remove Button: {panel_name}",
+            description="Select a button below to remove it from the panel.",
+            color=discord.Color.orange(),
+        )
+        view = TicketRemoveButtonView(ctx, panel_data)
+        await ctx.send(embed=embed, view=view)
+    except Exception as e:
+        print("ticketremovebutton ERROR:", traceback.format_exc())
+        await ctx.send(f"❌ Error:\n```{e}```")
 
 
 @bot.hybrid_command(name="ticketsetup", description="Create interactive ticket panel. Staff only.")
