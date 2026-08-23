@@ -17,6 +17,7 @@
 import copy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from pymongo.errors import DuplicateKeyError
 import pytest
 import main
 
@@ -52,25 +53,55 @@ class FakeMonthlyRewardsCol:
         return None
 
     async def update_one(self, query, update, upsert=False):
+        """Mirrors real MongoDB semantics for the two calls get_monthly_rewards_doc issues:
+        1) a plain {"_id": key} upsert carrying only $setOnInsert (ensure-exists), and
+        2) a {"_id": key, "month": {"$ne": ...}} conditional $set (reset-on-rollover) that
+        never upserts. $setOnInsert only ever applies on the call that actually inserts."""
         self.update_calls.append((dict(query), copy.deepcopy(update), upsert))
         key = query.get("_id")
         exists = self.doc is not None and self.doc.get("_id") == key
         month_filter = query.get("month")
-        if isinstance(month_filter, dict) and "$ne" in month_filter:
-            if exists and self.doc.get("month") == month_filter["$ne"]:
-                return  # mirrors Mongo: filter doesn't match an existing same-month doc
-            if not exists:
-                self.doc = {"_id": key}
-        elif not exists:
+        filter_matches_existing = True
+        if exists and isinstance(month_filter, dict) and "$ne" in month_filter:
+            filter_matches_existing = self.doc.get("month") != month_filter["$ne"]
+        if exists and not filter_matches_existing:
+            return  # mirrors Mongo: filter doesn't match this existing document
+
+        just_inserted = False
+        if not exists:
             if not upsert:
                 return
             self.doc = {"_id": key}
+            just_inserted = True
+
+        if "$setOnInsert" in update and just_inserted:
+            for k, v in update["$setOnInsert"].items():
+                _apply_dotted(self.doc, k, v, "set")
         if "$set" in update:
             for k, v in update["$set"].items():
                 _apply_dotted(self.doc, k, v, "set")
         if "$inc" in update:
             for k, v in update["$inc"].items():
                 _apply_dotted(self.doc, k, v, "inc")
+
+
+class RaceConditionMonthlyRewardsCol(FakeMonthlyRewardsCol):
+    """Simulates the exact production crash: two commands from the same user got dispatched
+    concurrently, so both saw no document and both tried to insert it. MongoDB let one insert
+    through and rejected the other with E11000 (DuplicateKeyError) - by the time our own call
+    fails, the "winning" concurrent insert has already landed."""
+
+    def __init__(self, doc_after_race):
+        super().__init__(None)
+        self._doc_after_race = doc_after_race
+        self._raised = False
+
+    async def update_one(self, query, update, upsert=False):
+        if not self._raised and upsert and "month" not in query:
+            self._raised = True
+            self.doc = dict(self._doc_after_race)
+            raise DuplicateKeyError("E11000 duplicate key error collection: discord_bot.monthly_rewards index: _id_")
+        return await super().update_one(query, update, upsert=upsert)
 
 
 class FakeEconomyCol:
@@ -160,6 +191,52 @@ async def test_get_monthly_rewards_doc_resets_counters_and_claims_on_month_rollo
     assert doc["month"] == main._current_month_key()
     assert all(v == 0 for v in doc["counters"].values())
     assert all(v is False for v in doc["claimed"].values())
+
+
+@pytest.mark.asyncio
+async def test_get_monthly_rewards_doc_survives_a_concurrent_insert_race(monkeypatch):
+    """Regression test for a production crash: two commands from the same user were dispatched
+    concurrently and both tried to create that user's monthly-rewards document at the same
+    instant. MongoDB let one insert through and rejected the other with E11000 - that must be
+    swallowed as "someone else already created it", not raised up to the caller."""
+    current_month = main._current_month_key()
+    winning_doc = {
+        "_id": "123-456",
+        "guild": "123",
+        "user": "456",
+        "month": current_month,
+        "counters": {k: 0 for k in ALL_GOAL_KEYS},
+        "claimed": {k: False for k in ALL_GOAL_KEYS},
+    }
+    col = RaceConditionMonthlyRewardsCol(winning_doc)
+    monkeypatch.setattr(main, "monthly_rewards_col", col)
+
+    doc = await main.get_monthly_rewards_doc(123, 456)  # must not raise DuplicateKeyError
+
+    assert doc["month"] == current_month
+    assert doc["counters"].keys() == ALL_GOAL_KEYS
+
+
+@pytest.mark.asyncio
+async def test_increment_monthly_goal_does_not_lose_an_update_to_the_insert_race(monkeypatch):
+    """End-to-end version of the same regression: the increment that triggered the race must
+    still land, not silently vanish because the underlying insert raced."""
+    current_month = main._current_month_key()
+    winning_doc = {
+        "_id": "123-456",
+        "guild": "123",
+        "user": "456",
+        "month": current_month,
+        "counters": {k: 0 for k in ALL_GOAL_KEYS},
+        "claimed": {k: False for k in ALL_GOAL_KEYS},
+    }
+    col = RaceConditionMonthlyRewardsCol(winning_doc)
+    monkeypatch.setattr(main, "monthly_rewards_col", col)
+
+    await main.increment_monthly_goal(123, 456, "duck_uses", 1)
+
+    doc = await main.get_monthly_rewards_doc(123, 456)
+    assert doc["counters"]["duck_uses"] == 1
 
 
 @pytest.mark.asyncio
