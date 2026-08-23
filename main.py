@@ -7524,9 +7524,9 @@ async def riddle(ctx):
         view = RiddleLevelView(ctx)
         prompt_msg = await ctx.send(
             "🧩 Pick a difficulty for your riddle:\n"
-            "🟢 **Easy** — smaller reward, more time to answer\n"
-            "🟡 **Medium** — bigger reward, less time to answer\n"
-            "🔴 **Hard** — biggest reward, least time to answer",
+            "🟢 **Easy** - smaller reward, more time to answer\n"
+            "🟡 **Medium** - bigger reward, less time to answer\n"
+            "🔴 **Hard** - biggest reward, least time to answer",
             view=view,
         )
         view.message = prompt_msg
@@ -7604,7 +7604,7 @@ async def monthlyrewards(ctx):
         claimed = doc.get("claimed", {})
         month_label = datetime.now(timezone.utc).strftime("%B %Y")
         embed = discord.Embed(
-            title=f"🗓️ Monthly Rewards — {month_label}",
+            title=f"🗓️ Monthly Rewards - {month_label}",
             description="Complete goals before the month ends to earn bonus coins. Progress resets on the 1st.",
             color=discord.Color.gold(),
         )
@@ -7615,11 +7615,11 @@ async def monthlyrewards(ctx):
             progress = min(counters.get(key, 0), target)
             if claimed.get(key):
                 total_claimed_coins += goal["reward"]
-                status = f"✅ Claimed — **{goal['reward']} coins**"
+                status = f"✅ Claimed - **{goal['reward']} coins**"
             else:
                 filled = int((progress / target) * 10) if target else 0
                 bar = "🟩" * filled + "⬜" * (10 - filled)
-                status = f"{bar} {progress}/{target} — **{goal['reward']} coins**"
+                status = f"{bar} {progress}/{target} - **{goal['reward']} coins**"
             embed.add_field(
                 name=f"{goal['emoji']} {goal['title']}", value=f"{goal['description']}\n{status}", inline=False
             )
