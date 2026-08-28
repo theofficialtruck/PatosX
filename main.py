@@ -51,6 +51,7 @@ import aiohttp
 from dateutil import parser
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
 from pytz import UTC
 
 # Discord.py core and UI components
@@ -1435,18 +1436,34 @@ def _monthly_rewards_col_live_in_tests() -> bool:
 async def get_monthly_rewards_doc(guild_id, user_id) -> dict:
     """Return the caller's monthly rewards document, lazily resetting counters and claims
     when the stored month no longer matches the current UTC month. Missing goal keys (e.g. on
-    a document saved before a new goal was added) are backfilled with zero/unclaimed defaults."""
+    a document saved before a new goal was added) are backfilled with zero/unclaimed defaults.
+
+    Runs as two separate updates rather than one upsert to avoid a duplicate-key race: two
+    commands from the same user can be handled concurrently (discord.py dispatches each
+    invocation as its own task), so two calls can both see "no document yet" and both try to
+    insert the same _id at once. MongoDB only lets one of those inserts through and rejects the
+    other with E11000 - that's expected under concurrency, not a real failure, so it's caught
+    and ignored rather than crashing the caller (and silently dropping whatever counter update
+    it was in the middle of)."""
     guild_id, user_id = (str(guild_id), str(user_id))
     current_month = _current_month_key()
     default_doc = _monthly_rewards_default_doc(guild_id, user_id, current_month)
+    key = default_doc["_id"]
     if _monthly_rewards_col_live_in_tests():
         return default_doc
+    # Step 1: guarantee the document exists. $setOnInsert is a no-op against an existing
+    # document, so this never disturbs an already-reset month's progress.
+    try:
+        await monthly_rewards_col.update_one({"_id": key}, {"$setOnInsert": default_doc}, upsert=True)
+    except DuplicateKeyError:
+        pass  # another concurrent call created it first - the document exists either way
+    # Step 2: reset counters/claims on month rollover. The document is now guaranteed to exist,
+    # so this update never needs upsert and can never race with a concurrent insert.
     await monthly_rewards_col.update_one(
-        {"_id": default_doc["_id"], "month": {"$ne": current_month}},
+        {"_id": key, "month": {"$ne": current_month}},
         {"$set": {k: v for k, v in default_doc.items() if k != "_id"}},
-        upsert=True,
     )
-    doc = await monthly_rewards_col.find_one({"_id": default_doc["_id"]}) or default_doc
+    doc = await monthly_rewards_col.find_one({"_id": key}) or default_doc
     counters = dict(doc.get("counters") or {})
     claimed = dict(doc.get("claimed") or {})
     for goal in MONTHLY_REWARD_GOALS:
@@ -7507,9 +7524,9 @@ async def riddle(ctx):
         view = RiddleLevelView(ctx)
         prompt_msg = await ctx.send(
             "🧩 Pick a difficulty for your riddle:\n"
-            "🟢 **Easy** — smaller reward, more time to answer\n"
-            "🟡 **Medium** — bigger reward, less time to answer\n"
-            "🔴 **Hard** — biggest reward, least time to answer",
+            "🟢 **Easy** - smaller reward, more time to answer\n"
+            "🟡 **Medium** - bigger reward, less time to answer\n"
+            "🔴 **Hard** - biggest reward, least time to answer",
             view=view,
         )
         view.message = prompt_msg
@@ -7587,7 +7604,7 @@ async def monthlyrewards(ctx):
         claimed = doc.get("claimed", {})
         month_label = datetime.now(timezone.utc).strftime("%B %Y")
         embed = discord.Embed(
-            title=f"🗓️ Monthly Rewards — {month_label}",
+            title=f"🗓️ Monthly Rewards - {month_label}",
             description="Complete goals before the month ends to earn bonus coins. Progress resets on the 1st.",
             color=discord.Color.gold(),
         )
@@ -7598,11 +7615,11 @@ async def monthlyrewards(ctx):
             progress = min(counters.get(key, 0), target)
             if claimed.get(key):
                 total_claimed_coins += goal["reward"]
-                status = f"✅ Claimed — **{goal['reward']} coins**"
+                status = f"✅ Claimed - **{goal['reward']} coins**"
             else:
                 filled = int((progress / target) * 10) if target else 0
                 bar = "🟩" * filled + "⬜" * (10 - filled)
-                status = f"{bar} {progress}/{target} — **{goal['reward']} coins**"
+                status = f"{bar} {progress}/{target} - **{goal['reward']} coins**"
             embed.add_field(
                 name=f"{goal['emoji']} {goal['title']}", value=f"{goal['description']}\n{status}", inline=False
             )
