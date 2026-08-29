@@ -17,7 +17,9 @@
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
+
 import main
 
 
@@ -137,7 +139,7 @@ async def test_riddle_wrong_answer_awards_no_coins_and_no_progress(monkeypatch):
 @pytest.mark.asyncio
 async def test_riddle_accepts_answer_phrased_as_a_sentence(monkeypatch):
     """'I think it's an egg!' should still match the accepted answer 'egg'."""
-    ctx, economy, increment_spy, award_spy, sent = make_ctx(monkeypatch, economy_doc={"wallet": 0})
+    ctx, economy, _increment_spy, _award_spy, sent = make_ctx(monkeypatch, economy_doc={"wallet": 0})
     monkeypatch.setattr(main, "RiddleLevelView", lambda c: FakeLevelView(c, "easy"))
     monkeypatch.setattr(main.random, "choice", lambda seq: seq[0])
     monkeypatch.setattr(main.random, "randint", lambda a, b: a)
@@ -151,7 +153,7 @@ async def test_riddle_accepts_answer_phrased_as_a_sentence(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_riddle_timeout_on_answer_awards_no_coins(monkeypatch):
-    ctx, economy, increment_spy, award_spy, sent = make_ctx(monkeypatch, economy_doc={"wallet": 0})
+    ctx, economy, increment_spy, _award_spy, sent = make_ctx(monkeypatch, economy_doc={"wallet": 0})
     monkeypatch.setattr(main, "RiddleLevelView", lambda c: FakeLevelView(c, "easy"))
     monkeypatch.setattr(main.random, "choice", lambda seq: seq[0])
 
@@ -169,7 +171,7 @@ async def test_riddle_timeout_on_answer_awards_no_coins(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_riddle_no_level_picked_resets_cooldown_and_skips_xp(monkeypatch):
-    ctx, economy, increment_spy, award_spy, sent = make_ctx(monkeypatch, economy_doc={"wallet": 0})
+    ctx, _economy, _increment_spy, _award_spy, sent = make_ctx(monkeypatch, economy_doc={"wallet": 0})
     monkeypatch.setattr(main, "RiddleLevelView", lambda c: FakeLevelView(c, None))
 
     await main.riddle.callback(ctx)

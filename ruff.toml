@@ -11,5 +11,11 @@ line-length = 120
 
 [lint.per-file-ignores]
 # E402: main.py must patch sys.modules['audioop'] before discord imports (audioop removed in Py3.13)
-# This makes all subsequent imports appear "after non-import code" - that is intentional.
-"main.py" = ["E402"]
+# This makes all subsequent imports appear "after non-import code" which is intentional.
+# BLE001: every command handler wraps its body in try/except Exception as a deliberate error
+# boundary it always logs (print/traceback) and sends the user a friendly message rather than
+# letting one command's unexpected failure crash the bot or silently swallow the error. Narrowing
+# each of the 150+ occurrences to specific exception types would need a separate correctness
+# judgment call per site with real risk of leaving a genuine error path uncaught; the catch all is
+# the intended architecture here instead of an oversight.
+"main.py" = ["E402", "BLE001"]

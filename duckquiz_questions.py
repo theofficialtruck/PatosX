@@ -9,11 +9,7 @@ questions = [
         "options": ["Pekin", "Call", "Crested", "Muscovy"],
         "answer": 3,
     },
-    {   "id": 2,
-        "q": "What is a baby duck called?",
-        "options": ["Gosling", "Ducklet", "Duckling", "Chick"],
-        "answer": 3
-    },
+    {"id": 2, "q": "What is a baby duck called?", "options": ["Gosling", "Ducklet", "Duckling", "Chick"], "answer": 3},
     {
         "id": 3,
         "q": "Which duck is native to North America?",
@@ -32,11 +28,7 @@ questions = [
         "options": ["Beak", "Feathers", "Feet", "Tail"],
         "answer": 4,
     },
-    {   "id": 6,
-        "q": "What is a male duck called?",
-        "options": ["Hen", "Drake", "Gander", "Cockerel"],
-        "answer": 2
-        },
+    {"id": 6, "q": "What is a male duck called?", "options": ["Hen", "Drake", "Gander", "Cockerel"], "answer": 2},
     {
         "id": 7,
         "q": "Which duck breed is used in foie gras production?",
@@ -85,11 +77,7 @@ questions = [
         "options": ["1–2 years", "3–5 years", "5–10 years", "10–15 years"],
         "answer": 3,
     },
-    {   "id": 15,
-        "q": "Which duck breed is notably vocal?",
-        "options": ["Call", "Runner", "Buff", "Rouen"],
-        "answer": 1
-    },
+    {"id": 15, "q": "Which duck breed is notably vocal?", "options": ["Call", "Runner", "Buff", "Rouen"], "answer": 1},
     {
         "id": 16,
         "q": "Why do ducks fly in a V-formation?",
@@ -102,11 +90,7 @@ questions = [
         "options": ["Galliformes", "Anatidae", "Aviary", "Poultridae"],
         "answer": 2,
     },
-    {   "id": 18,
-        "q": "When do ducks typically molt?",
-        "options": ["Spring", "Summer", "Winter", "Autumn"],
-        "answer": 2
-    },
+    {"id": 18, "q": "When do ducks typically molt?", "options": ["Spring", "Summer", "Winter", "Autumn"], "answer": 2},
     {
         "id": 19,
         "q": "Which duck breed lays bluish eggs?",
@@ -119,11 +103,7 @@ questions = [
         "options": ["Swedish Blue", "Mandarin", "Polka Dabble", "Call"],
         "answer": 3,
     },
-    {   "id": 21,
-        "q": "How many eyelids does a duck have?",
-        "options": ["One", "Two", "Three", "None"],
-        "answer": 3
-    },
+    {"id": 21, "q": "How many eyelids does a duck have?", "options": ["One", "Two", "Three", "None"], "answer": 3},
     {
         "id": 22,
         "q": "Which duck breed is entirely black with an emerald sheen?",
@@ -142,11 +122,7 @@ questions = [
         "options": ["Herd", "Pack", "Waddle", "Paddle"],
         "answer": 3,
     },
-    {   "id": 25,
-        "q": "What color is a male Mallard’s head?",
-        "options": ["Red", "Blue", "Green", "Yellow"],
-        "answer": 3
-    },
+    {"id": 25, "q": "What color is a male Mallard’s head?", "options": ["Red", "Blue", "Green", "Yellow"], "answer": 3},
     {
         "id": 26,
         "q": "Which duck breed is known for prolific egg-laying?",
@@ -208,11 +184,7 @@ questions = [
         "answer": 2,
     },
     {"id": 36, "q": "How fast can some ducks fly?", "options": ["10 mph", "30 mph", "60 mph", "100 mph"], "answer": 3},
-    {   "id": 37,
-        "q": "How many toes does a duck have on each foot?",
-        "options": ["2", "3", "4", "5"],
-        "answer": 3
-    },
+    {"id": 37, "q": "How many toes does a duck have on each foot?", "options": ["2", "3", "4", "5"], "answer": 3},
     {
         "id": 38,
         "q": "Which small, domestic breed is popular as a pet?",
@@ -309,11 +281,7 @@ questions = [
         "options": ["Feet", "Under wings", "Top of the bill", "Behind the eyes"],
         "answer": 3,
     },
-    {   "id": 54,
-        "q": "What is a baby duck called?",
-        "options": ["Gosling", "Pup", "Duckling", "Chick"],
-        "answer": 3
-    },
+    {"id": 54, "q": "What is a baby duck called?", "options": ["Gosling", "Pup", "Duckling", "Chick"], "answer": 3},
     {
         "id": 55,
         "q": "Which duck has a black bill and dark emerald feathers?",
@@ -380,11 +348,7 @@ questions = [
         "options": ["Magpie", "Call", "Saxony", "Buff"],
         "answer": 1,
     },
-    {   "id": 66,
-        "q": "What is a common predator of ducks?",
-        "options": ["Fox", "Rabbit", "Horse", "Swan"],
-        "answer": 1
-    },
+    {"id": 66, "q": "What is a common predator of ducks?", "options": ["Fox", "Rabbit", "Horse", "Swan"], "answer": 1},
     {
         "id": 67,
         "q": "What part of a duck’s anatomy allows it to filter food from water?",
@@ -432,22 +396,14 @@ questions = [
         "options": ["By instinct", "By watching siblings", "By being thrown into water", "After a week"],
         "answer": 1,
     },
-    {   "id": 74,
-        "q": "What is a female duck called?",
-        "options": ["Hen", "Drake", "Sow", "Doe"],
-        "answer": 1
-    },
+    {"id": 74, "q": "What is a female duck called?", "options": ["Hen", "Drake", "Sow", "Doe"], "answer": 1},
     {
         "id": 75,
         "q": "Which duck breed has a distinct green sheen?",
         "options": ["Pekin", "Buff", "Cayuga", "Call"],
         "answer": 3,
     },
-    {   "id": 76,
-        "q": "Duck quacks can echo. True or False?",
-        "options": ["True", "False"],
-        "answer": 1
-    },
+    {"id": 76, "q": "Duck quacks can echo. True or False?", "options": ["True", "False"], "answer": 1},
     {
         "id": 77,
         "q": "What time of day do ducks usually feed?",
@@ -550,11 +506,7 @@ questions = [
         "options": ["Winter", "Summer", "Spring and Fall", "They don’t migrate"],
         "answer": 3,
     },
-    {   "id": 94,
-        "q": "Ducks have how many chambers in their heart?",
-        "options": ["2", "3", "4", "5"],
-        "answer": 3
-    },
+    {"id": 94, "q": "Ducks have how many chambers in their heart?", "options": ["2", "3", "4", "5"], "answer": 3},
     {
         "id": 95,
         "q": "What sense is especially strong in ducks?",

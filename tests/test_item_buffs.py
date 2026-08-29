@@ -16,10 +16,11 @@
 
 """Tests for coffee cup, energy drink, and lucky cookie buffs."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
-import main
 
+import pytest
+
+import main
 
 # === pop_food_item helpers ================================================================
 

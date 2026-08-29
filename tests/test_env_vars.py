@@ -17,8 +17,8 @@
 """Tests for AUTHORIZED_USER_IDS and BEG_DONORS env variable behavior."""
 
 import os
-import main
 
+import main
 
 # === AUTHORIZED_USER_IDS ================================================================
 
