@@ -17,8 +17,10 @@
 import copy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from pymongo.errors import DuplicateKeyError
+
 import pytest
+from pymongo.errors import DuplicateKeyError
+
 import main
 
 

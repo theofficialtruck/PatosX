@@ -17,10 +17,11 @@
 """Tests for the drop command: no xp, always-public embed."""
 
 import inspect
-import pytest
 from unittest.mock import AsyncMock, MagicMock
-import main
 
+import pytest
+
+import main
 
 # === decorator checks (static) ================================================================
 

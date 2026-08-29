@@ -30,6 +30,7 @@ except ImportError:
 # Standard library
 import ast
 import asyncio
+import contextlib
 import inspect
 import io
 import json
@@ -37,8 +38,8 @@ import math
 import os
 import random
 import re
-import traceback
 import time
+import traceback
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -48,14 +49,10 @@ from typing import Union
 
 # Third party libraries
 import aiohttp
-from dateutil import parser
-from dotenv import load_dotenv
-from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo.errors import DuplicateKeyError
-from pytz import UTC
 
 # Discord.py core and UI components
 import discord
+from dateutil import parser
 from discord import (
     AllowedMentions,
     ButtonStyle,
@@ -70,6 +67,10 @@ from discord import (
 from discord.ext import commands, tasks
 from discord.ext.commands import BucketType, cooldown
 from discord.ui import Button, Select, View
+from dotenv import load_dotenv
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
+from pytz import UTC
 
 # Local data module, quiz questions loaded at startup
 from duckquiz_questions import questions
@@ -433,7 +434,6 @@ async def get_guild_invites(guild):
         else:
             invite_cache.pop(guild_id, None)
 
-    global processing_invite
     if not processing_invite:
         asyncio.create_task(process_invite_queue())
     future = asyncio.Future()
@@ -725,7 +725,7 @@ def get_command_syntax(command_name: str) -> str:
         return f"Command `{command_name}` not found."
     syntax_parts = [f"**{command.name}**"]
     if command.aliases:
-        syntax_parts[0] += f" (aliases: {', '.join((f'`{alias}`' for alias in command.aliases))})"
+        syntax_parts[0] += f" (aliases: {', '.join(f'`{alias}`' for alias in command.aliases)})"
     params = []
     for param_name, param in command.clean_params.items():
         if param_name in ("ctx", "interaction"):
@@ -738,10 +738,9 @@ def get_command_syntax(command_name: str) -> str:
         if param.annotation and param.annotation != param.empty:
             if hasattr(param.annotation, "__name__"):
                 param_str += f" ({param.annotation.__name__})"
-            elif hasattr(param.annotation, "__origin__"):
-                if param.annotation.__origin__ is Union:
-                    types = [t.__name__ for t in param.annotation.__args__ if t is not type(None)]
-                    param_str += f" ({'|'.join(types)})"
+            elif hasattr(param.annotation, "__origin__") and param.annotation.__origin__ is Union:
+                types = [t.__name__ for t in param.annotation.__args__ if t is not type(None)]
+                param_str += f" ({'|'.join(types)})"
         params.append(param_str)
     if params:
         syntax_parts.append(" ".join(params))
@@ -792,7 +791,7 @@ async def on_command_error(ctx, error):
         invoked_command = ctx.invoked_with
         similar = find_similar_commands(invoked_command)
         if similar:
-            similar_text = "\n".join((f"• `{cmd}`" for cmd in similar))
+            similar_text = "\n".join(f"• `{cmd}`" for cmd in similar)
             return await ctx.send(
                 f"⚠️ **Command not found:** `{invoked_command}`\n\n**Did you mean:**\n{similar_text}\n\nUse `.help` to see all available commands."
             )
@@ -818,7 +817,7 @@ async def on_command_error(ctx, error):
                 "command": ctx.command.name if ctx.command else "unknown",
                 "error": str(root_error),
                 "traceback": traceback.format_exc(),
-                "time": datetime.now(),
+                "time": datetime.now(timezone.utc),
             }
         )
         if len(recent_errors) > 5:
@@ -836,7 +835,7 @@ async def on_app_command_error(interaction: discord.Interaction, error):
     if isinstance(error, app_commands.CommandNotFound):
         similar = find_similar_commands(interaction.command.name if interaction.command else "")
         if similar:
-            similar_text = "\n".join((f"• `{cmd}`" for cmd in similar))
+            similar_text = "\n".join(f"• `{cmd}`" for cmd in similar)
             embed = discord.Embed(
                 title="⚠️ Command Not Found",
                 description=f"Command `/{interaction.command.name}` not found.\n\n**Did you mean:**\n{similar_text}\n\nUse `/help` to see all available commands.",
@@ -895,7 +894,7 @@ async def on_app_command_error(interaction: discord.Interaction, error):
                     "command": interaction.command.name if interaction.command else "unknown",
                     "error": str(root_error),
                     "traceback": traceback.format_exc(),
-                    "time": datetime.now(),
+                    "time": datetime.now(timezone.utc),
                 }
             )
             if len(recent_errors) > 5:
@@ -932,9 +931,7 @@ async def check_disabled(ctx):
     if ctx.command.name in doc.get("disabled_commands", []):
         return False
     category = ctx.command.cog_name.lower() if ctx.command.cog_name else None
-    if category and category in doc.get("disabled_categories", []):
-        return False
-    return True
+    return not (category and category in doc.get("disabled_categories", []))
 
 
 # ============================================================
@@ -1185,7 +1182,7 @@ BADGES = {
         "emoji": "🦆",
         "description": "Owned a Pet Duck.",
         "check": lambda data, xp, extra: any(
-            (isinstance(i, dict) and i.get("_id") == "pet_duck" or i == "pet_duck" for i in data.get("inventory", []))
+            isinstance(i, dict) and i.get("_id") == "pet_duck" or i == "pet_duck" for i in data.get("inventory", [])
         ),
     },
 }
@@ -1571,26 +1568,25 @@ def xp_earn(min_xp: int, max_xp: int):
                     "invalid",
                     "not found",
                 )
-                return any((marker in text for marker in failure_markers))
+                return any(marker in text for marker in failure_markers)
 
             async def tracked_send(*send_args, **send_kwargs):
                 nonlocal sent_error_response
                 content = send_kwargs.get("content")
                 if content is None and send_args:
                     content = send_args[0]
-                if isinstance(content, str):
-                    if looks_like_failure_message(content):
-                        sent_error_response = True
-                        setattr(ctx, "_skip_xp_award", True)
+                if isinstance(content, str) and looks_like_failure_message(content):
+                    sent_error_response = True
+                    ctx._skip_xp_award = True
                 return await original_send(*send_args, **send_kwargs)
 
             if callable(original_send):
-                setattr(ctx, "send", tracked_send)
+                ctx.send = tracked_send
             try:
                 result = await func(ctx, *args, **kwargs)
             finally:
                 if callable(original_send):
-                    setattr(ctx, "send", original_send)
+                    ctx.send = original_send
             guild = getattr(ctx, "guild", None)
             if guild:
                 cmd_obj = getattr(ctx, "command", None)
@@ -1599,7 +1595,7 @@ def xp_earn(min_xp: int, max_xp: int):
                 if command_name in STAFF_HELP_COMMANDS:
                     return result
                 if sent_error_response or getattr(ctx, "_skip_xp_award", False):
-                    setattr(ctx, "_skip_xp_award", False)
+                    ctx._skip_xp_award = False
                     return result
                 if _running_under_pytest() and _looks_like_motor_collection(xp_col):
                     return result
@@ -1829,7 +1825,7 @@ def check_target_permission(ctx, member: discord.Member):
     return None
 
 
-async def check_channel(ctx, config_key: str, friendly_name: str = None) -> bool:
+async def check_channel(ctx, config_key: str, friendly_name: str | None = None) -> bool:
     """Return True when the command is invoked in an allowed channel.
     Staff members bypass the channel restriction. If no channel is configured the check passes.
     Sends a denial message and returns False when the channel is not permitted."""
@@ -1947,7 +1943,7 @@ async def check_expired_mutes():
                 try:
                     mute_end = datetime.fromisoformat(mute_end)
                 except ValueError:
-                    mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S")
+                    mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             if mute_end.tzinfo is None:
                 mute_end = mute_end.replace(tzinfo=timezone.utc)
             if mute_end <= now:
@@ -2022,9 +2018,10 @@ async def check_muted_role_permissions():
             elif isinstance(channel, discord.VoiceChannel):
                 if perms.speak is not False or perms.stream is not False or perms.connect is not False:
                     needs_update = True
-            elif isinstance(channel, discord.CategoryChannel):
-                if perms.send_messages is not False or perms.speak is not False:
-                    needs_update = True
+            elif isinstance(channel, discord.CategoryChannel) and (
+                perms.send_messages is not False or perms.speak is not False
+            ):
+                needs_update = True
             if needs_update:
                 try:
                     if isinstance(channel, discord.TextChannel):
@@ -2234,7 +2231,7 @@ async def configure_error(ctx, error):
 @bot.command(name="editconfig", aliases=["editconfiguration"])
 @staffperm("config")
 @staff_only()
-async def editconfig(ctx, *, args: str = None):
+async def editconfig(ctx, *, args: str | None = None):
     """Edit a single configuration value by name without running the full configure wizard."""
 
     def norm(s):
@@ -2262,19 +2259,14 @@ async def editconfig(ctx, *, args: str = None):
     idx = len(parts)
     for i in range(1, len(parts)):
         p = parts[i]
-        if (
-            p.isdigit()
-            or p.startswith("<#")
-            or p.startswith("<@&")
-            or (p.lower() in ("none", "null", "remove", "delete", "all"))
-        ):
+        if p.isdigit() or p.startswith(("<#", "<@&")) or (p.lower() in ("none", "null", "remove", "delete", "all")):
             idx = i
             break
     raw_setting = " ".join(parts[:idx]).strip()
     setting_norm = norm(raw_setting)
     value = " ".join(parts[idx:]).strip() if idx < len(parts) else None
     if setting_norm not in valid_settings:
-        pretty_list = "\n".join((f"• `{info['key']}` - {info['desc']}" for info in valid_settings.values()))
+        pretty_list = "\n".join(f"• `{info['key']}` - {info['desc']}" for info in valid_settings.values())
         embed = discord.Embed(
             title="⚙️ Invalid Setting",
             description=f"❌ **`{raw_setting}`** is not a valid configuration key.\n\n**Available settings:**\n"
@@ -2336,7 +2328,7 @@ async def editconfig(ctx, *, args: str = None):
                     )
                     for task in pending:
                         task.cancel()
-                    result = list(done)[0].result()
+                    result = next(iter(done)).result()
                     if isinstance(result, tuple):
                         reaction, _ = result
                         emoji = str(reaction.emoji)
@@ -2418,7 +2410,7 @@ async def viewconfig(ctx: commands.Context):
         if not value:
             return "All channels" if "channel" in key.lower() else "Not set"
         if isinstance(value, list):
-            return ", ".join((f"<#{i}>" if "channel" in key.lower() else f"<@&{i}>" for i in value))
+            return ", ".join(f"<#{i}>" if "channel" in key.lower() else f"<@&{i}>" for i in value)
         elif isinstance(value, int):
             return f"<#{value}>" if "channel" in key.lower() else f"<@&{value}>"
         return str(value)
@@ -2533,11 +2525,8 @@ def build_gemini_client_for_key(key: str, model_name: str):
     """Return a client info dict for key and model_name.
     Prefers the newer google.genai SDK, falling back to google.generativeai if unavailable."""
     if genai_new is not None and hasattr(genai_new, "Client"):
-        try:
-            client = genai_new.Client(api_key=key)
-            return {"mode": "new", "client": client, "model": model_name}
-        except Exception as e:
-            raise e
+        client = genai_new.Client(api_key=key)
+        return {"mode": "new", "client": client, "model": model_name}
     else:
         global genai_old
         if genai_old is None:
@@ -2551,12 +2540,9 @@ def build_gemini_client_for_key(key: str, model_name: str):
                 genai_old = None
         if genai_old is None:
             raise RuntimeError("No Gemini SDK available. Install google-genai or google-generativeai.")
-        try:
-            genai_old.configure(api_key=key)
-            model = genai_old.GenerativeModel(model_name)
-            return {"mode": "old", "model": model}
-        except Exception as e:
-            raise e
+        genai_old.configure(api_key=key)
+        model = genai_old.GenerativeModel(model_name)
+        return {"mode": "old", "model": model}
 
 
 def gemini_generate_once(client_info, prompt: str):
@@ -2607,7 +2593,6 @@ _TRANSIENT_ERROR_MARKERS = (
 async def get_gemini_client():
     """Cycle through available Gemini keys and return the first working client info dict.
     Returns None when all keys fail."""
-    global active_key
     for _ in range(len(GEMINI_API_KEYS)):
         key = next_gemini_key()
         try:
@@ -2624,14 +2609,14 @@ async def generate_gemini_response(messages):
     """Convert messages list to a flat prompt string, then call Gemini with automatic key rotation
     and exponential back off. Falls back to a duck themed failure message when all keys are exhausted."""
     loop = asyncio.get_event_loop()
-    prompt = "\n".join((f"{m['role'].capitalize()}: {m['content']}" for m in messages))
+    prompt = "\n".join(f"{m['role'].capitalize()}: {m['content']}" for m in messages)
     client_info = await get_gemini_client()
     if not client_info:
         return "🦆 The duck slipped on a banana peel and can't respond right now."
     max_attempts = max(len(GEMINI_API_KEYS), 1) + 2
     for attempt in range(max_attempts):
         try:
-            response = await loop.run_in_executor(executor, lambda: gemini_generate_once(client_info, prompt))
+            response = await loop.run_in_executor(executor, lambda ci=client_info: gemini_generate_once(ci, prompt))
             if hasattr(response, "text") and response.text:
                 return response.text.strip()
             elif isinstance(response, str):
@@ -2642,8 +2627,8 @@ async def generate_gemini_response(messages):
             err_str = str(e)
             print(f"[DuckGPT Gemini Error] {err_str}")
             lower_err = err_str.lower()
-            is_quota_error = any((word in lower_err for word in _QUOTA_ERROR_MARKERS))
-            is_transient_error = any((word in lower_err for word in _TRANSIENT_ERROR_MARKERS))
+            is_quota_error = any(word in lower_err for word in _QUOTA_ERROR_MARKERS)
+            is_transient_error = any(word in lower_err for word in _TRANSIENT_ERROR_MARKERS)
             if not (is_quota_error or is_transient_error) or attempt == max_attempts - 1:
                 print("💥 Non-recoverable Gemini error (or out of retries), stopping attempts.")
                 break
@@ -2697,11 +2682,11 @@ async def ask_duck_gpt(ctx, prompt: str) -> str:
         greeted = True
     lowered_prompt = prompt.lower()
     greetings = ["hi", "hello", "hey", "yo", "hiya", "sup", "greetings"]
-    if any((word in lowered_prompt.split() for word in greetings)):
+    if any(word in lowered_prompt.split() for word in greetings):
         duck_conversations[conv_key] = []
         greeted = False
     duck_conversations[conv_key].append({"role": "user", "content": f"{display_name} said: {prompt}"})
-    total_tokens = sum((len(msg["content"].split()) * 4 for msg in duck_conversations[conv_key]))
+    total_tokens = sum(len(msg["content"].split()) * 4 for msg in duck_conversations[conv_key])
     if total_tokens > 1500:
         duck_conversations[conv_key] = [{"role": "user", "content": prompt}]
     ai_task_keywords = [
@@ -2716,7 +2701,7 @@ async def ask_duck_gpt(ctx, prompt: str) -> str:
         "make it",
         "create it",
     ]
-    if any((phrase in prompt.lower() for phrase in ai_task_keywords)):
+    if any(phrase in prompt.lower() for phrase in ai_task_keywords):
         await log_action(ctx, f"⚠️ Attempted AI misuse: `{prompt}`", user_id=ctx.author.id, action_type="duckgpt_flag")
         return "🦆 I'm just a talking duck! I can't do things for you."
 
@@ -2986,7 +2971,7 @@ def parse_amount(amount_str: str) -> int | None:
         return None
     s = amount_str.lower().replace(",", "").strip()
     multiplier = 1
-    if any((word in s for word in WORDS_TO_NUM)):
+    if any(word in s for word in WORDS_TO_NUM):
         result = words_to_number(s)
         if result is not None:
             return result
@@ -3534,7 +3519,7 @@ async def on_message(message):
                 else:
                     await message.channel.send(f"📨 {user.display_name} is AFK: {reason}")
         content_lower = message.content.lower()
-        if not (content_lower.startswith(".afk") or content_lower.startswith("/afk")):
+        if not content_lower.startswith((".afk", "/afk")):
             afk_key = f"{message.guild.id}-{message.author.id}"
             doc = await afk_col.find_one({"_id": afk_key})
             if doc:
@@ -3637,7 +3622,6 @@ async def on_ready():
     """Fired once after the bot has successfully connected and loaded its guild data.
     Starts all background task loops, seeds the shop, loads sticky notes, syncs slash commands,
     and sets the bot's presence. Guard flagged so it only runs once even if the bot  reconnects."""
-    global invite_cache
     global session
     if getattr(bot, "views_loaded", False):
         return
@@ -3672,7 +3656,7 @@ async def on_ready():
                     try:
                         mute_end = datetime.fromisoformat(mute_end)
                     except ValueError:
-                        mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S")
+                        mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 if mute_end.tzinfo is None:
                     mute_end = mute_end.replace(tzinfo=timezone.utc)
                 if datetime.now(timezone.utc) >= mute_end:
@@ -3841,7 +3825,7 @@ async def run_flake8_lint(base_dir):
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+            stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=30)
         except asyncio.TimeoutError:
             process.kill()
             await process.communicate()
@@ -5273,7 +5257,7 @@ async def mines(ctx):
         bet = user_balance
     else:
         cleaned_bet = bet_input.replace(",", "").replace("$", "").strip().lower()
-        if not any((ch.isdigit() for ch in cleaned_bet)):
+        if not any(ch.isdigit() for ch in cleaned_bet):
             await ctx.send("❌ Please enter a valid number (like `100`, `1k`, or `all`).")
             return
         try:
@@ -5504,7 +5488,7 @@ async def ducktowers(ctx):
 @app_commands.describe(member_name="The member whose balance to check (optional - shows your balance if not provided)")
 @blacklist_barrier()
 @xp_earn(4, 8)
-async def balance(ctx, member_name: str = None):
+async def balance(ctx, member_name: str | None = None):
     """Display the wallet and bank balance for the invoker or a named member."""
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
@@ -6110,7 +6094,7 @@ class RefundDropdown(discord.ui.View):
 @bot.command(name="maintenance", description="Toggle maintenance mode (staff only access).")
 @staffperm("config")
 @staff_only()
-async def maintenance(ctx, action: str = None):
+async def maintenance(ctx, action: str | None = None):
     guild_id = str(ctx.guild.id)
     if action is None:
         settings = await settings_col.find_one({"guild": guild_id})
@@ -6431,7 +6415,7 @@ async def delitem(ctx, *, name: str):
 )
 @blacklist_barrier()
 @xp_earn(8, 16)
-async def buy(ctx, *, item: str = None):
+async def buy(ctx, *, item: str | None = None):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     if not item:
@@ -6576,7 +6560,7 @@ async def inventory(ctx):
         max_uses = TOOL_DURABILITIES[tool_key]
         display_name = shop_item["name"] if shop_item else tool_key.replace("_", " ").title()
         description = shop_item.get("description", "No description.") if shop_item else "No description."
-        durability_text = ", ".join((f"{uses}/{max_uses}" for uses in durability_values[:5]))
+        durability_text = ", ".join(f"{uses}/{max_uses}" for uses in durability_values[:5])
         if len(durability_values) > 5:
             durability_text += ", ..."
         embed.add_field(
@@ -7086,7 +7070,7 @@ async def work(ctx):
             prefix = doc.get("prefix", "?") if doc else "?"
             return await ctx.send(f"❌ You don't have a job yet! Use `{prefix}choosejob` to get one.")
         inventory = data.get("inventory", [])
-        has_laptop = any((normalize_item_key(item) == "laptop" for item in inventory))
+        has_laptop = any(normalize_item_key(item) == "laptop" for item in inventory)
         if job == "developer" and (not has_laptop):
             return await ctx.send("💻 You need a **laptop** to work as a developer!")
         if job not in ["developer", "duck"]:
@@ -7267,8 +7251,7 @@ async def jobstatus(ctx):
             if allow_roll:
                 if elapsed_days > 0:
                     promo_chance += elapsed_days * 0.5
-                    if promo_chance > 100:
-                        promo_chance = 100
+                    promo_chance = min(promo_chance, 100)
                 if random.random() <= promo_chance / 100:
                     promo_level += 1
                     promo_chance = 20.0
@@ -7313,10 +7296,9 @@ async def jobstatus(ctx):
             await ctx.send(embed=embed)
         if not promoted:
             update_fields = {"promotion_level": promo_level, "promotion_chance": promo_chance}
-            if days >= 7:
-                if "allow_roll" in locals() and allow_roll:
-                    update_fields["last_promo_check"] = now.isoformat()
-                    update_fields["last_promo_roll"] = now.isoformat()
+            if days >= 7 and "allow_roll" in locals() and allow_roll:
+                update_fields["last_promo_check"] = now.isoformat()
+                update_fields["last_promo_roll"] = now.isoformat()
             await economy_col.update_one({"_id": user_id}, {"$set": update_fields}, upsert=True)
     except Exception as e:
         print(f"[jobstatus command error] {type(e).__name__}: {e}")
@@ -7403,7 +7385,7 @@ async def swim(ctx):
         inventory = data.get("inventory", [])
         consumed, gear_broke, _ = consume_tool_use(inventory, "scuba gear")
         if not consumed:
-            setattr(ctx, "_skip_xp_award", True)
+            ctx._skip_xp_award = True
             ctx.command.reset_cooldown(ctx)
             return await ctx.send("❌ You need **Scuba Gear** to swim! Buy it with `.buy scuba gear`.")
         tool_break_notice = (
@@ -7553,7 +7535,7 @@ async def riddle(ctx):
         view.message = prompt_msg
         await view.wait()
         if view.choice is None:
-            setattr(ctx, "_skip_xp_award", True)
+            ctx._skip_xp_award = True
             ctx.command.reset_cooldown(ctx)
             return
         level = view.choice
@@ -7920,7 +7902,7 @@ class ConfirmSellAll(View):
 )
 @blacklist_barrier()
 @xp_earn(9, 18)
-async def sell(ctx, *, item: str = None):
+async def sell(ctx, *, item: str | None = None):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     try:
@@ -8167,7 +8149,7 @@ async def refresh_user_investments_for_today(investments: list[dict], now: datet
                 change_pct = pick_daily_investment_change_pct()
             finally:
                 random.setstate(saved_state)
-            new_value = max(1, int(round(current_value * (1 + change_pct))))
+            new_value = max(1, round(current_value * (1 + change_pct)))
             history.append(new_value - current_value)
             current_value = new_value
             if len(history) > 180:
@@ -8186,7 +8168,7 @@ async def refresh_user_investments_for_today(investments: list[dict], now: datet
 )
 @blacklist_barrier()
 @xp_earn(16, 30)
-async def invest(ctx, company: str = None, amount: str = None):
+async def invest(ctx, company: str | None = None, amount: str | None = None):
     if not await check_channel(ctx, "economy_channel", "Economy"):
         return
     companies = {
@@ -8633,7 +8615,7 @@ async def duckquiz(ctx):
     elif isinstance(role_ids, str) and role_ids.isdigit():
         role_ids = [int(role_ids)]
     user_roles = [r.id for r in ctx.author.roles]
-    if any((rid in user_roles for rid in role_ids)):
+    if any(rid in user_roles for rid in role_ids):
         await ctx.send("ℹ You've already passed; type `yes` within 30s to retake.")
         try:
             msg = await bot.wait_for(
@@ -8780,14 +8762,16 @@ async def slap(ctx, member: discord.Member = None):
         return
     try:
         await ctx.defer()
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
                 f"https://api.giphy.com/v1/gifs/search?q=anime%20slap&api_key={GIPHY_API_KEY}&limit=20&rating=g&lang=en",
                 timeout=5,
-            ) as r:
-                if r.status != 200:
-                    raise Exception(f"HTTP {r.status}")
-                data = await r.json()
+            ) as r,
+        ):
+            if r.status != 200:
+                raise RuntimeError(f"HTTP {r.status}")
+            data = await r.json()
         # Giphy returns results under the "data" key; each item has an "images" map with various sizes.
         results = data.get("data", [])
         if not results:
@@ -8819,13 +8803,17 @@ async def slap(ctx, member: discord.Member = None):
         await ctx.send(f"⚠️ Something went wrong while fetching the slap GIF: `{e}`")
 
 
+def _read_duck_facts():
+    with open("duckfacts.txt", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
+
+
 @bot.hybrid_command(name="duckfact", description="Get a random duck fact")
 @commands.cooldown(1, 5, commands.BucketType.member)
 @blacklist_barrier()
 async def duckfact(ctx):
     try:
-        with open("duckfacts.txt", "r", encoding="utf-8") as f:
-            facts = [line.strip() for line in f if line.strip()]
+        facts = await asyncio.to_thread(_read_duck_facts)
         if not facts:
             raise ValueError("Duck facts file is empty.")
         fact = random.choice(facts)
@@ -8988,7 +8976,9 @@ class TicketAddButtonModal(discord.ui.Modal, title="Add Ticket Panel Button"):
         )
 
 
-async def prompt_ticket_button_staff_choice(ctx_or_interaction, guild_id: str, panel_name: str, btn_label: str, author_id: int):
+async def prompt_ticket_button_staff_choice(
+    ctx_or_interaction, guild_id: str, panel_name: str, btn_label: str, author_id: int
+):
     """Ask the staff member who just added a ticket button whether access to tickets opened
     from it should be limited to specific staff, or left as the category's normal staff
     permissions. Works after either the modal flow (an Interaction, via followup) or the
@@ -9322,7 +9312,7 @@ def is_prefix(ctx):
 async def send_hybrid_error(ctx, *, content=None, embed=None, delete_after=None):
     """Send an error response that works for both prefix commands and slash interactions.
     Also marks the context so XP is not awarded for this invocation."""
-    setattr(ctx, "_skip_xp_award", True)
+    ctx._skip_xp_award = True
     if is_prefix(ctx):
         if embed is None and delete_after is None:
             return await ctx.send(content)
@@ -9365,7 +9355,7 @@ async def resolve_ticket_opener(guild: discord.Guild, user_id):
         return None
 
 
-async def ping_ticket_roles(channel: discord.TextChannel, guild_id: str, opener_id: int = None):
+async def ping_ticket_roles(channel: discord.TextChannel, guild_id: str, opener_id: int | None = None):
     """Mention any staff members with ticket permissions in the newly created ticket channel."""
     try:
         allowed_members = {}
@@ -9404,7 +9394,7 @@ async def ping_ticket_roles(channel: discord.TextChannel, guild_id: str, opener_
         if not allowed_members and (not staff_role_mentions):
             return
         ping_parts = list(staff_role_mentions)
-        ping_parts.extend((member.mention for member in allowed_members.values()))
+        ping_parts.extend(member.mention for member in allowed_members.values())
         ping_text = " ".join(ping_parts)
         msg = await channel.send(
             content=ping_text, allowed_mentions=discord.AllowedMentions(users=True, roles=True, everyone=False)
@@ -9502,9 +9492,8 @@ async def ticketaddbutton(ctx):
         await ctx.interaction.response.send_modal(TicketAddButtonModal(ctx))
     except Exception as e:
         print("ticketaddbutton ERROR:", traceback.format_exc())
-        if ctx.interaction:
-            if not ctx.interaction.response.is_done():
-                await ctx.interaction.response.send_message(f"❌ Error:\n```{e}```", ephemeral=True)
+        if ctx.interaction and (not ctx.interaction.response.is_done()):
+            await ctx.interaction.response.send_message(f"❌ Error:\n```{e}```", ephemeral=True)
 
 
 class TicketRemoveButtonSelect(discord.ui.Select):
@@ -10082,7 +10071,7 @@ async def ticketremoveuser(ctx, member: discord.Member):
 
 @bot.command()
 @staff_only()
-async def ticketsync(ctx, scope: str = None):
+async def ticketsync(ctx, scope: str | None = None):
     try:
         if scope and scope.lower() == "all":
             updated = 0
@@ -10101,10 +10090,13 @@ async def ticketsync(ctx, scope: str = None):
                         desired.append(m)
                 desired_ids = {m.id for m in desired}
                 for target, overwrite in channel.overwrites.items():
-                    if isinstance(target, discord.Member):
-                        if await has_staff_role(target, ctx.guild):
-                            if overwrite.view_channel and target.id not in desired_ids:
-                                await channel.set_permissions(target, overwrite=None)
+                    if (
+                        isinstance(target, discord.Member)
+                        and await has_staff_role(target, ctx.guild)
+                        and overwrite.view_channel
+                        and target.id not in desired_ids
+                    ):
+                        await channel.set_permissions(target, overwrite=None)
                 for m in desired:
                     ow = channel.overwrites_for(m)
                     ow.view_channel = True
@@ -10130,10 +10122,13 @@ async def ticketsync(ctx, scope: str = None):
                 desired.append(m)
         desired_ids = {m.id for m in desired}
         for target, overwrite in channel.overwrites.items():
-            if isinstance(target, discord.Member):
-                if await has_staff_role(target, ctx.guild):
-                    if overwrite.view_channel and target.id not in desired_ids:
-                        await channel.set_permissions(target, overwrite=None)
+            if (
+                isinstance(target, discord.Member)
+                and await has_staff_role(target, ctx.guild)
+                and overwrite.view_channel
+                and target.id not in desired_ids
+            ):
+                await channel.set_permissions(target, overwrite=None)
         for m in desired:
             ow = channel.overwrites_for(m)
             ow.view_channel = True
@@ -10234,7 +10229,7 @@ class GiveawayView(discord.ui.View):
             if pick not in unique_winners:
                 unique_winners.append(pick)
         winners_ids = unique_winners
-        winners_mentions = ", ".join((f"<@{uid}>" for uid in winners_ids))
+        winners_mentions = ", ".join(f"<@{uid}>" for uid in winners_ids)
         await channel.send(f"🎉 Congratulations {winners_mentions}! You won **{self.prize}**!")
         await giveaway_col.update_one({"_id": self.giveaway_id}, {"$set": {"ended": True, "winners": winners_ids}})
         for idx, field in enumerate(embed.fields):
@@ -10595,7 +10590,7 @@ async def reroll(ctx: commands.Context, message_id: int):
         pick = random.choice(ticket_pool)
         if pick not in winners:
             winners.append(pick)
-    winners_mentions = ", ".join((f"<@{wid}>" for wid in winners))
+    winners_mentions = ", ".join(f"<@{wid}>" for wid in winners)
     await giveaway_col.update_one({"_id": data["_id"]}, {"$set": {"winners": winners}})
     try:
         channel = ctx.bot.get_channel(data["channel_id"])
@@ -10638,7 +10633,7 @@ async def draw(ctx: commands.Context, message_id: int):
         pick = random.choice(ticket_pool)
         if pick not in winners:
             winners.append(pick)
-    winners_mentions = ", ".join((f"<@{wid}>" for wid in winners))
+    winners_mentions = ", ".join(f"<@{wid}>" for wid in winners)
     await giveaway_col.update_one({"_id": data["_id"]}, {"$set": {"winners": winners, "ended": True}})
     try:
         channel = ctx.bot.get_channel(data["channel_id"])
@@ -10951,7 +10946,7 @@ async def removemoney(ctx, amount: str, *, users: str):
 
 @bot.hybrid_command(name="drop", description="Create a money drop (staff spawns money, members pay).")
 @app_commands.describe(amount="Amount to drop", message="Optional message to include")
-async def drop(ctx, amount: str, *, message: str = None):
+async def drop(ctx, amount: str, *, message: str | None = None):
     if not ctx.guild:
         return await ctx.send("❌ This command can only be used in a server.")
     guild_id = ctx.guild.id
@@ -11206,7 +11201,7 @@ _MAX_MUTE_SECONDS = 30 * 24 * 3600
 @bot.command(name="mute", description="Mute a member temporarily. Staff only.")
 @staffperm("mute")
 @staff_only()
-async def mute(ctx, member: discord.Member, duration: str = None, *, reason: str = "No reason provided"):
+async def mute(ctx, member: discord.Member, duration: str | None = None, *, reason: str = "No reason provided"):
     err = check_target_permission(ctx, member)
     if err:
         return await ctx.send(err)
@@ -11420,9 +11415,9 @@ async def listdisabled(ctx):
     disabled_cats = doc.get("categories", [])
     embed = discord.Embed(title="🔒 Disabled Features", color=discord.Color.red())
     if disabled_cmds:
-        embed.add_field(name="Commands", value="\n".join((f"`{cmd}`" for cmd in disabled_cmds)), inline=False)
+        embed.add_field(name="Commands", value="\n".join(f"`{cmd}`" for cmd in disabled_cmds), inline=False)
     if disabled_cats:
-        embed.add_field(name="Categories", value="\n".join((f"`{cat}`" for cat in disabled_cats)), inline=False)
+        embed.add_field(name="Categories", value="\n".join(f"`{cat}`" for cat in disabled_cats), inline=False)
     await ctx.send(embed=embed)
 
 
@@ -11869,7 +11864,7 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
                                 analytics["total_actions"] += 1
                         except ValueError:
                             pass
-        analytics["punishments"]["total"] = sum((analytics["punishments"][p] for p in ["warn", "mute", "kick", "ban"]))
+        analytics["punishments"]["total"] = sum(analytics["punishments"][p] for p in ["warn", "mute", "kick", "ban"])
         analytics["commands_used"] = analytics["punishments"]["total"]
         for doc in mod_data:
             if "notes" in doc:
@@ -11898,18 +11893,16 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
         analytics["total_messages"] = await get_user_message_count(guild_id, staff_id, days_ago)
         analytics["avg_actions_per_day"] = analytics["total_actions"] / days if analytics["total_actions"] > 0 else 0
         analytics["active_this_week"] = analytics["total_actions"] > 0 and any(
-            (
-                doc.get("time") and parser.isoparse(doc["time"]) >= seven_days_ago
-                for doc in mod_data
-                for doc_list in [
-                    doc.get("warnings", []),
-                    doc.get("mutes", []),
-                    doc.get("kicks", []),
-                    doc.get("bans", []),
-                ]
-                for doc_item in doc_list
-                if isinstance(doc_item, dict) and doc_item.get("by") == str(staff_id)
-            )
+            doc.get("time") and parser.isoparse(doc["time"]) >= seven_days_ago
+            for doc in mod_data
+            for doc_list in [
+                doc.get("warnings", []),
+                doc.get("mutes", []),
+                doc.get("kicks", []),
+                doc.get("bans", []),
+            ]
+            for doc_item in doc_list
+            if isinstance(doc_item, dict) and doc_item.get("by") == str(staff_id)
         )
         expected_daily = 2
         analytics["efficiency"] = min(100, analytics["avg_actions_per_day"] / expected_daily * 100)
@@ -12224,7 +12217,9 @@ async def modview(ctx, member: discord.Member):
         VerificationLevel.high: "High",
     }
     verification_name = verification_map.get(ctx.guild.verification_level, str(ctx.guild.verification_level).title())
-    embed = discord.Embed(title=f"🛠️ Moderator View: {member}", color=discord.Color.blurple(), timestamp=datetime.now())
+    embed = discord.Embed(
+        title=f"🛠️ Moderator View: {member}", color=discord.Color.blurple(), timestamp=datetime.now(timezone.utc)
+    )
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="👤 Username", value=f"{member} (`{member.name}`)", inline=False)
     embed.add_field(name="🪪 Nickname", value=nick, inline=True)
@@ -12576,7 +12571,7 @@ async def on_member_join(member):
                         try:
                             mute_end = datetime.fromisoformat(mute_end)
                         except ValueError:
-                            mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S")
+                            mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                     if mute_end.tzinfo is None:
                         mute_end = mute_end.replace(tzinfo=timezone.utc)
                     now_utc = datetime.now(timezone.utc)
@@ -12618,14 +12613,13 @@ async def duck(ctx):
     allowed_channels = config.get("ALLOWED_DUCK_CHANNELS", [])
     if allowed_channels and ctx.channel.id not in allowed_channels:
         return await ctx.send("🚫 You can't use this command here.")
-    async with aiohttp.ClientSession() as session:
-        async with session.get("https://random-d.uk/api/random") as resp:
-            if resp.status != 200:
-                return await ctx.send("❌ Could not get a duck right now, try again later!")
-            data = await resp.json()
-            url = data.get("url")
-            if not url:
-                return await ctx.send("❌ Duck image not found, sorry!")
+    async with aiohttp.ClientSession() as session, session.get("https://random-d.uk/api/random") as resp:
+        if resp.status != 200:
+            return await ctx.send("❌ Could not get a duck right now, try again later!")
+        data = await resp.json()
+        url = data.get("url")
+        if not url:
+            return await ctx.send("❌ Duck image not found, sorry!")
     embed = discord.Embed(title="🦆 Quack!", color=discord.Color.blue())
     embed.set_image(url=url)
     await ctx.send(embed=embed, ephemeral=False)
@@ -12637,16 +12631,15 @@ async def duck(ctx):
 async def quote(ctx):
     api_url = "https://zenquotes.io/api/random"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url) as resp:
-                text = await resp.text()
-                if resp.status != 200:
-                    return await ctx.send(f"❌ Could not fetch a quote right now (Status {resp.status})")
-                try:
-                    data = json.loads(text)
-                except Exception as e:
-                    print(f"[JSON PARSE ERROR] {type(e).__name__} - {e}")
-                    return await ctx.send(f"⚠️ API returned invalid data:\n```{text[:200]}...```")
+        async with aiohttp.ClientSession() as session, session.get(api_url) as resp:
+            text = await resp.text()
+            if resp.status != 200:
+                return await ctx.send(f"❌ Could not fetch a quote right now (Status {resp.status})")
+            try:
+                data = json.loads(text)
+            except Exception as e:
+                print(f"[JSON PARSE ERROR] {type(e).__name__} - {e}")
+                return await ctx.send(f"⚠️ API returned invalid data:\n```{text[:200]}...```")
         if not data or not isinstance(data, list):
             return await ctx.send("❌ Couldn't fetch a quote this time, try again!")
         quote_text = str(data[0].get("q") or "No quote found")
@@ -12880,7 +12873,7 @@ class CommandPages(discord.ui.View):
 
     def get_section_bounds(self):
         starts = sorted(self.sect)
-        idx = max((k for k in starts if k <= self.current))
+        idx = max(k for k in starts if k <= self.current)
         start = idx
         next_idx = [k for k in starts if k > idx]
         end = next_idx[0] if next_idx else len(self.embeds)
@@ -13143,9 +13136,12 @@ async def disableonetime(ctx, channel: discord.TextChannel = None):
     await settings_col.update_one({"guild": guild_id}, {"$unset": {f"onetime_channels.{channel_id}": ""}})
     try:
         for target, overwrite in target_channel.overwrites.items():
-            if isinstance(target, discord.Member) and (not await has_staff_role(target, target_channel.guild)):
-                if overwrite.send_messages is False:
-                    await target_channel.set_permissions(target, send_messages=None)
+            if (
+                isinstance(target, discord.Member)
+                and (not await has_staff_role(target, target_channel.guild))
+                and overwrite.send_messages is False
+            ):
+                await target_channel.set_permissions(target, send_messages=None)
         embed = discord.Embed(
             title="✅ One Time Channel Disabled",
             description=f"{target_channel.mention} is no longer a one time message channel.",
@@ -13174,7 +13170,6 @@ async def on_close():
     session close) happens in _main()'s finally block, which is always awaited.
     This handler is kept as a belt-and-suspenders fallback for any session that
     was not already closed by the time discord.py fires the close event."""
-    global session
     if session is not None and not session.closed:
         await session.close()
 
@@ -13217,18 +13212,16 @@ async def _main() -> None:
             check_reminders,
         ]
         for _loop in _loops:
-            try:
+            # intentionally silent - the loop may already be stopped
+            with contextlib.suppress(Exception):
                 if _loop.is_running():
                     _loop.cancel()
-            except Exception:  # nosec B110 - intentionally silent, loop may already be stopped
-                pass
         # Give cancellations a moment to propagate through any iteration that
         # is currently suspended at an await before the event loop closes.
         await asyncio.sleep(0.1)
         # Close the shared aiohttp session here rather than relying solely on
         # on_close, because discord.py dispatches that event fire-and-forget
         # and the task may not finish before asyncio shuts the event loop down.
-        global session
         if session is not None and not session.closed:
             await session.close()
 
