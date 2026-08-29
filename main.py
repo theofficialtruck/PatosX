@@ -8517,7 +8517,7 @@ class AnswerButton(discord.ui.Button):
             if self.value == correct_answer
             else f"❌ Wrong! Answer was: {view.questions[idx]['options'][correct_answer - 1]}"
         )
-        await interaction.followup.send(reply)
+        await interaction.followup.send(reply, ephemeral=True)
         view.current_index += 1
         await view.show_next(interaction)
 
@@ -8556,9 +8556,9 @@ class QuizView(discord.ui.View):
         for i in range(1, 5):
             self.add_item(AnswerButton(str(i), i, self))
         if interaction:
-            await interaction.followup.send(embed=embed, view=self)
+            await interaction.followup.send(embed=embed, view=self, ephemeral=True)
         else:
-            await self.ctx.send(embed=embed, view=self)
+            await self.ctx.send(embed=embed, view=self, ephemeral=True)
 
     async def finish_quiz(self, interaction: discord.Interaction = None):
         pct = self.score / len(self.questions) * 100.0
@@ -8598,7 +8598,7 @@ class QuizView(discord.ui.View):
                 else:
                     result += "\n⚠️ Role configured, but could not find it on the server."
         if interaction:
-            await interaction.followup.send(result)
+            await interaction.followup.send(result, ephemeral=True)
         else:
             await self.ctx.send(result)
         self.stop()
@@ -9034,6 +9034,7 @@ class TicketButtonStaffSelect(discord.ui.UserSelect):
             color=discord.Color.green(),
         )
         await interaction.response.edit_message(embed=embed, view=None)
+        self.view.message = None
         self.view.stop()
 
 
@@ -9061,6 +9062,7 @@ class TicketButtonStaffChoiceView(discord.ui.View):
             color=discord.Color.green(),
         )
         await interaction.response.edit_message(embed=embed, view=None)
+        self.message = None
         self.stop()
 
     async def on_timeout(self):
@@ -11672,6 +11674,8 @@ class ClearWarnsConfirmView(discord.ui.View):
         await log_action(
             self.ctx, f"Cleared all warnings for {self.member}", user_id=self.member.id, action_type="clearwarns"
         )
+        self.message = None
+        self.stop()
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.grey)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -11681,6 +11685,8 @@ class ClearWarnsConfirmView(discord.ui.View):
             color=discord.Color.red(),
         )
         await interaction.response.edit_message(embed=embed, view=None)
+        self.message = None
+        self.stop()
 
     async def on_timeout(self):
         if self.message:
