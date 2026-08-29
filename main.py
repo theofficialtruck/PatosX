@@ -352,7 +352,7 @@ PASS_PCT = 80.0
 intents = discord.Intents.all()
 
 # In memory invite cache: guild_id -> (timestamp, list of Invite objects).
-# A dedicated async queue serialises API calls to avoid hitting Discord rate limits.
+# A dedicated async queue serializes API calls to avoid hitting Discord rate limits.
 invite_cache = {}
 last_invite_fetch = {}
 INVITE_CACHE_DURATION = 300  # seconds before a cached invite list is considered stale
@@ -1435,7 +1435,7 @@ def _monthly_rewards_col_live_in_tests() -> bool:
 
 async def get_monthly_rewards_doc(guild_id, user_id) -> dict:
     """Return the caller's monthly rewards document, lazily resetting counters and claims
-    when the stored month no longer matches the current UTC month. Missing goal keys (e.g. on
+    when the stored month no longer matches the current UTC month. Missing goal keys (e.g., on
     a document saved before a new goal was added) are backfilled with zero/unclaimed defaults.
 
     Runs as two separate updates rather than one upsert to avoid a duplicate-key race: two
@@ -8496,7 +8496,7 @@ class AnswerButton(discord.ui.Button):
             if self.value == correct_answer
             else f"❌ Wrong! Answer was: {view.questions[idx]['options'][correct_answer - 1]}"
         )
-        await interaction.followup.send(reply, ephemeral=True)
+        await interaction.followup.send(reply)
         view.current_index += 1
         await view.show_next(interaction)
 
@@ -8535,9 +8535,9 @@ class QuizView(discord.ui.View):
         for i in range(1, 5):
             self.add_item(AnswerButton(str(i), i, self))
         if interaction:
-            await interaction.followup.send(embed=embed, view=self, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=self)
         else:
-            await self.ctx.send(embed=embed, view=self, ephemeral=True)
+            await self.ctx.send(embed=embed, view=self)
 
     async def finish_quiz(self, interaction: discord.Interaction = None):
         pct = self.score / len(self.questions) * 100.0
@@ -8577,7 +8577,7 @@ class QuizView(discord.ui.View):
                 else:
                     result += "\n⚠️ Role configured, but could not find it on the server."
         if interaction:
-            await interaction.followup.send(result, ephemeral=True)
+            await interaction.followup.send(result)
         else:
             await self.ctx.send(result)
         self.stop()
@@ -9682,6 +9682,11 @@ async def transcript(ctx, ticket_id: str):
                     return str(dt)
             if not isinstance(dt, datetime):
                 return "Unknown"
+            if dt.tzinfo is None:
+                # Mongo strips tzinfo from stored datetimes and always returns UTC wall-clock
+                # values, so a naive dt here is UTC, not local time - without this, .timestamp()
+                # would assume the local system timezone and skew the rendered time by that offset.
+                dt = dt.replace(tzinfo=timezone.utc)
             ts = int(dt.timestamp())
             if style == "full":
                 return f"<t:{ts}:F>"
@@ -9745,7 +9750,7 @@ async def transcriptsearch(ctx, username: str):
 def _normalize_open_ticket(t: dict) -> dict:
     """Still-open ticket documents use a different schema than closed-ticket transcript
     records (guild/owner_id vs guild_id/opener_id) because actually_close_ticket writes a
-    brand new document instead of updating the original one, and the original is only
+    brand-new document instead of updating the original one, and the original is only
     deleted once the ticket closes. Normalize field names so both schemas can be merged
     into a single list for display."""
     return {
@@ -9790,6 +9795,11 @@ class TranscriptPaginationView(discord.ui.View):
                 return str(dt)
         if not isinstance(dt, datetime):
             return "Unknown"
+        if dt.tzinfo is None:
+            # Mongo strips tzinfo from stored datetimes and always returns UTC wall-clock
+            # values, so a naive dt here is UTC, not local time - without this, .timestamp()
+            # would assume the local system timezone and skew the rendered time by that offset.
+            dt = dt.replace(tzinfo=timezone.utc)
         ts = int(dt.timestamp())
         if style == "full":
             return f"<t:{ts}:F>"
@@ -11435,15 +11445,18 @@ class ModViewButtons(discord.ui.View):
 
     @discord.ui.button(label="🧹 Clear Warns", style=discord.ButtonStyle.green)
     async def clear_warns(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await mod_col.update_one(
-            {"guild": str(self.ctx.guild.id), "user": str(self.member.id)}, {"$set": {"warnings": []}}
+        embed = discord.Embed(
+            title="⚠️ Confirm: Clear All Warnings",
+            description=(
+                f"Are you sure you want to clear **all warnings** for {self.member.mention}?\n\n"
+                f"This will **permanently delete every warning** on their record. "
+                f"This action **cannot be undone**."
+            ),
+            color=discord.Color.orange(),
         )
-        await interaction.response.send_message(
-            f"✅ All warnings for {self.member.mention} have been cleared.", ephemeral=True
-        )
-        await log_action(
-            self.ctx, f"Cleared all warnings for {self.member}", user_id=self.member.id, action_type="clearwarns"
-        )
+        confirm_view = ClearWarnsConfirmView(self.bot, self.ctx, self.member)
+        await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
+        confirm_view.message = await interaction.original_response()
 
     @discord.ui.button(label="🧽 Clear Punishment", style=discord.ButtonStyle.green)
     async def clear_specific(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -11501,6 +11514,60 @@ class ModViewButtons(discord.ui.View):
                 embed.set_field_at(i, name="📜 Past Punishments", value=punishments, inline=False)
                 break
         await self.message.edit(embed=embed, view=ModViewButtons(self.bot, self.ctx, self.member, self.message))
+
+
+class ClearWarnsConfirmView(discord.ui.View):
+    """Second confirmation step for ModViewButtons.clear_warns so a stray click can't
+    permanently wipe a user's warning history."""
+
+    def __init__(self, bot, ctx, member):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.ctx = ctx
+        self.member = member
+        self.message = None  # set by the caller to the ephemeral confirmation message, for on_timeout
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ You can't confirm this action!", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="✅ Yes, delete permanently", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await mod_col.update_one(
+            {"guild": str(self.ctx.guild.id), "user": str(self.member.id)}, {"$set": {"warnings": []}}
+        )
+        embed = discord.Embed(
+            title="✅ Warnings Cleared",
+            description=f"All warnings for {self.member.mention} have been permanently deleted.",
+            color=discord.Color.green(),
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+        await log_action(
+            self.ctx, f"Cleared all warnings for {self.member}", user_id=self.member.id, action_type="clearwarns"
+        )
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.grey)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="❌ Cancelled",
+            description=f"No changes were made to {self.member.mention}'s warnings.",
+            color=discord.Color.red(),
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    async def on_timeout(self):
+        if self.message:
+            try:
+                embed = discord.Embed(
+                    title="⌛ Confirmation Timed Out",
+                    description=f"No changes were made to {self.member.mention}'s warnings.",
+                    color=discord.Color.red(),
+                )
+                await self.message.edit(embed=embed, view=None)
+            except (discord.HTTPException, discord.NotFound):
+                pass
 
 
 class NoteModal(discord.ui.Modal, title="Add Moderator Note"):
