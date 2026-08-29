@@ -3872,6 +3872,27 @@ async def get_category_support_members(guild: discord.Guild, category_name: str)
     return members
 
 
+async def resolve_ticket_access_members(guild: discord.Guild, btn_data: dict, category_name: str):
+    """Return the members who should get channel access (and be pinged) for a ticket opened
+    from btn_data. A button with an explicit allowed_staff list (set via the staff-select
+    prompt shown right after /ticketaddbutton) restricts access to just those members instead
+    of the category's normal staff permissions. Buttons created before that feature existed
+    have no allowed_staff key at all, so they fall through to the old category-wide behavior
+    unchanged."""
+    allowed_staff = btn_data.get("allowed_staff")
+    if allowed_staff:
+        members = []
+        for uid in allowed_staff:
+            try:
+                member = guild.get_member(int(uid))
+            except (TypeError, ValueError):
+                member = None
+            if member:
+                members.append(member)
+        return members
+    return await get_category_support_members(guild, category_name)
+
+
 async def has_staff_role(member: discord.Member, guild: discord.Guild) -> bool:
     """Return True when member holds the configured staff role in guild."""
     doc = await settings_col.find_one({"guild": str(guild.id)})
@@ -8962,6 +8983,96 @@ class TicketAddButtonModal(discord.ui.Modal, title="Add Ticket Panel Button"):
             color=discord.Color.green(),
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
+        await prompt_ticket_button_staff_choice(
+            interaction, str(guild.id), self.panel_name.value, self.button_label.value, interaction.user.id
+        )
+
+
+async def prompt_ticket_button_staff_choice(ctx_or_interaction, guild_id: str, panel_name: str, btn_label: str, author_id: int):
+    """Ask the staff member who just added a ticket button whether access to tickets opened
+    from it should be limited to specific staff, or left as the category's normal staff
+    permissions. Works after either the modal flow (an Interaction, via followup) or the
+    prefix wizard flow (a Context, via ctx.send) since both accept embed/view kwargs."""
+    embed = discord.Embed(
+        title="👥 Restrict Staff Access? (optional)",
+        description=(
+            f"By default, tickets opened from **{btn_label}** are visible to whichever staff "
+            f"already have ticket permission for that category.\n\n"
+            "Pick specific staff below if only certain people should be pinged and given access "
+            "to tickets from this button, or press **Everyone** to keep the default."
+        ),
+        color=discord.Color.blurple(),
+    )
+    view = TicketButtonStaffChoiceView(guild_id, panel_name, btn_label, author_id)
+    if isinstance(ctx_or_interaction, discord.Interaction):
+        msg = await ctx_or_interaction.followup.send(embed=embed, view=view, ephemeral=True, wait=True)
+    else:
+        msg = await ctx_or_interaction.send(embed=embed, view=view)
+    view.message = msg
+
+
+class TicketButtonStaffSelect(discord.ui.UserSelect):
+    def __init__(self, guild_id: str, panel_name: str, btn_label: str, author_id: int):
+        super().__init__(placeholder="Choose specific staff members (optional)...", min_values=1, max_values=25)
+        self.guild_id = guild_id
+        self.panel_name = panel_name
+        self.btn_label = btn_label
+        self.author_id = author_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ This isn't your setup prompt.", ephemeral=True)
+        staff_ids = [str(u.id) for u in self.values]
+        await ticket_panels_col.update_one(
+            {"guild": self.guild_id, "panel_name": self.panel_name, "buttons.label": self.btn_label},
+            {"$set": {"buttons.$.allowed_staff": staff_ids}},
+        )
+        mentions = ", ".join(u.mention for u in self.values)
+        embed = discord.Embed(
+            title="✅ Ticket Access Restricted",
+            description=f"Only {mentions} will be pinged and given access to tickets opened from **{self.btn_label}**.",
+            color=discord.Color.green(),
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.view.stop()
+
+
+class TicketButtonStaffChoiceView(discord.ui.View):
+    def __init__(self, guild_id: str, panel_name: str, btn_label: str, author_id: int):
+        super().__init__(timeout=120)
+        self.guild_id = guild_id
+        self.panel_name = panel_name
+        self.btn_label = btn_label
+        self.author_id = author_id
+        self.message = None
+        self.add_item(TicketButtonStaffSelect(guild_id, panel_name, btn_label, author_id))
+
+    @discord.ui.button(label="🌐 Everyone (default staff permissions)", style=discord.ButtonStyle.grey)
+    async def everyone_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            return await interaction.response.send_message("❌ This isn't your setup prompt.", ephemeral=True)
+        await ticket_panels_col.update_one(
+            {"guild": self.guild_id, "panel_name": self.panel_name, "buttons.label": self.btn_label},
+            {"$set": {"buttons.$.allowed_staff": None}},
+        )
+        embed = discord.Embed(
+            title="✅ Open Access",
+            description=f"Tickets opened from **{self.btn_label}** will use the normal staff permissions for its category.",
+            color=discord.Color.green(),
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+
+    async def on_timeout(self):
+        if self.message:
+            try:
+                await self.message.edit(
+                    content="⌛ No staff selection made - this button will use the normal staff permissions for its category.",
+                    embed=None,
+                    view=None,
+                )
+            except (discord.HTTPException, discord.NotFound):
+                pass
 
 
 class TicketEditButtonModal(discord.ui.Modal, title="Edit Ticket Panel Button"):
@@ -9157,14 +9268,14 @@ class TicketCategoryButton(discord.ui.Button):
                     ephemeral=True,
                 )
         category_name = self.btn_data["category_name"].lower()
-        category_support_members = await get_category_support_members(guild, category_name)
+        access_members = await resolve_ticket_access_members(guild, self.btn_data, category_name)
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False, embed_links=True, attach_files=True),
             author: discord.PermissionOverwrite(
                 view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True
             ),
         }
-        for member in category_support_members:
+        for member in access_members:
             overwrites[member] = discord.PermissionOverwrite(
                 view_channel=True, send_messages=True, read_message_history=True, embed_links=True, attach_files=True
             )
@@ -9175,6 +9286,7 @@ class TicketCategoryButton(discord.ui.Button):
                 "channel_id": str(channel.id),
                 "owner_id": str(author.id),
                 "category": category_name.lower(),
+                "allowed_staff": self.btn_data.get("allowed_staff"),
                 "created_at": datetime.now(timezone.utc),
             }
         )
@@ -9257,24 +9369,36 @@ async def ping_ticket_roles(channel: discord.TextChannel, guild_id: str, opener_
         allowed_members = {}
         staff_role_mentions = set()
         ticket_entry = await tickets_col.find_one({"guild": str(guild_id), "channel_id": str(channel.id)})
-        category_name = str(ticket_entry.get("category", "")).strip().lower() if ticket_entry else ""
-        category_support_members = []
-        if category_name:
-            category_support_members = await get_category_support_members(channel.guild, category_name)
-        for member in category_support_members:
-            if member.id != opener_id:
-                allowed_members[member.id] = member
+        restricted_staff = ticket_entry.get("allowed_staff") if ticket_entry else None
+        if restricted_staff:
+            # This ticket's button was configured with a specific staff list, so only those
+            # members - not the category's normal staff or the general staff role - get pinged.
+            for uid in restricted_staff:
+                try:
+                    member = channel.guild.get_member(int(uid))
+                except (TypeError, ValueError):
+                    member = None
+                if member and member.id != opener_id:
+                    allowed_members[member.id] = member
+        else:
+            category_name = str(ticket_entry.get("category", "")).strip().lower() if ticket_entry else ""
+            category_support_members = []
+            if category_name:
+                category_support_members = await get_category_support_members(channel.guild, category_name)
+            for member in category_support_members:
+                if member.id != opener_id:
+                    allowed_members[member.id] = member
+            data = await settings_col.find_one({"guild": str(guild_id)})
+            staff_role_id = data.get("staff_role") if data else None
+            if staff_role_id:
+                staff_role = channel.guild.get_role(int(staff_role_id))
+                if staff_role:
+                    staff_role_mentions.add(staff_role.mention)
         for member in channel.members:
             if member.bot or member.id == opener_id:
                 continue
             if channel.permissions_for(member).view_channel:
                 allowed_members[member.id] = member
-        data = await settings_col.find_one({"guild": str(guild_id)})
-        staff_role_id = data.get("staff_role") if data else None
-        if staff_role_id:
-            staff_role = channel.guild.get_role(int(staff_role_id))
-            if staff_role:
-                staff_role_mentions.add(staff_role.mention)
         if not allowed_members and (not staff_role_mentions):
             return
         ping_parts = list(staff_role_mentions)
@@ -9369,9 +9493,10 @@ async def ticketaddbutton(ctx):
             await ticket_panels_col.update_one(
                 {"guild": str(guild.id), "panel_name": panel_name}, {"$push": {"buttons": new_button}}
             )
-            return await ctx.send(
+            await ctx.send(
                 f"✅ Added button to panel `{panel_name}`:\n{emoji or ''} **{button_label}** -> Category **{category_name}**"
             )
+            return await prompt_ticket_button_staff_choice(ctx, str(guild.id), panel_name, button_label, ctx.author.id)
         await ctx.interaction.response.send_modal(TicketAddButtonModal(ctx))
     except Exception as e:
         print("ticketaddbutton ERROR:", traceback.format_exc())
