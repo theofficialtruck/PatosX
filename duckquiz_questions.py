@@ -183,7 +183,7 @@ questions = [
         "options": ["Cayuga", "Swedish Blue", "Rouen", "Magpie"],
         "answer": 2,
     },
-    {"id": 36, "q": "How fast can some ducks fly?", "options": ["10 mph", "30 mph", "60 mph", "100 mph"], "answer": 3},
+    {"id": 36, "q": "How fast can some ducks fly?", "options": ["10 mph", "30 mph", "60 mph", "100 mph"], "answer": 3},
     {"id": 37, "q": "How many toes does a duck have on each foot?", "options": ["2", "3", "4", "5"], "answer": 3},
     {
         "id": 38,

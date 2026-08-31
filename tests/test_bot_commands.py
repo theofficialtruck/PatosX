@@ -17,7 +17,9 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
+
 import main
 
 
@@ -489,8 +491,8 @@ async def test_inventory_shows_tool_durability(monkeypatch):
     await main.inventory.callback(ctx)
     embed = ctx.send.await_args.kwargs["embed"]
     assert embed is not None
-    assert any(("Shovel" in field.name for field in embed.fields))
-    assert any(("100/336" in field.value for field in embed.fields))
+    assert any("Shovel" in field.name for field in embed.fields)
+    assert any("100/336" in field.value for field in embed.fields)
 
 
 def test_get_investment_date_handles_invalid_or_missing_values():
