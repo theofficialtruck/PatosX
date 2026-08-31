@@ -76,6 +76,167 @@ async def test_resolve_ticket_opener_returns_none_for_missing_id():
     guild.get_member.assert_not_called()
 
 
+# === resolve_ticket_access_members: allowed_staff restriction ==================================
+
+
+@pytest.mark.asyncio
+async def test_resolve_ticket_access_members_uses_allowed_staff_when_set(monkeypatch):
+    """A button with an explicit allowed_staff list restricts access to just those members."""
+    staff_member = SimpleNamespace(id=10)
+    guild = SimpleNamespace(get_member=MagicMock(side_effect=lambda uid: staff_member if uid == 10 else None))
+    category_support = AsyncMock()
+    monkeypatch.setattr(main, "get_category_support_members", category_support)
+
+    members = await main.resolve_ticket_access_members(guild, {"allowed_staff": ["10", "999"]}, "support")
+
+    assert members == [staff_member]
+    category_support.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_ticket_access_members_skips_invalid_ids():
+    guild = SimpleNamespace(get_member=MagicMock(return_value=None))
+    members = await main.resolve_ticket_access_members(guild, {"allowed_staff": ["not-a-number"]}, "support")
+    assert members == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_ticket_access_members_falls_back_without_allowed_staff(monkeypatch):
+    """Buttons with no allowed_staff key fall through to the category-wide staff permissions."""
+    category_member = SimpleNamespace(id=5)
+    guild = SimpleNamespace(get_member=MagicMock())
+    monkeypatch.setattr(main, "get_category_support_members", AsyncMock(return_value=[category_member]))
+
+    members = await main.resolve_ticket_access_members(guild, {}, "support")
+
+    assert members == [category_member]
+
+
+# === ping_ticket_roles: allowed_staff restriction ===============================================
+
+
+@pytest.mark.asyncio
+async def test_ping_ticket_roles_restricted_staff_only_pings_allowed_list(monkeypatch):
+    """When a ticket's button was restricted to specific staff, only they get pinged -
+    the general staff role and the category's normal support members must not be pinged."""
+    opener = SimpleNamespace(id=1, mention="<@1>", bot=False)
+    allowed_member = SimpleNamespace(id=2, mention="<@2>", bot=False)
+    other_member = SimpleNamespace(id=3, mention="<@3>", bot=False)
+    staff_role = SimpleNamespace(id=99, mention="<@&99>")
+
+    class FakeGuild:
+        id = 123
+
+        def get_member(self, uid):
+            return {2: allowed_member}.get(uid)
+
+        def get_role(self, role_id):
+            return staff_role
+
+    guild = FakeGuild()
+    sent_messages = []
+    sent_message = SimpleNamespace(delete=AsyncMock())
+
+    class FakeChannel:
+        def __init__(self):
+            self.id = 777
+            self.guild = guild
+            self.members = [opener, allowed_member, other_member]
+
+        def permissions_for(self, member):
+            return SimpleNamespace(view_channel=False)
+
+        async def send(self, content=None, allowed_mentions=None):
+            sent_messages.append(content)
+            return sent_message
+
+    channel = FakeChannel()
+    monkeypatch.setattr(
+        main.tickets_col, "find_one", AsyncMock(return_value={"category": "support", "allowed_staff": ["2"]})
+    )
+    monkeypatch.setattr(main.settings_col, "find_one", AsyncMock(return_value={"staff_role": 99}))
+    category_support = AsyncMock(return_value=[other_member])
+    monkeypatch.setattr(main, "get_category_support_members", category_support)
+
+    await main.ping_ticket_roles(channel, "123", opener_id=1)
+
+    assert len(sent_messages) == 1
+    content = sent_messages[0]
+    assert "<@2>" in content
+    assert "<@&99>" not in content
+    assert "<@3>" not in content
+    category_support.assert_not_awaited()
+
+
+# === TicketButtonStaffSelect: validates staff role before persisting ============================
+
+
+@pytest.mark.asyncio
+async def test_ticket_button_staff_select_persists_only_staff_members(monkeypatch):
+    """A staff member could accidentally select a non-staff user in the picker; only
+    selections that actually hold the configured staff role should be persisted."""
+    staff_user = SimpleNamespace(id=10, mention="<@10>")
+    non_staff_user = SimpleNamespace(id=20, mention="<@20>")
+
+    async def fake_has_staff_role(member, guild):
+        return member.id == 10
+
+    monkeypatch.setattr(main, "has_staff_role", fake_has_staff_role)
+    update_calls = []
+
+    class FakePanelsCol:
+        async def update_one(self, query, update):
+            update_calls.append((query, update))
+
+    monkeypatch.setattr(main, "ticket_panels_col", FakePanelsCol())
+
+    select = main.TicketButtonStaffSelect("123", "Panel", "Support", author_id=1)
+    select._values = [staff_user, non_staff_user]
+    select._view = SimpleNamespace(message=SimpleNamespace(), stop=MagicMock())
+
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=1),
+        guild=SimpleNamespace(
+            id=123, get_member=MagicMock(side_effect=lambda uid: {10: staff_user, 20: non_staff_user}.get(uid))
+        ),
+        response=SimpleNamespace(edit_message=AsyncMock(), send_message=AsyncMock()),
+    )
+
+    await select.callback(interaction)
+
+    assert len(update_calls) == 1
+    _, update = update_calls[0]
+    assert update["$set"]["buttons.$.allowed_staff"] == ["10"]
+    interaction.response.edit_message.assert_awaited_once()
+    interaction.response.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ticket_button_staff_select_rejects_all_non_staff(monkeypatch):
+    non_staff_user = SimpleNamespace(id=20, mention="<@20>")
+
+    monkeypatch.setattr(main, "has_staff_role", AsyncMock(return_value=False))
+    panels_col = MagicMock()
+    panels_col.update_one = AsyncMock()
+    monkeypatch.setattr(main, "ticket_panels_col", panels_col)
+
+    select = main.TicketButtonStaffSelect("123", "Panel", "Support", author_id=1)
+    select._values = [non_staff_user]
+    select._view = SimpleNamespace(message=SimpleNamespace(), stop=MagicMock())
+
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=1),
+        guild=SimpleNamespace(id=123, get_member=MagicMock(return_value=non_staff_user)),
+        response=SimpleNamespace(edit_message=AsyncMock(), send_message=AsyncMock()),
+    )
+
+    await select.callback(interaction)
+
+    panels_col.update_one.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once()
+    interaction.response.edit_message.assert_not_awaited()
+
+
 def _make_find_router(closed, open_):
     """Return a fake tickets_col.find() that routes to the closed-ticket cursor
     for {"guild_id": ...} queries and the open-ticket cursor for {"guild": ...}
