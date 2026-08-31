@@ -58,7 +58,6 @@ from discord import (
     ButtonStyle,
     Embed,
     File,
-    NotFound,
     SelectOption,
     VerificationLevel,
     app_commands,
@@ -1956,6 +1955,41 @@ def suffix_to_int(s: str) -> int:
 # ============================================================
 
 
+def parse_mute_end(raw) -> datetime | None:
+    """Normalize a stored mute_end value (None, datetime, ISO string, or legacy
+    '%Y-%m-%d %H:%M:%S' string) into an aware UTC datetime. Returns None if raw is
+    falsy or unparsable."""
+    if not raw:
+        return None
+    mute_end = raw
+    if isinstance(mute_end, str):
+        try:
+            mute_end = parser.isoparse(mute_end)
+        except ValueError:
+            try:
+                mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
+    if not isinstance(mute_end, datetime):
+        return None
+    if mute_end.tzinfo is None:
+        mute_end = mute_end.replace(tzinfo=timezone.utc)
+    return mute_end
+
+
+async def remove_mute_role(guild: discord.Guild, member: discord.Member, reason: str) -> bool:
+    """Remove the Muted role from member if they currently have it. Returns True if a
+    removal was attempted (regardless of whether it ultimately succeeded)."""
+    mute_role = discord.utils.get(guild.roles, name="Muted")
+    if not mute_role or mute_role not in member.roles:
+        return False
+    try:
+        await member.remove_roles(mute_role, reason=reason)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"[remove_mute_role error] {e}")
+    return True
+
+
 @tasks.loop(seconds=15)
 async def check_expired_mutes():
     """Automatically remove the Muted role from members whose timed mute has expired.
@@ -1968,15 +2002,8 @@ async def check_expired_mutes():
     now = datetime.now(timezone.utc)
     async for doc in mutes_col.find({"mute_end": {"$exists": True}}):
         try:
-            mute_end = doc["mute_end"]
-            if isinstance(mute_end, str):
-                try:
-                    mute_end = datetime.fromisoformat(mute_end)
-                except ValueError:
-                    mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            if mute_end.tzinfo is None:
-                mute_end = mute_end.replace(tzinfo=timezone.utc)
-            if mute_end <= now:
+            mute_end = parse_mute_end(doc.get("mute_end"))
+            if mute_end and mute_end <= now:
                 guild = bot.get_guild(int(doc["guild_id"]))
                 if not guild:
                     continue
@@ -1984,15 +2011,10 @@ async def check_expired_mutes():
                 if not member:
                     await mutes_col.delete_one({"_id": doc["_id"]})
                     continue
-                mute_role = discord.utils.get(guild.roles, name="Muted")
-                if mute_role and mute_role in member.roles:
-                    try:
-                        await member.remove_roles(mute_role, reason="Mute expired")
-                        await log_action(
-                            ctx=None, message=f"Auto-unmuted {member}", user_id=member.id, action_type="unmute"
-                        )
-                    except Exception as inner_e:
-                        print(f"[Auto-unmute role removal error] {inner_e}")
+                if await remove_mute_role(guild, member, reason="Mute expired"):
+                    await log_action(
+                        ctx=None, message=f"Auto-unmuted {member}", user_id=member.id, action_type="unmute"
+                    )
                 await mutes_col.delete_one({"_id": doc["_id"]})
         except Exception as e:
             print(f"[Auto-unmute error - mutes_col] {e}")
@@ -3089,25 +3111,59 @@ async def schedule_unmute(guild, member, remaining):
         if not guild:
             print("[schedule_unmute] Guild not found, skipping.")
             return
-        member = guild.get_member(member.id)
+        member_id = member.id
+        member = guild.get_member(member_id)
         if not member:
-            print(f"[schedule_unmute] Member {member.id} not found, likely left the server.")
-            await mutes_col.delete_one({"guild_id": guild.id, "user_id": member.id})
+            print(f"[schedule_unmute] Member {member_id} not found, likely left the server.")
+            await mutes_col.delete_one({"guild_id": guild.id, "user_id": member_id})
             return
-        mute_role = discord.utils.get(guild.roles, name="Muted")
-        if mute_role and mute_role in member.roles:
-            try:
-                await member.remove_roles(mute_role, reason="Mute expired")
-                print(f"[schedule_unmute] Auto unmuted {member} in {guild.name}")
-            except NotFound:
-                print(f"[schedule_unmute] Member {member.id} not found during unmute.")
-            except Exception as inner_e:
-                print(f"[schedule_unmute role removal error] {inner_e}")
-        await mutes_col.delete_one({"guild_id": guild.id, "user_id": member.id})
+        await remove_mute_role(guild, member, reason="Mute expired")
+        print(f"[schedule_unmute] Auto unmuted {member} in {guild.name}")
+        await mutes_col.delete_one({"guild_id": guild.id, "user_id": member_id})
     except asyncio.CancelledError:
         print(f"[schedule_unmute] Task for {member.id} cancelled.")
     except Exception as e:
         print(f"[schedule_unmute error] {e}")
+
+
+async def _reapply_or_clear_mute(guild: discord.Guild, member: discord.Member, doc: dict, mute_role) -> None:
+    """Per-member body of the on_ready restart-reapply loop: if the stored mute has
+    already expired, delete the record and remove the role (never both leave the role
+    stuck); otherwise reapply the role if it's missing (e.g. manually stripped offline)."""
+    mute_end = parse_mute_end(doc.get("mute_end"))
+    if mute_end is None:
+        if mute_role and mute_role not in member.roles:
+            await member.add_roles(mute_role, reason="Reapplying mute after restart")
+        return
+    if mute_end <= datetime.now(timezone.utc):
+        await mutes_col.delete_one({"_id": doc["_id"]})
+        await remove_mute_role(guild, member, reason="Mute expired while bot was offline")
+        return
+    if mute_role and mute_role not in member.roles:
+        await member.add_roles(mute_role, reason="Reapplying mute after restart")
+
+
+async def _handle_rejoin_mute(member: discord.Member, doc: dict) -> None:
+    """Handle a rejoining member who has an existing mutes_col record: if the mute has
+    already expired, clean up the record without reapplying the role; otherwise
+    reapply the role and reschedule its removal."""
+    guild = member.guild
+    mute_end = parse_mute_end(doc.get("mute_end"))
+    if mute_end is None:
+        mute_role = discord.utils.get(guild.roles, name="Muted")
+        if mute_role and mute_role not in member.roles:
+            await member.add_roles(mute_role, reason="Reapplying mute after rejoin")
+        return
+    now_utc = datetime.now(timezone.utc)
+    if now_utc >= mute_end:
+        await mutes_col.delete_one({"guild_id": guild.id, "user_id": member.id})
+        await remove_mute_role(guild, member, reason="Mute expired before rejoin")
+        return
+    mute_role = discord.utils.get(guild.roles, name="Muted")
+    if mute_role and mute_role not in member.roles:
+        await member.add_roles(mute_role, reason="Reapplying mute after rejoin")
+    remaining = (mute_end - now_utc).total_seconds()
+    bot.loop.create_task(schedule_unmute(guild, member, remaining))
 
 
 async def check_and_use_food_item(user_id, guild_id, item_id):
@@ -3691,19 +3747,7 @@ async def on_ready():
             member = guild.get_member(doc["user_id"])
             if not member:
                 continue
-            mute_end = doc.get("mute_end")
-            if mute_end:
-                if isinstance(mute_end, str):
-                    try:
-                        mute_end = datetime.fromisoformat(mute_end)
-                    except ValueError:
-                        mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                if mute_end.tzinfo is None:
-                    mute_end = mute_end.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) >= mute_end:
-                    await mutes_col.delete_one({"_id": doc["_id"]})
-                if mute_role and mute_role not in member.roles:
-                    await member.add_roles(mute_role, reason="Reapplying mute after restart")
+            await _reapply_or_clear_mute(guild, member, doc, mute_role)
     async for doc in roles_col.find({}):
         guild_id = doc["_id"]
         guild = bot.get_guild(guild_id)
@@ -11376,8 +11420,8 @@ async def mute(ctx, member: discord.Member, duration: str | None = None, *, reas
     if seconds:
         mute_end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
         await mutes_col.update_one(
-            {"guild_id": guild_id, "user_id": user_id},
-            {"$set": {"guild_id": guild_id, "user_id": user_id, "mute_end": mute_end.isoformat()}},
+            {"guild_id": ctx.guild.id, "user_id": member.id},
+            {"$set": {"guild_id": ctx.guild.id, "user_id": member.id, "mute_end": mute_end.isoformat()}},
             upsert=True,
         )
         try:
@@ -12219,7 +12263,7 @@ class ModerationConfirmView(discord.ui.View):
                         end_time = datetime.now(timezone.utc) + timedelta(seconds=seconds)
                         await mutes_col.update_one(
                             {"guild_id": ctx.guild.id, "user_id": member.id},
-                            {"$set": {"mute_end": end_time}},
+                            {"$set": {"mute_end": end_time.isoformat()}},
                             upsert=True,
                         )
                         msg = f"🔇 Muted {member.mention} until <t:{int(end_time.timestamp())}:f>."
@@ -12698,31 +12742,7 @@ async def on_member_join(member):
                 )
         doc = await mutes_col.find_one({"guild_id": member.guild.id, "user_id": member.id})
         if doc:
-            mute_role = discord.utils.get(member.guild.roles, name="Muted")
-            if mute_role and mute_role not in member.roles:
-                await member.add_roles(mute_role, reason="Reapplying mute after rejoin")
-            mute_end = doc.get("mute_end")
-            if mute_end:
-                if isinstance(mute_end, str):
-                    try:
-                        mute_end = datetime.fromisoformat(mute_end)
-                    except Exception:
-                        print(f"[on_member_join] Invalid mute_end format for {member.id}: {mute_end}")
-                        mute_end = None
-                if mute_end:
-                    if isinstance(mute_end, str):
-                        try:
-                            mute_end = datetime.fromisoformat(mute_end)
-                        except ValueError:
-                            mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                    if mute_end.tzinfo is None:
-                        mute_end = mute_end.replace(tzinfo=timezone.utc)
-                    now_utc = datetime.now(timezone.utc)
-                    if now_utc < mute_end:
-                        remaining = (mute_end - now_utc).total_seconds()
-                        bot.loop.create_task(schedule_unmute(member.guild, member, remaining))
-                    elif now_utc >= mute_end:
-                        await mutes_col.delete_one({"guild_id": member.guild.id, "user_id": member.id})
+            await _handle_rejoin_mute(member, doc)
     except Exception as e:
         print("on_member_join ERROR:", e)
 
