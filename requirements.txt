@@ -10,12 +10,12 @@ aiohttp==3.14.3
 pytz==2026.3.post1
 python-dateutil==2.9.0.post0
 google-generativeai==0.8.6
-google-genai==2.19.0
+google-genai==2.20.0
 
 flake8==7.3.0
 black==26.5.1
-isort==8.0.1
-ruff==0.16.4
+isort==9.0.1
+ruff==0.16.5
 codespell==2.4.3
 
 pytest==9.1.1
