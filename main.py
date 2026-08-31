@@ -272,6 +272,7 @@ deep_ocean_fishes = [
     ("🦞 Spiny Lobster", 750),
     ("🐡 Blobfish", 600),
     ("🦈 Goblin Shark", 1100),
+    ("🌿 Seaweed", 550),
 ]
 dig_rocks = [("amber shard", 240), ("moonstone fragment", 650), ("fossil core", 1000)]
 bugs_to_catch = [
@@ -1773,11 +1774,11 @@ def normalize_inventory_items(inventory):
                 normalized.append({"_id": item_key, "uses_left": max_uses})
                 changed = True
             continue
-        if item_key == "pet_duck":
+        if item_key in ("pet_duck", "nitro_boost"):
             uses_left = 3
             if isinstance(item, dict) and isinstance(item.get("uses_left"), int):
                 uses_left = max(0, item.get("uses_left"))
-            canonical = {"_id": "pet_duck", "uses_left": uses_left}
+            canonical = {"_id": item_key, "uses_left": uses_left}
             if item != canonical:
                 changed = True
             normalized.append(canonical)
@@ -1811,6 +1812,35 @@ def consume_tool_use(inventory, tool_name):
         inventory[idx] = {"_id": tool_key, "uses_left": uses_left}
         return (True, False, uses_left)
     return (False, False, None)
+
+
+# Fraction each Nitro Boost use shaves off a command's cooldown, sized to its 1000 coin price
+# (same tier as the Pet Duck's 30% luck buff, but for cooldowns instead of earnings).
+NITRO_BOOST_COOLDOWN_REDUCTION_PCT = 0.2
+
+
+def consume_nitro_boost(inventory: list):
+    """Decrement the uses_left on the first Nitro Boost in inventory in place, matching the
+    Pet Duck stacking pattern. Returns (used, expired); expired is True once its last use is spent."""
+    for idx, item in enumerate(inventory):
+        if isinstance(item, dict) and item.get("_id") == "nitro_boost":
+            item["uses_left"] -= 1
+            expired = item["uses_left"] <= 0
+            if expired:
+                inventory.pop(idx)
+            return (True, expired)
+    return (False, False)
+
+
+def reduce_command_cooldown(ctx, seconds: float) -> None:
+    """Shift ctx.command's discord.py rate-limit bucket backward by `seconds`, so the next
+    invocation becomes available that much sooner. No-op for commands with no active cooldown bucket."""
+    buckets = getattr(ctx.command, "_buckets", None)
+    if buckets is None or not buckets.valid:
+        return
+    bucket = buckets.get_bucket(ctx)
+    if bucket is not None:
+        bucket._window -= seconds
 
 
 def check_target_permission(ctx, member: discord.Member):
@@ -3199,6 +3229,17 @@ async def ensure_shop_items():
             "name_lower": "pet duck",
             "price": 1000,
             "description": "🦆 Cool pet duck! Gives 30% luck for 3 uses on certain activities.",
+            "uses_left": 3,
+        },
+        {
+            "_id": "nitro_boost",
+            "name": "Nitro Boost",
+            "name_lower": "nitro boost",
+            "price": 1000,
+            "description": (
+                "🚀 Cuts the cooldown of beg, lottery, work, fish, swim, crime, and bugcatch by "
+                f"{int(NITRO_BOOST_COOLDOWN_REDUCTION_PCT * 100)}% for 3 uses."
+            ),
             "uses_left": 3,
         },
         {
@@ -5666,15 +5707,26 @@ async def beg(ctx):
                 await ctx.send("🦆 Your Pet Duck boosted your begging earnings by 30%!")
                 duck_used = True
                 break
+        nitro_used, nitro_expired = consume_nitro_boost(inventory)
+        nitro_reduction_seconds = 0
+        if nitro_used:
+            nitro_reduction_seconds = int(900 * NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            await ctx.send(
+                f"🚀 Your Nitro Boost cut your next beg cooldown by {nitro_reduction_seconds // 60} minutes!"
+            )
+            if nitro_expired:
+                await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
         amount = int(amount * earnings_multiplier)
-        if duck_used or has_cookie:
+        if duck_used or has_cookie or nitro_used:
             await economy_col.update_one(
                 {"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"inventory": inventory}}, upsert=True
             )
         donor = random.choice(BEG_DONORS)
         await add_balance(ctx.author.id, ctx.guild.id, amount)
+        effective_beg_ts = now - timedelta(seconds=nitro_reduction_seconds)
         await economy_col.update_one(
-            {"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"last_beg": now.isoformat(timespec="seconds")}}
+            {"_id": f"{ctx.guild.id}-{ctx.author.id}"},
+            {"$set": {"last_beg": effective_beg_ts.isoformat(timespec="seconds")}},
         )
         msg = f"🙇 {donor} was kind enough to donate **{amount} coins** to you!"
         if has_cookie:
@@ -5808,10 +5860,17 @@ async def process_shop_purchase(member, guild, store_item: dict, user_data: dict
     item_id = str(store_item.get("_id", ""))
     item_key = str(store_item.get("name_lower") or item_name).strip().lower()
     is_pet_duck = store_item.get("name_lower") == "pet_duck" or item_id == "pet_duck" or item_id.endswith("-pet_duck")
+    is_nitro_boost = (
+        store_item.get("name_lower") == "nitro_boost" or item_id == "nitro_boost" or item_id.endswith("-nitro_boost")
+    )
     if is_pet_duck:
         inventory.append({"_id": "pet_duck", "uses_left": 3})
         success_message = "🦆 You bought a Pet Duck! It has 3 uses. You can stack multiple ducks."
         purchase_type = "pet_duck"
+    elif is_nitro_boost:
+        inventory.append({"_id": "nitro_boost", "uses_left": 3})
+        success_message = "🚀 You bought a Nitro Boost! It has 3 uses. You can stack multiple boosts."
+        purchase_type = "nitro_boost"
     elif item_key in TOOL_DURABILITIES:
         max_uses = TOOL_DURABILITIES[item_key]
         inventory.append({"_id": item_key, "uses_left": max_uses})
@@ -6239,6 +6298,8 @@ async def shop(ctx):
                 description = item.get("description", "No description available.")
                 if item["_id"] == "pet_duck":
                     description += "\n🦆 Stackable: Yes (3 uses per duck)"
+                if item.get("name_lower") == "nitro boost":
+                    description += "\n🚀 Stackable: Yes (3 uses per boost)"
                 embed.add_field(name=f"{display_name} - 🪙 {price}", value=description, inline=False)
                 if len(embed.fields) >= 24:
                     embed.add_field(
@@ -6532,11 +6593,16 @@ async def inventory(ctx):
     tool_durability = {}
     duck_total = 0
     duck_uses = 0
+    nitro_total = 0
+    nitro_uses = 0
     for item in inv:
         item_key = normalize_item_key(item)
         if item_key == "pet_duck":
             duck_total += 1
             duck_uses += item.get("uses_left", 0) if isinstance(item, dict) else 0
+        elif item_key == "nitro_boost":
+            nitro_total += 1
+            nitro_uses += item.get("uses_left", 0) if isinstance(item, dict) else 0
         elif item_key in TOOL_DURABILITIES:
             uses_left = (
                 item.get("uses_left", TOOL_DURABILITIES[item_key])
@@ -6553,6 +6619,13 @@ async def inventory(ctx):
         embed.add_field(
             name=f"{shop_item['name']} x{duck_total}",
             value=f"{shop_item.get('description', '')} ({duck_uses} uses left total)",
+            inline=False,
+        )
+    if nitro_total > 0:
+        shop_item = await shop_col.find_one({"_id": "nitro_boost"})
+        embed.add_field(
+            name=f"{shop_item['name']} x{nitro_total}",
+            value=f"{shop_item.get('description', '')} ({nitro_uses} uses left total)",
             inline=False,
         )
     for tool_key, durability_values in tool_durability.items():
@@ -6988,6 +7061,15 @@ async def lottery(ctx):
                 inventory.pop(i)
                 await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
             break
+    nitro_used, nitro_expired = consume_nitro_boost(inventory)
+    nitro_reduction_seconds = 0
+    if nitro_used:
+        nitro_reduction_seconds = int(3600 * NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+        await ctx.send(
+            f"🚀 Your Nitro Boost cut your next lottery cooldown by {nitro_reduction_seconds // 60} minutes!"
+        )
+        if nitro_expired:
+            await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
     chance = base_chance * luck_boost
     data["wallet"] -= ticket_price
     await economy_col.update_one({"_id": user_id}, {"$set": {"wallet": data["wallet"]}})
@@ -6999,7 +7081,10 @@ async def lottery(ctx):
     else:
         await ctx.send("😢 No luck this time. Better luck next draw!")
     data["inventory"] = inventory
-    await economy_col.update_one({"_id": user_id}, {"$set": {"inventory": inventory, "last_lottery": now.isoformat()}})
+    effective_lottery_ts = now - timedelta(seconds=nitro_reduction_seconds)
+    await economy_col.update_one(
+        {"_id": user_id}, {"$set": {"inventory": inventory, "last_lottery": effective_lottery_ts.isoformat()}}
+    )
 
 
 @lottery.error
@@ -7118,6 +7203,11 @@ async def work(ctx):
                     await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
                 duck_used = True
                 break
+        nitro_used, nitro_expired = consume_nitro_boost(inventory)
+        nitro_reduction_seconds = 0
+        if nitro_used:
+            nitro_reduction_seconds = int(43200 * NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            inventory_dirty = True
         if duck_used:
             inventory_dirty = True
         if inventory_dirty:
@@ -7126,6 +7216,12 @@ async def work(ctx):
             )
         if has_drink:
             await ctx.send("⚡ **Energy Drink consumed!** Work cooldown reduced by 50%!")
+        if nitro_used:
+            await ctx.send(
+                f"🚀 Your Nitro Boost cut your next work cooldown by {nitro_reduction_seconds // 3600} hours!"
+            )
+            if nitro_expired:
+                await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
         base_payouts = {"developer": (300, 600), "duck": (200, 500)}
         descriptions = {
             "developer": "You wrote some killer code 💻",
@@ -7138,7 +7234,9 @@ async def work(ctx):
         high = int(high * multiplier)
         earned = random.randint(low, high)
         await add_balance(ctx.author.id, ctx.guild.id, earned)
-        effective_ts = datetime.now(timezone.utc) - timedelta(seconds=int(3600 * (1 - cooldown_reduction)))
+        effective_ts = datetime.now(timezone.utc) - timedelta(
+            seconds=int(3600 * (1 - cooldown_reduction)) + nitro_reduction_seconds
+        )
         await economy_col.update_one(
             {"_id": cooldown_key}, {"$set": {"timestamp": effective_ts.isoformat()}}, upsert=True
         )
@@ -7336,6 +7434,13 @@ async def fish(ctx):
                     inventory.pop(i)
                     await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
                 break
+        nitro_used, nitro_expired = consume_nitro_boost(inventory)
+        if nitro_used:
+            reduction_seconds = int(3600 * NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            reduce_command_cooldown(ctx, reduction_seconds)
+            await ctx.send(f"🚀 Your Nitro Boost cut your next fish cooldown by {reduction_seconds // 60} minutes!")
+            if nitro_expired:
+                await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
         adjusted_chance = min(base_chance + luck_buff, 1.0)
         success = random.random() < adjusted_chance
         if not success:
@@ -7402,6 +7507,13 @@ async def swim(ctx):
                     inventory.pop(i)
                     await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
                 break
+        nitro_used, nitro_expired = consume_nitro_boost(inventory)
+        if nitro_used:
+            reduction_seconds = int(3600 * NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            reduce_command_cooldown(ctx, reduction_seconds)
+            await ctx.send(f"🚀 Your Nitro Boost cut your next swim cooldown by {reduction_seconds // 60} minutes!")
+            if nitro_expired:
+                await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
         adjusted_chance = min(base_chance + luck_buff, 1.0)
         success = random.random() < adjusted_chance
         if not success:
@@ -7775,14 +7887,24 @@ async def crime(ctx, *, choice: str):
         coffee_bonus = 0.25 if coffee_used else 0.0
         if coffee_used:
             await ctx.send("☕ **Coffee Cup consumed!** Crime success chance increased by 25%!")
+        nitro_used, nitro_expired = consume_nitro_boost(inventory)
+        nitro_reduction_seconds = 0
+        if nitro_used:
+            nitro_reduction_seconds = int(86400 * NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            await ctx.send(
+                f"🚀 Your Nitro Boost cut your next crime cooldown by {nitro_reduction_seconds // 3600} hours!"
+            )
+            if nitro_expired:
+                await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
         adjusted_chance = min(conf["chance"] + luck_buff + coffee_bonus, 1.0)
         success = random.random() < adjusted_chance
         if success:
             amount = random.randint(*conf["gain"])
             await add_balance(ctx.author.id, ctx.guild.id, amount)
+            effective_crime_ts = now - timedelta(seconds=nitro_reduction_seconds)
             await economy_col.update_one(
                 {"_id": f"{ctx.guild.id}-{ctx.author.id}"},
-                {"$set": {"inventory": inventory, "last_crime": now.isoformat()}},
+                {"$set": {"inventory": inventory, "last_crime": effective_crime_ts.isoformat()}},
             )
             msg = f"💥 Crime successful! You earned **{amount} coins** via `{choice}` crime."
             if lockpick_break_notice:
@@ -8447,6 +8569,13 @@ async def bugcatch(ctx):
                     inventory.pop(i)
                     await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
                 break
+        nitro_used, nitro_expired = consume_nitro_boost(inventory)
+        if nitro_used:
+            reduction_seconds = int(3600 * NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            reduce_command_cooldown(ctx, reduction_seconds)
+            await ctx.send(f"🚀 Your Nitro Boost cut your next bugcatch cooldown by {reduction_seconds // 60} minutes!")
+            if nitro_expired:
+                await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
         bug_name, base_value = random.choice(bugs_to_catch)
         coins_earned = int(base_value * coins_multiplier)
         await add_balance(ctx.author.id, ctx.guild.id, coins_earned)
@@ -9012,15 +9141,33 @@ class TicketButtonStaffSelect(discord.ui.UserSelect):
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             return await interaction.response.send_message("❌ This isn't your setup prompt.", ephemeral=True)
-        staff_ids = [str(u.id) for u in self.values]
+        guild = interaction.guild
+        valid_members = []
+        invalid_users = []
+        for u in self.values:
+            member = u if isinstance(u, discord.Member) else guild.get_member(u.id)
+            if member and await has_staff_role(member, guild):
+                valid_members.append(member)
+            else:
+                invalid_users.append(u)
+        if not valid_members:
+            return await interaction.response.send_message(
+                "❌ None of the selected users hold the configured staff role. Pick actual staff members.",
+                ephemeral=True,
+            )
+        staff_ids = [str(m.id) for m in valid_members]
         await ticket_panels_col.update_one(
             {"guild": self.guild_id, "panel_name": self.panel_name, "buttons.label": self.btn_label},
             {"$set": {"buttons.$.allowed_staff": staff_ids}},
         )
-        mentions = ", ".join(u.mention for u in self.values)
+        mentions = ", ".join(m.mention for m in valid_members)
+        description = f"Only {mentions} will be pinged and given access to tickets opened from **{self.btn_label}**."
+        if invalid_users:
+            skipped = ", ".join(u.mention for u in invalid_users)
+            description += f"\n⚠️ Skipped (not staff): {skipped}"
         embed = discord.Embed(
             title="✅ Ticket Access Restricted",
-            description=f"Only {mentions} will be pinged and given access to tickets opened from **{self.btn_label}**.",
+            description=description,
             color=discord.Color.green(),
         )
         await interaction.response.edit_message(embed=embed, view=None)

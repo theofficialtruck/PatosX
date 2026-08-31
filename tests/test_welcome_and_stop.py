@@ -16,6 +16,7 @@
 
 """Tests for welcome message customisation and stop command authorized-user listing."""
 
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -140,8 +141,8 @@ def test_stop_command_source_has_no_hardcoded_ids():
 @pytest.mark.asyncio
 async def test_stop_command_lists_guild_members(monkeypatch):
     monkeypatch.setenv("AUTHORIZED_USER_IDS", "111,222")
-    # rebuild the set as the module would
-    auth_ids = {int(x) for x in ["111", "222"] if x.strip().isdigit()}
+    # rebuild the set exactly as main.py does: split the env value on commas
+    auth_ids = {int(x) for x in os.environ["AUTHORIZED_USER_IDS"].split(",") if x.strip().isdigit()}
     monkeypatch.setattr(main, "AUTHORIZED_USER_IDS", auth_ids)
 
     ctx = MagicMock()
