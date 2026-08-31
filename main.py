@@ -6296,10 +6296,6 @@ async def shop(ctx):
                 display_name = item.get("name") or item.get("_id", "Unnamed Item")
                 price = item.get("price", "Unknown")
                 description = item.get("description", "No description available.")
-                if item["_id"] == "pet_duck":
-                    description += "\n🦆 Stackable: Yes (3 uses per duck)"
-                if item.get("name_lower") == "nitro boost":
-                    description += "\n🚀 Stackable: Yes (3 uses per boost)"
                 embed.add_field(name=f"{display_name} - 🪙 {price}", value=description, inline=False)
                 if len(embed.fields) >= 24:
                     embed.add_field(
