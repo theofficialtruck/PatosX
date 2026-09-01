@@ -82,6 +82,9 @@ dmypy.json
 .cursorignore
 .cursorindexingignore
 .env
+.env.diagnose
+heartbeat.txt
+.claude_diagnose_offset
 *.py[cod]
 bot/warnings.json
 bot/actions.json
