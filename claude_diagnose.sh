@@ -83,6 +83,8 @@ If you are not confident about the root cause, do not guess-fix — instead writ
 
 claude_output="$(mktemp)"
 if timeout 900 claude -p "$PROMPT" \
+  --model claude-sonnet-5 \
+  --effort high \
   --output-format json \
   --allowedTools "Bash(git checkout -b *),Bash(git add *),Bash(git commit *),Bash(git push origin *),Bash(git log*),Bash(git show*),Bash(git diff*),Bash(journalctl*),Read,Write,Edit" \
   >"$claude_output" 2>&1; then
