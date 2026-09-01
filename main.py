@@ -1990,6 +1990,25 @@ async def remove_mute_role(guild: discord.Guild, member: discord.Member, reason:
     return True
 
 
+HEARTBEAT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heartbeat.txt")
+
+
+def _write_heartbeat_file() -> None:
+    with open(HEARTBEAT_FILE, "w") as f:
+        f.write(datetime.now(timezone.utc).isoformat())
+
+
+@tasks.loop(seconds=15)
+async def write_heartbeat():
+    """Write the current UTC time to a heartbeat file so an external watchdog can
+    detect a hung event loop (process alive under systemd but no longer servicing
+    async tasks), which a plain 'is the process running' check would miss."""
+    try:
+        await asyncio.to_thread(_write_heartbeat_file)
+    except OSError as e:
+        print(f"[write_heartbeat error] {e}")
+
+
 @tasks.loop(seconds=15)
 async def check_expired_mutes():
     """Automatically remove the Muted role from members whose timed mute has expired.
@@ -3734,6 +3753,8 @@ async def on_ready():
         print("🔄 Started reminders check loop")
     if not check_expired_mutes.is_running():
         check_expired_mutes.start()
+    if not write_heartbeat.is_running():
+        write_heartbeat.start()
     await load_sticky_notes()
     mute_role_name = "Muted"
     mute_role = None
@@ -4693,7 +4714,7 @@ async def on_presence_update(before, after):
     await _sync_vanity_role(after.guild, after, data)
 
 
-@tasks.loop(seconds=0.01)
+@tasks.loop(seconds=30)
 async def check_all_statuses():
     for guild in bot.guilds:
         data = await vanity_col.find_one({"guild": str(guild.id)})
@@ -10645,7 +10666,7 @@ async def poll(ctx):
         await ctx.send(f"⚠️ Error: {e}")
 
 
-@tasks.loop(seconds=0.01)
+@tasks.loop(seconds=30)
 async def check_polls():
     now = datetime.now(timezone.utc)
     async for poll in polls_col.find({"end_time": {"$lte": now}}):
@@ -12816,7 +12837,7 @@ async def quote(ctx):
         print(f"[QUOTE ERROR] {type(e).__name__} - {e}")
 
 
-@tasks.loop(seconds=0.01)
+@tasks.loop(seconds=30)
 async def check_reminders():
     """Fire any due reminders by DMing the requesting user, then delete the reminder record."""
     now = datetime.now(timezone.utc)
