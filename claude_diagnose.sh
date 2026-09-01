@@ -28,10 +28,22 @@ export NVM_DIR="/home/thetruck/.nvm"
 [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
 nvm use default >/dev/null 2>&1 || true
 
-# Optional local secrets file (chmod 600), kept out of git via .gitignore:
+# Optional local secrets/config file (chmod 600), kept out of git via .gitignore:
 #   CLAUDE_CODE_OAUTH_TOKEN=...  (from `claude setup-token` - uses your Claude
 #   subscription, not separate pay-per-token API billing)
+#   NTFY_TOPIC=...   (phone push via ntfy.sh - see README)
 [[ -f "$PROJECT_DIR/.env.diagnose" ]] && source "$PROJECT_DIR/.env.diagnose"
+
+notify() {
+  local message="$1"
+  [[ -z "${NTFY_TOPIC:-}" ]] && return 0
+  curl -fsS -m 10 \
+    -H "Title: PatosX diagnosis" \
+    -H "Priority: default" \
+    -H "Tags: mag" \
+    -d "$message" \
+    "https://ntfy.sh/$NTFY_TOPIC" >/dev/null 2>&1 || true
+}
 
 if ! command -v claude >/dev/null 2>&1; then
   echo "$(date -Is) [skip] claude CLI not installed" >>"$RUN_LOG"
@@ -69,12 +81,24 @@ If you find a clear, narrowly-scoped code bug that plausibly explains this incid
 
 If you are not confident about the root cause, do not guess-fix — instead write a short diagnosis to $PROJECT_DIR/claude_diagnose_findings.log (append, with a timestamp header) explaining what you found and did not find, and stop there without touching git or main.py."
 
+claude_output="$(mktemp)"
 if timeout 900 claude -p "$PROMPT" \
   --output-format json \
   --allowedTools "Bash(git checkout -b *),Bash(git add *),Bash(git commit *),Bash(git push origin *),Bash(git log*),Bash(git show*),Bash(git diff*),Bash(journalctl*),Read,Write,Edit" \
-  >>"$RUN_LOG" 2>&1; then
+  >"$claude_output" 2>&1; then
   echo "$total_lines" >"$MARKER_FILE"
+  summary="$(python3 -c '
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("result", "Diagnosis complete - see claude_diagnose.log."))
+except Exception:
+    print("Diagnosis complete - see claude_diagnose.log.")
+' "$claude_output" 2>/dev/null)"
+  notify "${summary:0:1000}"
 else
   claude_exit=$?
   echo "$(date -Is) [error] claude run failed or timed out (exit $claude_exit) - leaving offset at $last_offset so the next run retries these incidents" >>"$RUN_LOG"
+  notify "Diagnostic run failed or timed out (exit $claude_exit) - will retry next cycle."
 fi
+cat "$claude_output" >>"$RUN_LOG"
+rm -f "$claude_output"

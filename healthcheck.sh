@@ -30,8 +30,25 @@ RUN_LOG="$PROJECT_DIR/watchdog_cron.log"
 HEARTBEAT_STALE_SECS=180
 HEARTBEAT_GRACE_SECS=90
 
+# Optional local config file (chmod 600), kept out of git via .gitignore:
+#   NTFY_TOPIC=...   (phone push via ntfy.sh - see README)
+#   CLAUDE_CODE_OAUTH_TOKEN=...   (used by claude_diagnose.sh, not this script)
+[[ -f "$PROJECT_DIR/.env.diagnose" ]] && source "$PROJECT_DIR/.env.diagnose"
+
+notify() {
+  local message="$1"
+  [[ -z "${NTFY_TOPIC:-}" ]] && return 0
+  curl -fsS -m 10 \
+    -H "Title: PatosX watchdog" \
+    -H "Priority: high" \
+    -H "Tags: warning" \
+    -d "$message" \
+    "https://ntfy.sh/$NTFY_TOPIC" >/dev/null 2>&1 || true
+}
+
 log_incident() {
   local reason="$1"
+  notify "Restarting patosx: $reason"
   {
     echo "===== INCIDENT $(date -Is) ====="
     echo "Reason: $reason"
@@ -46,6 +63,7 @@ log_incident() {
 restart_service() {
   if ! sudo -n systemctl restart "$SERVICE" 2>>"$RUN_LOG"; then
     echo "$(date -Is) [error] sudo -n systemctl restart failed - passwordless sudo may not be configured for this command" >>"$RUN_LOG"
+    notify "ERROR: detected a problem but the restart command itself failed - patosx may still be down. Check passwordless sudo config."
   fi
 }
 
