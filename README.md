@@ -78,18 +78,82 @@ NEVER commit your real `.env` file.
 ## Project structure
 
 ```text
-.github/workflows/     GitHub Actions workflows (CI)
-tests/                 Pytest test suite
-.env.example           Example environment template
-main.py                Main bot entry point
-requirements.txt       Python dependencies
-duckquiz_questions.py  Quiz question bank
-duckfacts.txt          Duck facts data file
-ruff.toml              Ruff configuration
-pytest.ini             Pytest configuration
-LICENSE.md             GNU AGPL-3.0 license text
-CLA.md                 Contributor License Agreement
+.github/workflows/      GitHub Actions workflows (CI)
+tests/                  Pytest test suite
+.env.example            Example environment template
+main.py                 Main bot entry point
+requirements.txt        Python dependencies
+duckquiz_questions.py   Quiz question bank
+duckfacts.txt           Duck facts data file
+ruff.toml               Ruff configuration
+pytest.ini              Pytest configuration
+start.sh                Pulls latest from GitHub and restarts the systemd service
+healthcheck.sh          Watchdog: detects crashes/hangs and restarts the service
+claude_diagnose.sh      Investigates watchdog incidents and proposes fixes
+LICENSE.md              GNU AGPL-3.0 license text
+CLA.md                  Contributor License Agreement
 ```
+
+## Running as a systemd service with a watchdog
+
+For an always-on deployment, `start.sh <branch>` deploys the bot as a systemd
+service (`patosx.service`, `Restart=always`) rather than running `python
+main.py` directly. `Restart=always` only covers the case where the process
+actually exits — it does nothing if the process is alive but stuck (an
+asyncio event loop deadlock, for example), because systemd still sees it as
+"active". Two extra scripts close that gap:
+
+- **`main.py`'s `write_heartbeat` loop** stamps `heartbeat.txt` with the
+  current UTC time every 15 seconds, from its own independent task loop. If
+  the event loop is ever stuck badly enough to stop servicing Discord, this
+  stops updating too — it's the one external signal that can tell "alive"
+  apart from "actually working".
+- **`healthcheck.sh`**, run every 5 minutes via cron, restarts the service if
+  systemd reports it as down, if the heartbeat file goes stale (>180s), or if
+  it never appears at all after a startup grace period. It only ever
+  restarts the already-deployed build (`systemctl restart`) — it never pulls
+  new code; deploys stay a deliberate `./start.sh` action. Every restart it
+  triggers is logged to `watchdog_incidents.log` with a status/journal
+  snapshot.
+- **`claude_diagnose.sh`**, run every 15 minutes via cron, checks for new
+  entries in `watchdog_incidents.log` and, if there are any, runs the
+  [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) headlessly
+  to investigate root cause. If it finds a clear, narrowly-scoped bug, it
+  pushes a fix to a new `fix/incident-*` branch for manual review — it never
+  merges, never touches `main` directly, and never restarts anything itself.
+  If it isn't confident, it writes its reasoning to
+  `claude_diagnose_findings.log` instead of guessing.
+
+Setup, once the service itself is running:
+
+```bash
+crontab -e
+```
+
+```cron
+*/5 * * * *  /path/to/patosx/healthcheck.sh >> /path/to/patosx/watchdog_cron.log 2>&1
+*/15 * * * * /path/to/patosx/claude_diagnose.sh
+```
+
+`claude_diagnose.sh` needs the `claude` CLI on `PATH` and a
+`CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`, which uses your Claude
+subscription rather than separate per-token billing) in a local
+`.env.diagnose` file (`chmod 600`, already gitignored) next to it:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+claude setup-token
+echo 'export CLAUDE_CODE_OAUTH_TOKEN=...' > .env.diagnose
+chmod 600 .env.diagnose
+```
+
+Both scripts require the `sudo systemctl restart patosx.service` (and
+`status`/`journalctl`) commands to be passwordless for the user running cron
+— see `visudo` / `/etc/sudoers.d/`. Without that, `healthcheck.sh` fails fast
+and logs the problem rather than hanging cron on a password prompt.
+
+If neither script is set up, the bot still runs fine — `write_heartbeat` is a
+no-op cost (one small file write every 15s) and nothing else depends on it.
 
 ## Development tips
 

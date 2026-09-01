@@ -22,18 +22,24 @@ RUN_LOG="$PROJECT_DIR/claude_diagnose.log"
 
 cd "$PROJECT_DIR" || exit 1
 
+# cron runs with a minimal environment (no .bashrc), so node/claude (installed
+# via nvm, no sudo available on this box) need to be put on PATH explicitly.
+export NVM_DIR="/home/thetruck/.nvm"
+[[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
+nvm use default >/dev/null 2>&1 || true
+
 # Optional local secrets file (chmod 600), kept out of git via .gitignore:
 #   CLAUDE_CODE_OAUTH_TOKEN=...  (from `claude setup-token` - uses your Claude
 #   subscription, not separate pay-per-token API billing)
 [[ -f "$PROJECT_DIR/.env.diagnose" ]] && source "$PROJECT_DIR/.env.diagnose"
 
 if ! command -v claude >/dev/null 2>&1; then
-  echo "$(date -Is) [skip] claude CLI not installed" >> "$RUN_LOG"
+  echo "$(date -Is) [skip] claude CLI not installed" >>"$RUN_LOG"
   exit 0
 fi
 
 if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
-  echo "$(date -Is) [skip] CLAUDE_CODE_OAUTH_TOKEN not set in this cron environment - run 'claude setup-token' and add it to .env.diagnose" >> "$RUN_LOG"
+  echo "$(date -Is) [skip] CLAUDE_CODE_OAUTH_TOKEN not set in this cron environment - run 'claude setup-token' and add it to .env.diagnose" >>"$RUN_LOG"
   exit 0
 fi
 
@@ -41,11 +47,11 @@ if [[ ! -f "$INCIDENT_LOG" ]]; then
   exit 0
 fi
 
-total_lines="$(wc -l < "$INCIDENT_LOG")"
+total_lines="$(wc -l <"$INCIDENT_LOG")"
 last_offset="0"
 [[ -f "$MARKER_FILE" ]] && last_offset="$(cat "$MARKER_FILE")"
 
-if (( total_lines <= last_offset )); then
+if ((total_lines <= last_offset)); then
   exit 0
 fi
 
@@ -63,10 +69,12 @@ If you find a clear, narrowly-scoped code bug that plausibly explains this incid
 
 If you are not confident about the root cause, do not guess-fix — instead write a short diagnosis to $PROJECT_DIR/claude_diagnose_findings.log (append, with a timestamp header) explaining what you found and did not find, and stop there without touching git or main.py."
 
-timeout 900 claude -p "$PROMPT" \
-  --bare \
+if timeout 900 claude -p "$PROMPT" \
   --output-format json \
   --allowedTools "Bash(git checkout -b *),Bash(git add *),Bash(git commit *),Bash(git push origin *),Bash(git log*),Bash(git show*),Bash(git diff*),Bash(journalctl*),Read,Write,Edit" \
-  >> "$RUN_LOG" 2>&1
-
-echo "$total_lines" > "$MARKER_FILE"
+  >>"$RUN_LOG" 2>&1; then
+  echo "$total_lines" >"$MARKER_FILE"
+else
+  claude_exit=$?
+  echo "$(date -Is) [error] claude run failed or timed out (exit $claude_exit) - leaving offset at $last_offset so the next run retries these incidents" >>"$RUN_LOG"
+fi

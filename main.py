@@ -1993,13 +1993,20 @@ async def remove_mute_role(guild: discord.Guild, member: discord.Member, reason:
 HEARTBEAT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "heartbeat.txt")
 
 
+def _write_heartbeat_file() -> None:
+    with open(HEARTBEAT_FILE, "w") as f:
+        f.write(datetime.now(timezone.utc).isoformat())
+
+
 @tasks.loop(seconds=15)
 async def write_heartbeat():
     """Write the current UTC time to a heartbeat file so an external watchdog can
     detect a hung event loop (process alive under systemd but no longer servicing
     async tasks), which a plain 'is the process running' check would miss."""
-    with open(HEARTBEAT_FILE, "w") as f:
-        f.write(datetime.now(timezone.utc).isoformat())
+    try:
+        await asyncio.to_thread(_write_heartbeat_file)
+    except OSError as e:
+        print(f"[write_heartbeat error] {e}")
 
 
 @tasks.loop(seconds=15)
