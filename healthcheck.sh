@@ -67,7 +67,8 @@ restart_service() {
   fi
 }
 
-ACTIVE_STATE="$(systemctl is-active "$SERVICE" 2>/dev/null || echo unknown)"
+ACTIVE_STATE="$(systemctl is-active "$SERVICE" 2>/dev/null)"
+[[ -z "$ACTIVE_STATE" ]] && ACTIVE_STATE="unknown"
 
 if [[ "$ACTIVE_STATE" != "active" ]]; then
   log_incident "systemd reports service is '$ACTIVE_STATE' (not active)"
