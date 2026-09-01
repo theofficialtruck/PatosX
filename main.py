@@ -1998,15 +1998,26 @@ def _write_heartbeat_file() -> None:
         f.write(datetime.now(timezone.utc).isoformat())
 
 
+_last_heartbeat_error_log: datetime | None = None
+HEARTBEAT_ERROR_LOG_INTERVAL = timedelta(minutes=5)
+
+
 @tasks.loop(seconds=15)
 async def write_heartbeat():
     """Write the current UTC time to a heartbeat file so an external watchdog can
     detect a hung event loop (process alive under systemd but no longer servicing
-    async tasks), which a plain 'is the process running' check would miss."""
+    async tasks), which a plain 'is the process running' check would miss. Keeps
+    retrying every 15s even after a write failure (e.g. a transient full disk can
+    resolve itself), but only logs about it once per HEARTBEAT_ERROR_LOG_INTERVAL
+    so a persistent failure doesn't flood stdout/journald."""
+    global _last_heartbeat_error_log
     try:
         await asyncio.to_thread(_write_heartbeat_file)
     except OSError as e:
-        print(f"[write_heartbeat error] {e}")
+        now = datetime.now(timezone.utc)
+        if _last_heartbeat_error_log is None or now - _last_heartbeat_error_log >= HEARTBEAT_ERROR_LOG_INTERVAL:
+            print(f"[write_heartbeat error] {e}")
+            _last_heartbeat_error_log = now
 
 
 @tasks.loop(seconds=15)
