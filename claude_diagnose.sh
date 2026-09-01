@@ -23,7 +23,8 @@ RUN_LOG="$PROJECT_DIR/claude_diagnose.log"
 cd "$PROJECT_DIR" || exit 1
 
 # Optional local secrets file (chmod 600), kept out of git via .gitignore:
-#   ANTHROPIC_API_KEY=sk-ant-...
+#   CLAUDE_CODE_OAUTH_TOKEN=...  (from `claude setup-token` - uses your Claude
+#   subscription, not separate pay-per-token API billing)
 [[ -f "$PROJECT_DIR/.env.diagnose" ]] && source "$PROJECT_DIR/.env.diagnose"
 
 if ! command -v claude >/dev/null 2>&1; then
@@ -31,8 +32,8 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 0
 fi
 
-if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  echo "$(date -Is) [skip] ANTHROPIC_API_KEY not set in this cron environment" >> "$RUN_LOG"
+if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+  echo "$(date -Is) [skip] CLAUDE_CODE_OAUTH_TOKEN not set in this cron environment - run 'claude setup-token' and add it to .env.diagnose" >> "$RUN_LOG"
   exit 0
 fi
 
