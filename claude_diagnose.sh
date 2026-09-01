@@ -8,14 +8,15 @@
 # code-level bug, push a fix to a new branch for manual review.
 #
 # Safety boundaries (do not loosen without thinking it through):
-#   - allowedTools only permits creating a NEW branch, committing, and
-#     pushing that branch - "git push origin main" is never in the allowlist.
+#   - allowedTools scopes branch creation and pushes to the fix/incident-*
+#     prefix specifically (not a bare wildcard) - "git push origin main" is
+#     rejected by the tool permission system itself, not just by instruction.
 #   - It never runs systemctl/start.sh itself - restarts are the watchdog's
 #     job only, never this script's.
 #   - It never merges anything.
 set -uo pipefail
 
-PROJECT_DIR="/home/thetruck/patosx"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INCIDENT_LOG="$PROJECT_DIR/watchdog_incidents.log"
 MARKER_FILE="$PROJECT_DIR/.claude_diagnose_offset"
 RUN_LOG="$PROJECT_DIR/claude_diagnose.log"
@@ -24,7 +25,7 @@ cd "$PROJECT_DIR" || exit 1
 
 # cron runs with a minimal environment (no .bashrc), so node/claude (installed
 # via nvm, no sudo available on this box) need to be put on PATH explicitly.
-export NVM_DIR="/home/thetruck/.nvm"
+export NVM_DIR="$HOME/.nvm"
 [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
 nvm use default >/dev/null 2>&1 || true
 
@@ -86,7 +87,7 @@ if timeout 900 claude -p "$PROMPT" \
   --model claude-sonnet-5 \
   --effort high \
   --output-format json \
-  --allowedTools "Bash(git checkout -b *),Bash(git add *),Bash(git commit *),Bash(git push origin *),Bash(git log*),Bash(git show*),Bash(git diff*),Bash(journalctl*),Read,Write,Edit" \
+  --allowedTools "Bash(git checkout -b fix/incident-*),Bash(git add *),Bash(git commit *),Bash(git push origin fix/incident-*),Bash(git log*),Bash(git show*),Bash(git diff*),Bash(journalctl*),Read,Write,Edit" \
   >"$claude_output" 2>&1; then
   echo "$total_lines" >"$MARKER_FILE"
   summary="$(python3 -c '

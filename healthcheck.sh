@@ -23,7 +23,7 @@
 set -uo pipefail
 
 SERVICE="patosx.service"
-PROJECT_DIR="/home/thetruck/patosx"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HEARTBEAT_FILE="$PROJECT_DIR/heartbeat.txt"
 INCIDENT_LOG="$PROJECT_DIR/watchdog_incidents.log"
 RUN_LOG="$PROJECT_DIR/watchdog_cron.log"
