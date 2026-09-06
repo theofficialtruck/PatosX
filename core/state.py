@@ -173,9 +173,23 @@ monthly_rewards_col = db["monthly_rewards"]  # monthly reward goal progress and 
 # Shared runtime objects
 # ============================================================
 
-# Shared aiohttp session. Starts as None and is created by main.py's on_ready
-# once the bot has connected; closed again during shutdown.
+# Shared aiohttp session. Starts as None and is created by main.py's on_ready once the bot has
+# connected (or lazily by http_session() on first use); closed again during shutdown. Cogs never
+# create their own ClientSession - they call http_session() and never close what it returns.
 session: aiohttp.ClientSession | None = None
+
+
+def http_session() -> aiohttp.ClientSession:
+    """Return the shared aiohttp session, creating it if the bot has not opened one yet.
+
+    The lazy path covers the window before on_ready and test runs, where main.py never gets to
+    create the session. Callers use ``async with state.http_session().get(url) as resp`` - never
+    ``async with state.http_session()``, which would close the shared session for everyone."""
+    global session
+    if session is None or session.closed:
+        session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
+    return session
+
 
 # Thread pool for blocking Gemini SDK calls so they do not block the asyncio event loop
 executor = ThreadPoolExecutor()

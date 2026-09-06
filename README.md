@@ -118,7 +118,7 @@ feature domain rather than a file-size bucket.
 `main.py` does nothing feature-specific. Top to bottom it:
 
 1. Stubs `audioop` into `sys.modules` before importing discord (removed in Python 3.13).
-2. Calls `load_dotenv()` and imports `core`.
+2. Imports `core` (`core/config.py` loads `.env` and validates the required variables on import).
 3. Defines `get_prefix` (per-guild prefix from `state.settings_col`, `?` by default) and builds the
    `Bot` with all intents, `help_command=None` (the Info cog provides `help`) and the usual
    `AllowedMentions`.
@@ -128,7 +128,8 @@ feature domain rather than a file-size bucket.
    modules import and test without a real `Bot`.
 5. Owns the **only** `on_message` that calls `bot.process_commands`. Cogs add their own
    `on_message` listeners purely for side effects; discord.py delivers the message to all of them.
-6. Handles bot-level `on_ready` work (presence, the shared aiohttp session, slash command sync),
+6. Handles bot-level `on_ready` work (presence, opening the shared aiohttp session via
+   `state.http_session()`, slash command sync),
    delegates `on_command_error` / `on_app_command_error` to `core.errors`, and closes the session
    on `on_close`.
 7. `load_all_cogs()` loads every `cogs/*.py` as an extension (files starting with `_` are
@@ -186,7 +187,8 @@ and (where it owns background loops) an `on_ready` listener that starts them onc
 ### Shared-state rules
 
 - All mutable shared state lives in `core/state.py`. No cog creates its own Mongo connection or
-  `aiohttp.ClientSession`.
+  `aiohttp.ClientSession`: HTTP calls go through `state.http_session()`, which returns the shared
+  session (creating it lazily before `on_ready` or under tests) and must never be closed by callers.
 - Shared state is always accessed **through the module**, never via a bare imported name:
 
   ```python

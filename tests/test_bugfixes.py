@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from cogs import duckgpt, economy, games_gambling, shop
+from core import config as cfg
 from core import economyHelperFuncs as econ
 from core import permsHelperFuncs as perms
 from core import state
@@ -291,3 +292,106 @@ async def test_purge_reports_only_the_purged_messages(monkeypatch, moderation_co
     channel.purge.assert_awaited_once()
     assert channel.purge.await_args.kwargs["limit"] == 3
     assert ctx.send.await_args.args[0] == "🧹 Deleted 3 messages."
+
+
+# --- Copilot review follow-ups (PR #79) --------------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, status=200, payload=None):
+        self.status = status
+        self._payload = payload or {}
+
+    async def json(self):
+        return self._payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeSession:
+    """Stands in for the shared aiohttp session: records requests, never opens a socket."""
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.requests = []
+        self.closed = False
+
+    def get(self, url, **kwargs):
+        self.requests.append((url, kwargs))
+        return _FakeResponse(payload=self.payload)
+
+
+@pytest.mark.asyncio
+async def test_slap_defaults_to_the_invoker_and_uses_the_shared_session(monkeypatch, fun_cog):
+    """The command description promises "will slap yourself if not provided"; the code used to
+    reject a missing target. It also used to open a fresh aiohttp.ClientSession per request."""
+    session = _FakeSession({"data": [{"images": {"original": {"url": "https://giphy.test/slap.gif"}}}]})
+    monkeypatch.setattr(state, "http_session", lambda: session)
+    author = SimpleNamespace(id=1, mention="<@1>")
+    ctx = SimpleNamespace(author=author, send=AsyncMock(), defer=AsyncMock(), interaction=None)
+
+    await fun_cog.slap.callback(fun_cog, ctx, None)
+
+    embed = ctx.send.await_args.kwargs["embed"]
+    assert embed.description == "<@1> slapped themselves! Ouch!"
+    assert embed.image.url == "https://giphy.test/slap.gif"
+    assert len(session.requests) == 1
+    assert not session.closed, "cogs must never close the shared session"
+
+    target = SimpleNamespace(id=2, mention="<@2>")
+    await fun_cog.slap.callback(fun_cog, ctx, target)
+    assert ctx.send.await_args.kwargs["embed"].description == "<@1> slapped <@2>! Ouch!"
+
+
+@pytest.mark.asyncio
+async def test_duck_and_quote_use_the_shared_session(monkeypatch, fun_cog):
+    duck_session = _FakeSession({"url": "https://random-d.test/1.jpg"})
+    monkeypatch.setattr(state, "http_session", lambda: duck_session)
+    monkeypatch.setattr(state, "config_col", SimpleNamespace(find_one=AsyncMock(return_value={})))
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(id=1), channel=SimpleNamespace(id=5), send=AsyncMock(), interaction=None
+    )
+
+    await fun_cog.duck.callback(fun_cog, ctx)
+
+    assert ctx.send.await_args.kwargs["embed"].image.url == "https://random-d.test/1.jpg"
+    assert duck_session.requests[0][0] == "https://random-d.uk/api/random"
+    assert not duck_session.closed
+
+
+@pytest.mark.asyncio
+async def test_duckfact_thumbnail_is_an_image_endpoint(fun_cog):
+    """`/api/v2/random` returns JSON, which Discord cannot render as a thumbnail."""
+    ctx = SimpleNamespace(send=AsyncMock(), interaction=None)
+    await fun_cog.duckfact.callback(fun_cog, ctx)
+    embed = ctx.send.await_args.kwargs["embed"]
+    assert embed.thumbnail.url == "https://random-d.uk/api/v2/randomimg"
+    assert embed.description
+
+
+@pytest.mark.asyncio
+async def test_http_session_is_shared_and_created_lazily(monkeypatch):
+    monkeypatch.setattr(state, "session", None)
+    first = state.http_session()
+    try:
+        assert state.session is first
+        assert state.http_session() is first, "every caller must get the same session"
+        assert not first.closed
+    finally:
+        await first.close()
+    replacement = state.http_session()
+    try:
+        assert replacement is not first, "a closed session must be replaced, not handed out again"
+    finally:
+        await replacement.close()
+
+
+def test_parse_gemini_keys_ignores_empty_entries():
+    assert cfg.parse_gemini_keys("key1, key2 ,,") == ["key1", "key2"]
+    assert cfg.parse_gemini_keys(" , ,") == []
+    assert cfg.parse_gemini_keys(None) == []
+    assert cfg.parse_gemini_keys("") == []

@@ -86,10 +86,19 @@ MONGO_URI = env_vars.get("MONGO_URI", "")
 GIPHY_API_KEY = env_vars.get("GIPHY_API_KEY", "")
 OPENROUTER_API_KEY = env_vars.get("OPENROUTER_API_KEY", "")
 
+
+def parse_gemini_keys(raw: str | None) -> list[str]:
+    """Split the comma separated GEMINI_API_KEYS value into non-empty, stripped keys."""
+    return [key.strip() for key in (raw or "").split(",") if key.strip()]
+
+
 # Multiple Gemini keys can be provided as a comma separated list so that the bot
 # can round robin between them and stay within per key rate limits
-GEMINI_API_KEYS = os.getenv("GEMINI_API_KEYS", "").split(",")
-GEMINI_API_KEYS = [k.strip() for k in GEMINI_API_KEYS if k.strip()]
+GEMINI_API_KEYS = parse_gemini_keys(os.getenv("GEMINI_API_KEYS", ""))
+# A value made only of commas/whitespace passes the "is it set" check above but would leave
+# DuckGPT with no key to use; refuse to start rather than fail on the first AI request.
+if not GEMINI_API_KEYS and not _running_under_pytest():
+    raise ValueError("GEMINI_API_KEYS is set but contains no usable keys (expected a comma separated list of keys)")
 if not missing:
     print(f"[INIT] Loaded {len(GEMINI_API_KEYS)} Gemini API key(s) for rotation")
 

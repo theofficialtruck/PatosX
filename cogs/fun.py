@@ -130,18 +130,14 @@ class Fun(commands.Cog):
     @commands.cooldown(1, 5, commands.BucketType.member)
     @perms.blacklist_barrier()
     async def slap(self, ctx, member: discord.Member = None):
-        if not member:
-            await ctx.send("❌ You need to mention someone to slap!")
-            return
+        # The description promises "will slap yourself if not provided", so do exactly that.
+        member = member or ctx.author
         try:
             await ctx.defer()
-            async with (
-                aiohttp.ClientSession() as session,
-                session.get(
-                    f"https://api.giphy.com/v1/gifs/search?q=anime%20slap&api_key={cfg.GIPHY_API_KEY}&limit=20&rating=g&lang=en",
-                    timeout=5,
-                ) as r,
-            ):
+            async with state.http_session().get(
+                f"https://api.giphy.com/v1/gifs/search?q=anime%20slap&api_key={cfg.GIPHY_API_KEY}&limit=20&rating=g&lang=en",
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as r:
                 if r.status != 200:
                     raise RuntimeError(f"HTTP {r.status}")
                 data = await r.json()
@@ -165,11 +161,11 @@ class Fun(commands.Cog):
             if not gif_url:
                 await ctx.send("❌ Couldn't find any slap GIFs right now.")
                 return
-            embed = discord.Embed(
-                title="👋 Slap!",
-                description=f"{ctx.author.mention} slapped {member.mention}! Ouch!",
-                color=discord.Color.red(),
-            )
+            if member == ctx.author:
+                description = f"{ctx.author.mention} slapped themselves! Ouch!"
+            else:
+                description = f"{ctx.author.mention} slapped {member.mention}! Ouch!"
+            embed = discord.Embed(title="👋 Slap!", description=description, color=discord.Color.red())
             embed.set_image(url=gif_url)
             await ctx.send(embed=embed)
         except Exception as e:
@@ -185,7 +181,8 @@ class Fun(commands.Cog):
                 raise ValueError("Duck facts file is empty.")
             fact = random.choice(facts)
             embed = discord.Embed(title="🦆 Duck Fact", description=fact, color=discord.Color.teal())
-            embed.set_thumbnail(url="https://random-d.uk/api/v2/random")
+            # /randomimg returns an actual image; /random returns JSON, which Discord can't render
+            embed.set_thumbnail(url="https://random-d.uk/api/v2/randomimg")
             await ctx.send(embed=embed)
         except FileNotFoundError:
             await ctx.send("❌ Could not find `duckfacts.txt`. Please create it in the bot's `data` folder.")
@@ -230,7 +227,7 @@ class Fun(commands.Cog):
         allowed_channels = config.get("ALLOWED_DUCK_CHANNELS", [])
         if allowed_channels and ctx.channel.id not in allowed_channels:
             return await ctx.send("🚫 You can't use this command here.")
-        async with aiohttp.ClientSession() as session, session.get("https://random-d.uk/api/random") as resp:
+        async with state.http_session().get("https://random-d.uk/api/random") as resp:
             if resp.status != 200:
                 return await ctx.send("❌ Could not get a duck right now, try again later!")
             data = await resp.json()
@@ -247,7 +244,7 @@ class Fun(commands.Cog):
     async def quote(self, ctx):
         api_url = "https://zenquotes.io/api/random"
         try:
-            async with aiohttp.ClientSession() as session, session.get(api_url) as resp:
+            async with state.http_session().get(api_url) as resp:
                 text = await resp.text()
                 if resp.status != 200:
                     return await ctx.send(f"❌ Could not fetch a quote right now (Status {resp.status})")

@@ -36,14 +36,11 @@ import contextlib
 import traceback
 from pathlib import Path
 
-import aiohttp
 import discord
 from discord.ext import commands
-from dotenv import load_dotenv
 
-# Load environment variables from the .env file into os.environ before core.config reads them
-load_dotenv()
-
+# core.config loads the .env file (python-dotenv) the moment it is imported, so nothing needs to
+# run before these imports - keeping them contiguous also keeps main.py free of E402.
 from core import config as cfg
 from core import errors, state
 from core import permsHelperFuncs as perms
@@ -103,8 +100,7 @@ async def on_ready():
     _ready_done = True
     print(f"Logging in as {bot.user}...")
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.listening, name=cfg.BOT_ADMIN_NAME))
-    if state.session is None:
-        state.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
+    state.http_session()
     asyncio.create_task(sync_hybrid_commands())
 
 
