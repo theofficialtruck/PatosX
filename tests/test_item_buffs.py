@@ -20,7 +20,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import main
+from core import economyHelperFuncs as econ
+from core import permsHelperFuncs as perms
+from core import state
+from core import xpHelperFuncs as xp
 
 # === pop_food_item helpers ================================================================
 
@@ -28,7 +31,7 @@ import main
 def test_pop_food_item_finds_space_key():
     """Items stored with spaces are found by underscore item_id."""
     inv = ["energy drink"]
-    result = main.pop_food_item(inv, "energy_drink")
+    result = econ.pop_food_item(inv, "energy_drink")
     assert result is True
     assert inv == []
 
@@ -36,14 +39,14 @@ def test_pop_food_item_finds_space_key():
 def test_pop_food_item_space_stored_key_not_underscore():
     """Items stored with underscores are NOT matched (shop stores with spaces via name_lower)."""
     inv = ["energy_drink"]  # underscore — would not be stored this way normally
-    result = main.pop_food_item(inv, "energy_drink")
+    result = econ.pop_food_item(inv, "energy_drink")
     # normalize converts item_id to 'energy drink'; stored 'energy_drink' != 'energy drink'
     assert result is False
 
 
 def test_pop_food_item_returns_false_when_missing():
     inv = ["fishing rod", "laptop"]
-    result = main.pop_food_item(inv, "energy_drink")
+    result = econ.pop_food_item(inv, "energy_drink")
     assert result is False
     assert len(inv) == 2
 
@@ -51,14 +54,14 @@ def test_pop_food_item_returns_false_when_missing():
 def test_pop_food_item_only_removes_one():
     """Only one item should be removed even if multiple are present."""
     inv = ["lucky cookie", "lucky cookie"]
-    result = main.pop_food_item(inv, "lucky_cookie")
+    result = econ.pop_food_item(inv, "lucky_cookie")
     assert result is True
     assert len(inv) == 1
 
 
 def test_pop_food_item_leaves_other_items():
     inv = ["coffee cup", "fishing rod", "laptop"]
-    main.pop_food_item(inv, "coffee_cup")
+    econ.pop_food_item(inv, "coffee_cup")
     assert inv == ["fishing rod", "laptop"]
 
 
@@ -66,7 +69,7 @@ def test_pop_food_item_dict_with_space_name_lower():
     """Dict items with space name_lower are matched correctly."""
     # This is how a dict food item would be stored if ever created with name_lower
     inv = [{"_id": "energy drink", "uses_left": 1}, "laptop"]
-    result = main.pop_food_item(inv, "energy_drink")
+    result = econ.pop_food_item(inv, "energy_drink")
     assert result is True
     assert inv == ["laptop"]
 
@@ -81,10 +84,10 @@ async def test_check_and_use_food_item_normalizes_underscore_to_space(monkeypatc
     mock_get_user = AsyncMock(return_value=user_data)
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
-    monkeypatch.setattr(main, "get_user", mock_get_user)
-    monkeypatch.setattr(main, "economy_col", mock_col)
+    monkeypatch.setattr(econ, "get_user", mock_get_user)
+    monkeypatch.setattr(state, "economy_col", mock_col)
 
-    result = await main.check_and_use_food_item(2, 1, "energy_drink")
+    result = await econ.check_and_use_food_item(2, 1, "energy_drink")
 
     assert result is True
     mock_col.update_one.assert_awaited_once()
@@ -96,12 +99,12 @@ async def test_check_and_use_food_item_normalizes_underscore_to_space(monkeypatc
 @pytest.mark.asyncio
 async def test_check_and_use_food_item_returns_false_when_not_found(monkeypatch):
     user_data = {"_id": "1-2", "inventory": ["fishing rod"]}
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
-    monkeypatch.setattr(main, "economy_col", mock_col)
+    monkeypatch.setattr(state, "economy_col", mock_col)
 
-    result = await main.check_and_use_food_item(2, 1, "energy_drink")
+    result = await econ.check_and_use_food_item(2, 1, "energy_drink")
 
     assert result is False
     mock_col.update_one.assert_not_awaited()
@@ -111,7 +114,7 @@ async def test_check_and_use_food_item_returns_false_when_not_found(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_work_energy_drink_sends_message_and_removes_from_inventory(monkeypatch):
+async def test_work_energy_drink_sends_message_and_removes_from_inventory(monkeypatch, jobs_cog):
     """When inventory has 'energy drink', work command sends the buff message."""
     ctx = MagicMock()
     ctx.guild.id = 100
@@ -134,20 +137,20 @@ async def test_work_energy_drink_sends_message_and_removes_from_inventory(monkey
     mock_col.find_one = AsyncMock(return_value=None)  # no cooldown
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "check_and_award_badges", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(xp, "check_and_award_badges", AsyncMock())
 
-    await main.work.callback(ctx)
+    await jobs_cog.work.callback(jobs_cog, ctx)
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Energy Drink consumed" in t for t in sent_texts), f"Expected energy drink message, got: {sent_texts}"
 
 
 @pytest.mark.asyncio
-async def test_work_energy_drink_not_consumed_when_still_on_cooldown(monkeypatch):
+async def test_work_energy_drink_not_consumed_when_still_on_cooldown(monkeypatch, jobs_cog):
     """Energy drink is NOT consumed when user is still on cooldown even with reduction."""
     import datetime as dt_module
 
@@ -174,11 +177,11 @@ async def test_work_energy_drink_not_consumed_when_still_on_cooldown(monkeypatch
     mock_col.find_one = AsyncMock(return_value=cooldown_data)
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
 
-    await main.work.callback(ctx)
+    await jobs_cog.work.callback(jobs_cog, ctx)
 
     # Should have returned early with cooldown message
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
@@ -188,7 +191,7 @@ async def test_work_energy_drink_not_consumed_when_still_on_cooldown(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_work_energy_drink_allows_work_after_half_cooldown(monkeypatch):
+async def test_work_energy_drink_allows_work_after_half_cooldown(monkeypatch, jobs_cog):
     """Energy drink reduces effective cooldown so user can work at 6h instead of waiting 12h."""
     import datetime as dt_module
 
@@ -215,13 +218,13 @@ async def test_work_energy_drink_allows_work_after_half_cooldown(monkeypatch):
     mock_col.find_one = AsyncMock(return_value=cooldown_data)
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "check_and_award_badges", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(xp, "check_and_award_badges", AsyncMock())
 
-    await main.work.callback(ctx)
+    await jobs_cog.work.callback(jobs_cog, ctx)
 
     # Should NOT have shown the "on cooldown" rejection message
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
@@ -235,7 +238,7 @@ async def test_work_energy_drink_allows_work_after_half_cooldown(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_work_lucky_cookie_doubles_earnings(monkeypatch):
+async def test_work_lucky_cookie_doubles_earnings(monkeypatch, jobs_cog):
     """lucky_cookie in inventory doubles work earnings and is removed."""
     ctx = MagicMock()
     ctx.guild.id = 100
@@ -257,13 +260,13 @@ async def test_work_lucky_cookie_doubles_earnings(monkeypatch):
     mock_col.find_one = AsyncMock(return_value=None)
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "check_and_award_badges", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(xp, "check_and_award_badges", AsyncMock())
 
-    await main.work.callback(ctx)
+    await jobs_cog.work.callback(jobs_cog, ctx)
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Lucky Cookie consumed" in t for t in sent_texts), f"Expected lucky cookie message; got: {sent_texts}"
@@ -272,7 +275,7 @@ async def test_work_lucky_cookie_doubles_earnings(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_work_no_buffs_when_inventory_empty(monkeypatch):
+async def test_work_no_buffs_when_inventory_empty(monkeypatch, jobs_cog):
     """No buff messages when inventory is empty."""
     ctx = MagicMock()
     ctx.guild.id = 100
@@ -293,13 +296,13 @@ async def test_work_no_buffs_when_inventory_empty(monkeypatch):
     mock_col.find_one = AsyncMock(return_value=None)
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "check_and_award_badges", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(xp, "check_and_award_badges", AsyncMock())
 
-    await main.work.callback(ctx)
+    await jobs_cog.work.callback(jobs_cog, ctx)
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert not any("Energy Drink" in t for t in sent_texts)
@@ -310,7 +313,7 @@ async def test_work_no_buffs_when_inventory_empty(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_beg_lucky_cookie_doubles_amount(monkeypatch):
+async def test_beg_lucky_cookie_doubles_amount(monkeypatch, economy_cog):
     """lucky_cookie in inventory doubles beg earnings."""
     import random as _random
 
@@ -331,13 +334,13 @@ async def test_beg_lucky_cookie_doubles_amount(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
     monkeypatch.setattr(_random, "randint", lambda a, b: 100)  # fixed base amount
 
-    await main.beg.callback(ctx)
+    await economy_cog.beg.callback(economy_cog, ctx)
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Lucky Cookie consumed" in t for t in sent_texts), f"Expected lucky cookie message; got: {sent_texts}"
@@ -346,7 +349,7 @@ async def test_beg_lucky_cookie_doubles_amount(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_beg_lucky_cookie_removed_from_inventory(monkeypatch):
+async def test_beg_lucky_cookie_removed_from_inventory(monkeypatch, economy_cog):
     """Lucky cookie is removed from inventory after beg."""
     ctx = MagicMock()
     ctx.guild.id = 100
@@ -365,12 +368,12 @@ async def test_beg_lucky_cookie_removed_from_inventory(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
 
-    await main.beg.callback(ctx)
+    await economy_cog.beg.callback(economy_cog, ctx)
 
     # Check that update_one was called with the cookie removed
     inv_saves = [
@@ -384,7 +387,7 @@ async def test_beg_lucky_cookie_removed_from_inventory(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_beg_no_cookie_message_without_item(monkeypatch):
+async def test_beg_no_cookie_message_without_item(monkeypatch, economy_cog):
     """No cookie message when inventory is empty."""
     ctx = MagicMock()
     ctx.guild.id = 100
@@ -403,12 +406,12 @@ async def test_beg_no_cookie_message_without_item(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
 
-    await main.beg.callback(ctx)
+    await economy_cog.beg.callback(economy_cog, ctx)
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert not any("Lucky Cookie" in t for t in sent_texts)
@@ -418,7 +421,7 @@ async def test_beg_no_cookie_message_without_item(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_crime_coffee_cup_sends_message(monkeypatch):
+async def test_crime_coffee_cup_sends_message(monkeypatch, jobs_cog):
     """Coffee cup sends consumed message and is removed from inventory."""
     import random as _random
 
@@ -439,21 +442,21 @@ async def test_crime_coffee_cup_sends_message(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "subtract_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "subtract_balance", AsyncMock())
     monkeypatch.setattr(_random, "random", lambda: 0.0)  # always succeed
 
-    await main.crime.callback(ctx, choice="shoplift")
+    await jobs_cog.crime.callback(jobs_cog, ctx, choice="shoplift")
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Coffee Cup consumed" in t for t in sent_texts), f"Expected coffee cup message; got: {sent_texts}"
 
 
 @pytest.mark.asyncio
-async def test_crime_coffee_cup_removed_on_success(monkeypatch):
+async def test_crime_coffee_cup_removed_on_success(monkeypatch, jobs_cog):
     """Coffee cup is removed from saved inventory on crime success."""
     import random as _random
 
@@ -474,13 +477,13 @@ async def test_crime_coffee_cup_removed_on_success(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
     monkeypatch.setattr(_random, "random", lambda: 0.0)  # success
 
-    await main.crime.callback(ctx, choice="shoplift")
+    await jobs_cog.crime.callback(jobs_cog, ctx, choice="shoplift")
 
     inv_saves = [
         call.args[1].get("$set", {}).get("inventory")
@@ -493,7 +496,7 @@ async def test_crime_coffee_cup_removed_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_crime_coffee_cup_removed_on_failure(monkeypatch):
+async def test_crime_coffee_cup_removed_on_failure(monkeypatch, jobs_cog):
     """Coffee cup is removed from saved inventory even on crime failure."""
     import random as _random
 
@@ -514,13 +517,13 @@ async def test_crime_coffee_cup_removed_on_failure(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
     monkeypatch.setattr(_random, "random", lambda: 0.99)  # always fail
 
-    await main.crime.callback(ctx, choice="shoplift")
+    await jobs_cog.crime.callback(jobs_cog, ctx, choice="shoplift")
 
     inv_saves = [
         call.args[1].get("$set", {}).get("inventory")
@@ -533,7 +536,7 @@ async def test_crime_coffee_cup_removed_on_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_crime_coffee_cup_increases_success_chance(monkeypatch):
+async def test_crime_coffee_cup_increases_success_chance(monkeypatch, jobs_cog):
     """Coffee cup raises success chance by 25% (shoplift 0.5 → 0.75)."""
     import random as _random
 
@@ -554,16 +557,16 @@ async def test_crime_coffee_cup_increases_success_chance(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "subtract_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "subtract_balance", AsyncMock())
 
     # Use random.random = 0.74: should succeed with coffee (adjusted 0.75) but fail without (0.50)
     monkeypatch.setattr(_random, "random", lambda: 0.74)
 
-    await main.crime.callback(ctx, choice="shoplift")
+    await jobs_cog.crime.callback(jobs_cog, ctx, choice="shoplift")
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Crime successful" in t for t in sent_texts), (
@@ -572,7 +575,7 @@ async def test_crime_coffee_cup_increases_success_chance(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_crime_no_coffee_message_without_item(monkeypatch):
+async def test_crime_no_coffee_message_without_item(monkeypatch, jobs_cog):
     """No coffee cup message when inventory doesn't have it."""
     import random as _random
 
@@ -593,13 +596,13 @@ async def test_crime_no_coffee_message_without_item(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
     monkeypatch.setattr(_random, "random", lambda: 0.0)
 
-    await main.crime.callback(ctx, choice="shoplift")
+    await jobs_cog.crime.callback(jobs_cog, ctx, choice="shoplift")
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert not any("Coffee" in t for t in sent_texts)

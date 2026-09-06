@@ -24,14 +24,19 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import main
+from cogs import shop
+from core import config as cfg
+from core import economyHelperFuncs as econ
+from core import permsHelperFuncs as perms
+from core import state
+from core import xpHelperFuncs as xp
 
 # === consume_nitro_boost helper ================================================================
 
 
 def test_consume_nitro_boost_decrements_uses():
     inv = [{"_id": "nitro_boost", "uses_left": 3}]
-    used, expired = main.consume_nitro_boost(inv)
+    used, expired = econ.consume_nitro_boost(inv)
     assert used is True
     assert expired is False
     assert inv == [{"_id": "nitro_boost", "uses_left": 2}]
@@ -39,7 +44,7 @@ def test_consume_nitro_boost_decrements_uses():
 
 def test_consume_nitro_boost_removes_when_exhausted():
     inv = [{"_id": "nitro_boost", "uses_left": 1}]
-    used, expired = main.consume_nitro_boost(inv)
+    used, expired = econ.consume_nitro_boost(inv)
     assert used is True
     assert expired is True
     assert inv == []
@@ -47,7 +52,7 @@ def test_consume_nitro_boost_removes_when_exhausted():
 
 def test_consume_nitro_boost_returns_false_when_absent():
     inv = ["fishing rod"]
-    used, expired = main.consume_nitro_boost(inv)
+    used, expired = econ.consume_nitro_boost(inv)
     assert used is False
     assert expired is False
     assert inv == ["fishing rod"]
@@ -73,27 +78,27 @@ class FakeBucketMapping:
 def test_reduce_command_cooldown_shifts_window_back():
     bucket = FakeBucket(window=1000.0)
     ctx = SimpleNamespace(command=SimpleNamespace(_buckets=FakeBucketMapping(bucket)))
-    main.reduce_command_cooldown(ctx, 300)
+    econ.reduce_command_cooldown(ctx, 300)
     assert bucket._window == 700.0
 
 
 def test_reduce_command_cooldown_noop_when_invalid():
     bucket = FakeBucket(window=1000.0)
     ctx = SimpleNamespace(command=SimpleNamespace(_buckets=FakeBucketMapping(bucket, valid=False)))
-    main.reduce_command_cooldown(ctx, 300)
+    econ.reduce_command_cooldown(ctx, 300)
     assert bucket._window == 1000.0
 
 
 def test_reduce_command_cooldown_noop_without_buckets():
     ctx = SimpleNamespace(command=SimpleNamespace())
-    main.reduce_command_cooldown(ctx, 300)  # must not raise
+    econ.reduce_command_cooldown(ctx, 300)  # must not raise
 
 
 # === normalize_inventory_items =================================================================
 
 
 def test_normalize_inventory_items_canonicalizes_nitro_boost():
-    normalized, changed = main.normalize_inventory_items(["nitro_boost"])
+    normalized, changed = econ.normalize_inventory_items(["nitro_boost"])
     assert changed is True
     assert normalized == [{"_id": "nitro_boost", "uses_left": 3}]
 
@@ -113,14 +118,14 @@ async def test_ensure_shop_items_seeds_nitro_boost(monkeypatch):
         async def delete_many(self, query):
             return None
 
-    shop = FakeCol()
-    guild_shop = FakeCol()
-    monkeypatch.setattr(main, "shop_col", shop)
-    monkeypatch.setattr(main, "guild_shop_col", guild_shop)
+    shop_col = FakeCol()
+    guild_shop_col = FakeCol()
+    monkeypatch.setattr(state, "shop_col", shop_col)
+    monkeypatch.setattr(state, "guild_shop_col", guild_shop_col)
 
-    await main.ensure_shop_items()
+    await shop.ensure_shop_items()
 
-    nitro_calls = [c for c in shop.calls if c[0] == {"_id": "nitro_boost"}]
+    nitro_calls = [c for c in shop_col.calls if c[0] == {"_id": "nitro_boost"}]
     assert len(nitro_calls) == 1
     _, update, upsert = nitro_calls[0]
     item = update["$set"]
@@ -143,8 +148,8 @@ async def test_process_shop_purchase_nitro_boost_stacks(monkeypatch):
             self.calls.append((query, update, upsert))
 
     economy = FakeEconomyCol()
-    monkeypatch.setattr(main, "economy_col", economy)
-    result = await main.process_shop_purchase(member, guild, store_item, {"wallet": 2000, "inventory": []})
+    monkeypatch.setattr(state, "economy_col", economy)
+    result = await shop.process_shop_purchase(member, guild, store_item, {"wallet": 2000, "inventory": []})
     assert result["ok"] is True
     assert result["purchase_type"] == "nitro_boost"
     assert economy.calls == [
@@ -156,7 +161,7 @@ async def test_process_shop_purchase_nitro_boost_stacks(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_beg_nitro_boost_reduces_cooldown_and_consumed(monkeypatch):
+async def test_beg_nitro_boost_reduces_cooldown_and_consumed(monkeypatch, economy_cog):
     ctx = MagicMock()
     ctx.guild.id = 100
     ctx.author.id = 200
@@ -173,12 +178,12 @@ async def test_beg_nitro_boost_reduces_cooldown_and_consumed(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
 
-    await main.beg.callback(ctx)
+    await economy_cog.beg.callback(economy_cog, ctx)
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Nitro Boost cut your next beg cooldown" in t for t in sent_texts)
@@ -199,7 +204,7 @@ async def test_beg_nitro_boost_reduces_cooldown_and_consumed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lottery_nitro_boost_reduces_cooldown_and_consumed(monkeypatch):
+async def test_lottery_nitro_boost_reduces_cooldown_and_consumed(monkeypatch, games_cog):
     ctx = MagicMock()
     ctx.guild.id = 100
     ctx.author.id = 200
@@ -216,13 +221,13 @@ async def test_lottery_nitro_boost_reduces_cooldown_and_consumed(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
     monkeypatch.setattr(_random, "random", lambda: 0.99)  # lose the draw
 
-    await main.lottery.callback(ctx)
+    await games_cog.lottery.callback(games_cog, ctx)
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Nitro Boost cut your next lottery cooldown" in t for t in sent_texts)
@@ -243,7 +248,7 @@ async def test_lottery_nitro_boost_reduces_cooldown_and_consumed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_work_nitro_boost_reduces_cooldown_and_consumed(monkeypatch):
+async def test_work_nitro_boost_reduces_cooldown_and_consumed(monkeypatch, jobs_cog):
     ctx = MagicMock()
     ctx.guild.id = 100
     ctx.author.id = 200
@@ -263,13 +268,13 @@ async def test_work_nitro_boost_reduces_cooldown_and_consumed(monkeypatch):
     mock_col.find_one = AsyncMock(return_value=None)  # no existing cooldown
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "check_and_award_badges", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(xp, "check_and_award_badges", AsyncMock())
 
-    await main.work.callback(ctx)
+    await jobs_cog.work.callback(jobs_cog, ctx)
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Nitro Boost cut your next work cooldown" in t for t in sent_texts)
@@ -290,7 +295,7 @@ async def test_work_nitro_boost_reduces_cooldown_and_consumed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_crime_nitro_boost_reduces_cooldown_on_success(monkeypatch):
+async def test_crime_nitro_boost_reduces_cooldown_on_success(monkeypatch, jobs_cog):
     ctx = MagicMock()
     ctx.guild.id = 100
     ctx.author.id = 200
@@ -307,13 +312,13 @@ async def test_crime_nitro_boost_reduces_cooldown_on_success(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
     monkeypatch.setattr(_random, "random", lambda: 0.0)  # always succeed
 
-    await main.crime.callback(ctx, choice="shoplift")
+    await jobs_cog.crime.callback(jobs_cog, ctx, choice="shoplift")
 
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Nitro Boost cut your next crime cooldown" in t for t in sent_texts)
@@ -334,7 +339,7 @@ async def test_crime_nitro_boost_reduces_cooldown_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fish_nitro_boost_calls_reduce_cooldown_and_consumed(monkeypatch):
+async def test_fish_nitro_boost_calls_reduce_cooldown_and_consumed(monkeypatch, jobs_cog):
     ctx = MagicMock()
     ctx.guild.id = 100
     ctx.author.id = 200
@@ -348,25 +353,25 @@ async def test_fish_nitro_boost_calls_reduce_cooldown_and_consumed(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "check_and_award_badges", AsyncMock())
-    monkeypatch.setattr(main, "increment_badge_counter", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(xp, "check_and_award_badges", AsyncMock())
+    monkeypatch.setattr(xp, "increment_badge_counter", AsyncMock())
     reduce_mock = MagicMock()
-    monkeypatch.setattr(main, "reduce_command_cooldown", reduce_mock)
+    monkeypatch.setattr(econ, "reduce_command_cooldown", reduce_mock)
 
-    await main.fish.callback(ctx)
+    await jobs_cog.fish.callback(jobs_cog, ctx)
 
-    reduce_mock.assert_called_once_with(ctx, int(3600 * main.NITRO_BOOST_COOLDOWN_REDUCTION_PCT))
+    reduce_mock.assert_called_once_with(ctx, int(3600 * cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT))
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Nitro Boost cut your next fish cooldown" in t for t in sent_texts)
     assert any("ran out after 3 uses" in t for t in sent_texts)
 
 
 @pytest.mark.asyncio
-async def test_swim_nitro_boost_calls_reduce_cooldown_and_consumed(monkeypatch):
+async def test_swim_nitro_boost_calls_reduce_cooldown_and_consumed(monkeypatch, jobs_cog):
     ctx = MagicMock()
     ctx.guild.id = 100
     ctx.author.id = 200
@@ -381,25 +386,25 @@ async def test_swim_nitro_boost_calls_reduce_cooldown_and_consumed(monkeypatch):
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "check_and_award_badges", AsyncMock())
-    monkeypatch.setattr(main, "increment_badge_counter", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(xp, "check_and_award_badges", AsyncMock())
+    monkeypatch.setattr(xp, "increment_badge_counter", AsyncMock())
     reduce_mock = MagicMock()
-    monkeypatch.setattr(main, "reduce_command_cooldown", reduce_mock)
+    monkeypatch.setattr(econ, "reduce_command_cooldown", reduce_mock)
 
-    await main.swim.callback(ctx)
+    await jobs_cog.swim.callback(jobs_cog, ctx)
 
-    reduce_mock.assert_called_once_with(ctx, int(3600 * main.NITRO_BOOST_COOLDOWN_REDUCTION_PCT))
+    reduce_mock.assert_called_once_with(ctx, int(3600 * cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT))
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Nitro Boost cut your next swim cooldown" in t for t in sent_texts)
     assert any("ran out after 3 uses" in t for t in sent_texts)
 
 
 @pytest.mark.asyncio
-async def test_bugcatch_nitro_boost_calls_reduce_cooldown_and_consumed(monkeypatch):
+async def test_bugcatch_nitro_boost_calls_reduce_cooldown_and_consumed(monkeypatch, jobs_cog):
     ctx = MagicMock()
     ctx.guild.id = 100
     ctx.author.id = 200
@@ -413,18 +418,18 @@ async def test_bugcatch_nitro_boost_calls_reduce_cooldown_and_consumed(monkeypat
     mock_col = MagicMock()
     mock_col.update_one = AsyncMock()
 
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value=user_data))
-    monkeypatch.setattr(main, "economy_col", mock_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "check_and_award_badges", AsyncMock())
-    monkeypatch.setattr(main, "increment_badge_counter", AsyncMock())
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value=user_data))
+    monkeypatch.setattr(state, "economy_col", mock_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(xp, "check_and_award_badges", AsyncMock())
+    monkeypatch.setattr(xp, "increment_badge_counter", AsyncMock())
     reduce_mock = MagicMock()
-    monkeypatch.setattr(main, "reduce_command_cooldown", reduce_mock)
+    monkeypatch.setattr(econ, "reduce_command_cooldown", reduce_mock)
 
-    await main.bugcatch.callback(ctx)
+    await jobs_cog.bugcatch.callback(jobs_cog, ctx)
 
-    reduce_mock.assert_called_once_with(ctx, int(3600 * main.NITRO_BOOST_COOLDOWN_REDUCTION_PCT))
+    reduce_mock.assert_called_once_with(ctx, int(3600 * cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT))
     sent_texts = [call.args[0] for call in ctx.send.call_args_list if call.args]
     assert any("Nitro Boost cut your next bugcatch cooldown" in t for t in sent_texts)
     assert any("ran out after 3 uses" in t for t in sent_texts)

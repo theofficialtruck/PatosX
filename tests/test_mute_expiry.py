@@ -21,6 +21,7 @@ writer and reader. Regression coverage for a bug where an already-expired mute's
 DB record was deleted without ever removing the Discord role, leaving members
 stuck muted forever after a bot restart or a rejoin."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -28,39 +29,41 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-import main
+from cogs import moderation
+from core import permsHelperFuncs as perms
+from core import state
 
 # === parse_mute_end =============================================================================
 
 
 def test_parse_mute_end_none_returns_none():
-    assert main.parse_mute_end(None) is None
+    assert moderation.parse_mute_end(None) is None
 
 
 def test_parse_mute_end_aware_datetime_passthrough():
     dt = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    assert main.parse_mute_end(dt) == dt
+    assert moderation.parse_mute_end(dt) == dt
 
 
 def test_parse_mute_end_naive_datetime_gets_utc():
     dt = datetime(2025, 1, 1)  # noqa: DTZ001 - intentionally naive, testing the UTC-attach path
-    result = main.parse_mute_end(dt)
+    result = moderation.parse_mute_end(dt)
     assert result.tzinfo == timezone.utc
 
 
 def test_parse_mute_end_iso_string_parses():
     dt = datetime(2025, 6, 1, 12, 30, tzinfo=timezone.utc)
-    result = main.parse_mute_end(dt.isoformat())
+    result = moderation.parse_mute_end(dt.isoformat())
     assert result == dt
 
 
 def test_parse_mute_end_legacy_string_format_parses():
-    result = main.parse_mute_end("2025-06-01 12:30:00")
+    result = moderation.parse_mute_end("2025-06-01 12:30:00")
     assert result == datetime(2025, 6, 1, 12, 30, tzinfo=timezone.utc)
 
 
 def test_parse_mute_end_garbage_string_returns_none():
-    assert main.parse_mute_end("not a date") is None
+    assert moderation.parse_mute_end("not a date") is None
 
 
 # === remove_mute_role ============================================================================
@@ -72,7 +75,7 @@ async def test_remove_mute_role_removes_when_present():
     guild = SimpleNamespace(roles=[mute_role])
     member = SimpleNamespace(roles=[mute_role], remove_roles=AsyncMock())
 
-    result = await main.remove_mute_role(guild, member, reason="test")
+    result = await moderation.remove_mute_role(guild, member, reason="test")
 
     assert result is True
     member.remove_roles.assert_awaited_once_with(mute_role, reason="test")
@@ -84,7 +87,7 @@ async def test_remove_mute_role_noop_when_member_missing_role():
     guild = SimpleNamespace(roles=[mute_role])
     member = SimpleNamespace(roles=[], remove_roles=AsyncMock())
 
-    result = await main.remove_mute_role(guild, member, reason="test")
+    result = await moderation.remove_mute_role(guild, member, reason="test")
 
     assert result is False
     member.remove_roles.assert_not_awaited()
@@ -95,7 +98,7 @@ async def test_remove_mute_role_noop_when_no_muted_role_in_guild():
     guild = SimpleNamespace(roles=[])
     member = SimpleNamespace(roles=[], remove_roles=AsyncMock())
 
-    result = await main.remove_mute_role(guild, member, reason="test")
+    result = await moderation.remove_mute_role(guild, member, reason="test")
 
     assert result is False
     member.remove_roles.assert_not_awaited()
@@ -108,7 +111,7 @@ async def test_remove_mute_role_swallows_forbidden():
     forbidden = discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), None)
     member = SimpleNamespace(roles=[mute_role], remove_roles=AsyncMock(side_effect=forbidden))
 
-    result = await main.remove_mute_role(guild, member, reason="test")
+    result = await moderation.remove_mute_role(guild, member, reason="test")
 
     assert result is True  # removal was attempted, even though it failed
 
@@ -117,7 +120,7 @@ async def test_remove_mute_role_swallows_forbidden():
 
 
 @pytest.mark.asyncio
-async def test_reapply_or_clear_mute_removes_role_when_expired(monkeypatch):
+async def test_reapply_or_clear_mute_removes_role_when_expired(monkeypatch, bot):
     """Regression test for the primary bug: an expired mute must delete the record
     AND remove the role together - never delete without removing."""
     mute_role = SimpleNamespace(name="Muted")
@@ -127,9 +130,9 @@ async def test_reapply_or_clear_mute_removes_role_when_expired(monkeypatch):
     doc = {"_id": "doc1", "mute_end": past}
 
     delete_one = AsyncMock()
-    monkeypatch.setattr(main.mutes_col, "delete_one", delete_one)
+    monkeypatch.setattr(state.mutes_col, "delete_one", delete_one)
 
-    await main._reapply_or_clear_mute(guild, member, doc, mute_role)
+    await moderation._reapply_or_clear_mute(guild, member, doc, mute_role)
 
     member.remove_roles.assert_awaited_once_with(mute_role, reason="Mute expired while bot was offline")
     member.add_roles.assert_not_awaited()
@@ -145,9 +148,9 @@ async def test_reapply_or_clear_mute_keeps_active_mute(monkeypatch):
     doc = {"_id": "doc1", "mute_end": future}
 
     delete_one = AsyncMock()
-    monkeypatch.setattr(main.mutes_col, "delete_one", delete_one)
+    monkeypatch.setattr(state.mutes_col, "delete_one", delete_one)
 
-    await main._reapply_or_clear_mute(guild, member, doc, mute_role)
+    await moderation._reapply_or_clear_mute(guild, member, doc, mute_role)
 
     member.add_roles.assert_awaited_once_with(mute_role, reason="Reapplying mute after restart")
     member.remove_roles.assert_not_awaited()
@@ -162,9 +165,9 @@ async def test_reapply_or_clear_mute_indefinite_mute_reapplies_role(monkeypatch)
     doc = {"_id": "doc1"}  # no mute_end at all -> indefinite mute
 
     delete_one = AsyncMock()
-    monkeypatch.setattr(main.mutes_col, "delete_one", delete_one)
+    monkeypatch.setattr(state.mutes_col, "delete_one", delete_one)
 
-    await main._reapply_or_clear_mute(guild, member, doc, mute_role)
+    await moderation._reapply_or_clear_mute(guild, member, doc, mute_role)
 
     member.add_roles.assert_awaited_once_with(mute_role, reason="Reapplying mute after restart")
     delete_one.assert_not_awaited()
@@ -174,7 +177,7 @@ async def test_reapply_or_clear_mute_indefinite_mute_reapplies_role(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_handle_rejoin_mute_does_not_reapply_expired(monkeypatch):
+async def test_handle_rejoin_mute_does_not_reapply_expired(monkeypatch, bot, moderation_cog):
     """Regression test for the rejoin variant of the primary bug: a member rejoining
     after their mute already expired must NOT be re-muted."""
     mute_role = SimpleNamespace(name="Muted")
@@ -184,11 +187,11 @@ async def test_handle_rejoin_mute_does_not_reapply_expired(monkeypatch):
     doc = {"mute_end": past}
 
     delete_one = AsyncMock()
-    monkeypatch.setattr(main.mutes_col, "delete_one", delete_one)
+    monkeypatch.setattr(state.mutes_col, "delete_one", delete_one)
     create_task = MagicMock()
-    monkeypatch.setattr(main.bot, "loop", SimpleNamespace(create_task=create_task))
+    monkeypatch.setattr(bot, "loop", SimpleNamespace(create_task=create_task))
 
-    await main._handle_rejoin_mute(member, doc)
+    await moderation_cog._handle_rejoin_mute(member, doc)
 
     member.add_roles.assert_not_awaited()
     delete_one.assert_awaited_once_with({"guild_id": 1, "user_id": 2})
@@ -196,7 +199,7 @@ async def test_handle_rejoin_mute_does_not_reapply_expired(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_handle_rejoin_mute_reapplies_active(monkeypatch):
+async def test_handle_rejoin_mute_reapplies_active(monkeypatch, bot, moderation_cog):
     mute_role = SimpleNamespace(name="Muted")
     guild = SimpleNamespace(id=1, roles=[mute_role])
     member = SimpleNamespace(id=2, guild=guild, roles=[], add_roles=AsyncMock(), remove_roles=AsyncMock())
@@ -204,12 +207,12 @@ async def test_handle_rejoin_mute_reapplies_active(monkeypatch):
     doc = {"mute_end": future}
 
     delete_one = AsyncMock()
-    monkeypatch.setattr(main.mutes_col, "delete_one", delete_one)
+    monkeypatch.setattr(state.mutes_col, "delete_one", delete_one)
     # Close the coroutine handed to create_task instead of letting it leak unawaited.
     create_task = MagicMock(side_effect=lambda coro: coro.close())
-    monkeypatch.setattr(main.bot, "loop", SimpleNamespace(create_task=create_task))
+    monkeypatch.setattr(bot, "loop", SimpleNamespace(create_task=create_task))
 
-    await main._handle_rejoin_mute(member, doc)
+    await moderation_cog._handle_rejoin_mute(member, doc)
 
     member.add_roles.assert_awaited_once_with(mute_role, reason="Reapplying mute after rejoin")
     delete_one.assert_not_awaited()
@@ -220,7 +223,7 @@ async def test_handle_rejoin_mute_reapplies_active(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mute_command_stores_int_ids(monkeypatch):
+async def test_mute_command_stores_int_ids(monkeypatch, moderation_cog):
     """Regression test: .mute must write guild_id/user_id as int so on_ready's restart
     query and .unmute's delete (both int-keyed) can actually find the record."""
     ctx = MagicMock()
@@ -235,12 +238,12 @@ async def test_mute_command_stores_int_ids(monkeypatch):
     ctx.author = MagicMock(name="Mod", id=999)
     member.id = 888
     member.mention = "@User"
-    main.actions_data.clear()
-    monkeypatch.setattr(main, "check_target_permission", lambda ctx, m: None)
+    moderation.actions_data.clear()
+    monkeypatch.setattr(perms, "check_target_permission", lambda ctx, m: None)
     update_one = AsyncMock()
-    monkeypatch.setattr(main.mutes_col, "update_one", update_one)
+    monkeypatch.setattr(state.mutes_col, "update_one", update_one)
 
-    await main.mute(ctx, member, duration="10s", reason="Spamming")
+    await moderation_cog.mute(ctx, member, duration="10s", reason="Spamming")
 
     update_one.assert_awaited_once()
     call_filter, call_update = update_one.call_args[0][0], update_one.call_args[0][1]
@@ -249,12 +252,12 @@ async def test_mute_command_stores_int_ids(monkeypatch):
     assert isinstance(call_update["$set"]["user_id"], int)
     assert isinstance(call_update["$set"]["mute_end"], str)
     # actions_data must keep using string keys - unrelated to mutes_col's schema
-    assert str(ctx.guild.id) in main.actions_data
-    assert str(member.id) in main.actions_data[str(ctx.guild.id)]
+    assert str(ctx.guild.id) in moderation.actions_data
+    assert str(member.id) in moderation.actions_data[str(ctx.guild.id)]
 
 
 @pytest.mark.asyncio
-async def test_unmute_deletes_mute_written_by_mute_command(monkeypatch):
+async def test_unmute_deletes_mute_written_by_mute_command(monkeypatch, moderation_cog):
     """Direct regression guard for the type-mismatch bug: .mute's upsert filter and
     .unmute's delete filter must agree on key types so the delete actually matches."""
     ctx = MagicMock()
@@ -270,22 +273,22 @@ async def test_unmute_deletes_mute_written_by_mute_command(monkeypatch):
     ctx.author = MagicMock(name="Mod", id=999)
     member.id = 888
     member.mention = "@User"
-    main.actions_data.clear()
-    monkeypatch.setattr(main, "check_target_permission", lambda ctx, m: None)
+    moderation.actions_data.clear()
+    monkeypatch.setattr(perms, "check_target_permission", lambda ctx, m: None)
     mute_update_one = AsyncMock()
-    monkeypatch.setattr(main.mutes_col, "update_one", mute_update_one)
+    monkeypatch.setattr(state.mutes_col, "update_one", mute_update_one)
 
-    await main.mute(ctx, member, duration="10s", reason="Spamming")
+    await moderation_cog.mute(ctx, member, duration="10s", reason="Spamming")
     mute_filter = mute_update_one.call_args[0][0]
 
     # .unmute removes the role directly and deletes by the same filter shape
     member.roles = [mute_role]
     member.remove_roles = AsyncMock()
     unmute_delete_one = AsyncMock()
-    monkeypatch.setattr(main.mutes_col, "delete_one", unmute_delete_one)
-    monkeypatch.setattr(main, "log_action", AsyncMock())
+    monkeypatch.setattr(state.mutes_col, "delete_one", unmute_delete_one)
+    monkeypatch.setattr(perms, "log_action", AsyncMock())
 
-    await main.unmute(ctx, member)
+    await moderation_cog.unmute(ctx, member)
 
     unmute_filter = unmute_delete_one.call_args[0][0]
     assert unmute_filter == mute_filter
@@ -308,12 +311,12 @@ async def test_execute_moderation_mute_stores_iso_string_mute_end(monkeypatch):
     member.mention = "@User"
     ctx.author = MagicMock(name="Mod", id=999)
 
-    monkeypatch.setattr(main.mod_col, "update_one", AsyncMock())
+    monkeypatch.setattr(state.mod_col, "update_one", AsyncMock())
     mutes_update_one = AsyncMock()
-    monkeypatch.setattr(main.mutes_col, "update_one", mutes_update_one)
-    monkeypatch.setattr(main, "log_action", AsyncMock())
+    monkeypatch.setattr(state.mutes_col, "update_one", mutes_update_one)
+    monkeypatch.setattr(perms, "log_action", AsyncMock())
 
-    view = main.ModerationConfirmView(action="mute", member=member, reason="Spamming", duration="10s", ctx=ctx)
+    view = moderation.ModerationConfirmView(action="mute", member=member, reason="Spamming", duration="10s", ctx=ctx)
     interaction = MagicMock()
     interaction.response.edit_message = AsyncMock()
 
@@ -339,9 +342,9 @@ async def test_schedule_unmute_handles_member_left(monkeypatch):
     guild = SimpleNamespace(id=1, get_member=MagicMock(return_value=None))
 
     delete_one = AsyncMock()
-    monkeypatch.setattr(main.mutes_col, "delete_one", delete_one)
-    monkeypatch.setattr(main.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(state.mutes_col, "delete_one", delete_one)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
-    await main.schedule_unmute(guild, original_member, 0)
+    await moderation.schedule_unmute(guild, original_member, 0)
 
     delete_one.assert_awaited_once_with({"guild_id": 1, "user_id": 42})

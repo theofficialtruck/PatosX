@@ -21,7 +21,13 @@ from unittest.mock import AsyncMock
 import pytest
 from pymongo.errors import DuplicateKeyError
 
-import main
+from cogs import games_gambling
+from cogs.economy import Economy
+from core import config as cfg
+from core import economyHelperFuncs as econ
+from core import permsHelperFuncs as perms
+from core import state
+from core import xpHelperFuncs as xp
 
 
 def _apply_dotted(doc: dict, path: str, value, op):
@@ -126,15 +132,15 @@ class FakeEconomyCol:
             self.doc.update(update["$set"])
 
 
-ALL_GOAL_KEYS = {g["key"] for g in main.MONTHLY_REWARD_GOALS}
+ALL_GOAL_KEYS = {g["key"] for g in cfg.MONTHLY_REWARD_GOALS}
 
 
 def target_for(key: str) -> int:
-    return next(g["target"] for g in main.MONTHLY_REWARD_GOALS if g["key"] == key)
+    return next(g["target"] for g in cfg.MONTHLY_REWARD_GOALS if g["key"] == key)
 
 
 def reward_for(key: str) -> int:
-    return next(g["reward"] for g in main.MONTHLY_REWARD_GOALS if g["key"] == key)
+    return next(g["reward"] for g in cfg.MONTHLY_REWARD_GOALS if g["key"] == key)
 
 
 # ---------------------------------------------------------------------------
@@ -145,20 +151,20 @@ def reward_for(key: str) -> int:
 @pytest.mark.asyncio
 async def test_get_monthly_rewards_doc_creates_fresh_doc_with_every_goal_zeroed(monkeypatch):
     col = FakeMonthlyRewardsCol(None)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
 
     assert doc["counters"].keys() == ALL_GOAL_KEYS
     assert all(v == 0 for v in doc["counters"].values())
     assert doc["claimed"].keys() == ALL_GOAL_KEYS
     assert all(v is False for v in doc["claimed"].values())
-    assert doc["month"] == main._current_month_key()
+    assert doc["month"] == econ._current_month_key()
 
 
 @pytest.mark.asyncio
 async def test_get_monthly_rewards_doc_preserves_progress_within_same_month(monkeypatch):
-    current_month = main._current_month_key()
+    current_month = econ._current_month_key()
     existing = {
         "_id": "123-456",
         "guild": "123",
@@ -168,9 +174,9 @@ async def test_get_monthly_rewards_doc_preserves_progress_within_same_month(monk
         "claimed": {k: False for k in ALL_GOAL_KEYS},
     }
     col = FakeMonthlyRewardsCol(existing)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
 
     assert doc["counters"]["duck_uses"] == 7
 
@@ -186,11 +192,11 @@ async def test_get_monthly_rewards_doc_resets_counters_and_claims_on_month_rollo
         "claimed": {**{k: False for k in ALL_GOAL_KEYS}, "duck_uses": True},
     }
     col = FakeMonthlyRewardsCol(stale)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
 
-    assert doc["month"] == main._current_month_key()
+    assert doc["month"] == econ._current_month_key()
     assert all(v == 0 for v in doc["counters"].values())
     assert all(v is False for v in doc["claimed"].values())
 
@@ -201,7 +207,7 @@ async def test_get_monthly_rewards_doc_survives_a_concurrent_insert_race(monkeyp
     concurrently and both tried to create that user's monthly-rewards document at the same
     instant. MongoDB let one insert through and rejected the other with E11000 - that must be
     swallowed as "someone else already created it", not raised up to the caller."""
-    current_month = main._current_month_key()
+    current_month = econ._current_month_key()
     winning_doc = {
         "_id": "123-456",
         "guild": "123",
@@ -211,9 +217,9 @@ async def test_get_monthly_rewards_doc_survives_a_concurrent_insert_race(monkeyp
         "claimed": {k: False for k in ALL_GOAL_KEYS},
     }
     col = RaceConditionMonthlyRewardsCol(winning_doc)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)  # must not raise DuplicateKeyError
+    doc = await econ.get_monthly_rewards_doc(123, 456)  # must not raise DuplicateKeyError
 
     assert doc["month"] == current_month
     assert doc["counters"].keys() == ALL_GOAL_KEYS
@@ -223,7 +229,7 @@ async def test_get_monthly_rewards_doc_survives_a_concurrent_insert_race(monkeyp
 async def test_increment_monthly_goal_does_not_lose_an_update_to_the_insert_race(monkeypatch):
     """End-to-end version of the same regression: the increment that triggered the race must
     still land, not silently vanish because the underlying insert raced."""
-    current_month = main._current_month_key()
+    current_month = econ._current_month_key()
     winning_doc = {
         "_id": "123-456",
         "guild": "123",
@@ -233,11 +239,11 @@ async def test_increment_monthly_goal_does_not_lose_an_update_to_the_insert_race
         "claimed": {k: False for k in ALL_GOAL_KEYS},
     }
     col = RaceConditionMonthlyRewardsCol(winning_doc)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
 
-    await main.increment_monthly_goal(123, 456, "duck_uses", 1)
+    await econ.increment_monthly_goal(123, 456, "duck_uses", 1)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
     assert doc["counters"]["duck_uses"] == 1
 
 
@@ -246,7 +252,7 @@ async def test_get_monthly_rewards_doc_backfills_goal_keys_missing_from_an_older
     """Simulates a document saved before a new goal existed: it's missing that goal's
     counter/claimed entries entirely. Reading it must not KeyError and must treat the
     missing goal as zero progress / unclaimed rather than crashing."""
-    current_month = main._current_month_key()
+    current_month = econ._current_month_key()
     partial = {
         "_id": "123-456",
         "guild": "123",
@@ -256,9 +262,9 @@ async def test_get_monthly_rewards_doc_backfills_goal_keys_missing_from_an_older
         "claimed": {"duck_uses": False},
     }
     col = FakeMonthlyRewardsCol(partial)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
 
     assert doc["counters"].keys() == ALL_GOAL_KEYS
     assert doc["claimed"].keys() == ALL_GOAL_KEYS
@@ -274,13 +280,13 @@ async def test_get_monthly_rewards_doc_backfills_goal_keys_missing_from_an_older
 @pytest.mark.asyncio
 async def test_increment_monthly_goal_only_touches_the_named_counter(monkeypatch):
     col = FakeMonthlyRewardsCol(None)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
 
-    await main.increment_monthly_goal(123, 456, "duck_uses", 1)
-    await main.increment_monthly_goal(123, 456, "duck_uses", 1)
-    await main.increment_monthly_goal(123, 456, "work_uses", 5)
+    await econ.increment_monthly_goal(123, 456, "duck_uses", 1)
+    await econ.increment_monthly_goal(123, 456, "duck_uses", 1)
+    await econ.increment_monthly_goal(123, 456, "work_uses", 5)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
     assert doc["counters"]["duck_uses"] == 2
     assert doc["counters"]["work_uses"] == 5
     assert doc["counters"]["fish_uses"] == 0
@@ -299,11 +305,11 @@ async def test_increment_monthly_goal_resets_stale_month_before_incrementing(mon
         "claimed": {k: False for k in ALL_GOAL_KEYS},
     }
     col = FakeMonthlyRewardsCol(stale)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
 
-    await main.increment_monthly_goal(123, 456, "duck_uses", 1)
+    await econ.increment_monthly_goal(123, 456, "duck_uses", 1)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
     assert doc["counters"]["duck_uses"] == 1
 
 
@@ -312,12 +318,12 @@ async def test_increment_monthly_goal_string_and_int_ids_write_the_same_document
     """increment_monthly_goal is called with raw ints from add_balance/on_command_completion
     and with strs from riddle/duckquiz - both must resolve to the same underlying document."""
     col = FakeMonthlyRewardsCol(None)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
 
-    await main.increment_monthly_goal(123, 456, "commands_used", 1)
-    await main.increment_monthly_goal("123", "456", "commands_used", 1)
+    await econ.increment_monthly_goal(123, 456, "commands_used", 1)
+    await econ.increment_monthly_goal("123", "456", "commands_used", 1)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
     assert doc["counters"]["commands_used"] == 2
 
 
@@ -338,21 +344,21 @@ async def test_check_and_award_pays_out_and_marks_claimed_when_target_reached(mo
         "_id": "123-456",
         "guild": "123",
         "user": "456",
-        "month": main._current_month_key(),
+        "month": econ._current_month_key(),
         "counters": {**{k: 0 for k in ALL_GOAL_KEYS}, "duck_uses": target_for("duck_uses")},
         "claimed": {k: False for k in ALL_GOAL_KEYS},
     }
     rewards_col = FakeMonthlyRewardsCol(doc)
     economy = FakeEconomyCol({"wallet": 0})
-    monkeypatch.setattr(main, "monthly_rewards_col", rewards_col)
-    monkeypatch.setattr(main, "economy_col", economy)
+    monkeypatch.setattr(state, "monthly_rewards_col", rewards_col)
+    monkeypatch.setattr(state, "economy_col", economy)
     guild, member = make_guild_and_member()
     channel = SimpleNamespace(send=AsyncMock())
 
-    await main.check_and_award_monthly_rewards(channel, guild, member)
+    await econ.check_and_award_monthly_rewards(channel, guild, member)
 
     assert economy.doc["wallet"] == reward_for("duck_uses")
-    updated = await main.get_monthly_rewards_doc(123, 456)
+    updated = await econ.get_monthly_rewards_doc(123, 456)
     assert updated["claimed"]["duck_uses"] is True
     assert any("Duck Fanatic" in (c.args[0] if c.args else "") for c in channel.send.await_args_list)
 
@@ -363,18 +369,18 @@ async def test_check_and_award_does_not_reaward_an_already_claimed_goal(monkeypa
         "_id": "123-456",
         "guild": "123",
         "user": "456",
-        "month": main._current_month_key(),
+        "month": econ._current_month_key(),
         "counters": {**{k: 0 for k in ALL_GOAL_KEYS}, "duck_uses": target_for("duck_uses") + 50},
         "claimed": {**{k: False for k in ALL_GOAL_KEYS}, "duck_uses": True},
     }
     rewards_col = FakeMonthlyRewardsCol(doc)
     economy = FakeEconomyCol({"wallet": 0})
-    monkeypatch.setattr(main, "monthly_rewards_col", rewards_col)
-    monkeypatch.setattr(main, "economy_col", economy)
+    monkeypatch.setattr(state, "monthly_rewards_col", rewards_col)
+    monkeypatch.setattr(state, "economy_col", economy)
     guild, member = make_guild_and_member()
     channel = SimpleNamespace(send=AsyncMock())
 
-    await main.check_and_award_monthly_rewards(channel, guild, member)
+    await econ.check_and_award_monthly_rewards(channel, guild, member)
 
     assert economy.doc["wallet"] == 0
     channel.send.assert_not_awaited()
@@ -386,7 +392,7 @@ async def test_check_and_award_sums_multiple_goals_completed_in_the_same_check(m
         "_id": "123-456",
         "guild": "123",
         "user": "456",
-        "month": main._current_month_key(),
+        "month": econ._current_month_key(),
         "counters": {
             **{k: 0 for k in ALL_GOAL_KEYS},
             "duck_uses": target_for("duck_uses"),
@@ -396,15 +402,15 @@ async def test_check_and_award_sums_multiple_goals_completed_in_the_same_check(m
     }
     rewards_col = FakeMonthlyRewardsCol(doc)
     economy = FakeEconomyCol({"wallet": 0})
-    monkeypatch.setattr(main, "monthly_rewards_col", rewards_col)
-    monkeypatch.setattr(main, "economy_col", economy)
+    monkeypatch.setattr(state, "monthly_rewards_col", rewards_col)
+    monkeypatch.setattr(state, "economy_col", economy)
     guild, member = make_guild_and_member()
     channel = SimpleNamespace(send=AsyncMock())
 
-    await main.check_and_award_monthly_rewards(channel, guild, member)
+    await econ.check_and_award_monthly_rewards(channel, guild, member)
 
     assert economy.doc["wallet"] == reward_for("duck_uses") + reward_for("work_uses")
-    updated = await main.get_monthly_rewards_doc(123, 456)
+    updated = await econ.get_monthly_rewards_doc(123, 456)
     assert updated["claimed"]["duck_uses"] is True
     assert updated["claimed"]["work_uses"] is True
     assert channel.send.await_count == 2
@@ -418,20 +424,20 @@ async def test_check_and_award_payout_does_not_recurse_into_coins_collected(monk
         "_id": "123-456",
         "guild": "123",
         "user": "456",
-        "month": main._current_month_key(),
+        "month": econ._current_month_key(),
         "counters": {**{k: 0 for k in ALL_GOAL_KEYS}, "duck_uses": target_for("duck_uses")},
         "claimed": {k: False for k in ALL_GOAL_KEYS},
     }
     rewards_col = FakeMonthlyRewardsCol(doc)
     economy = FakeEconomyCol({"wallet": 0})
-    monkeypatch.setattr(main, "monthly_rewards_col", rewards_col)
-    monkeypatch.setattr(main, "economy_col", economy)
+    monkeypatch.setattr(state, "monthly_rewards_col", rewards_col)
+    monkeypatch.setattr(state, "economy_col", economy)
     increment_spy = AsyncMock()
-    monkeypatch.setattr(main, "increment_monthly_goal", increment_spy)
+    monkeypatch.setattr(econ, "increment_monthly_goal", increment_spy)
     guild, member = make_guild_and_member()
     channel = SimpleNamespace(send=AsyncMock())
 
-    await main.check_and_award_monthly_rewards(channel, guild, member)
+    await econ.check_and_award_monthly_rewards(channel, guild, member)
 
     increment_spy.assert_not_awaited()
 
@@ -442,18 +448,18 @@ async def test_check_and_award_below_target_pays_nothing(monkeypatch):
         "_id": "123-456",
         "guild": "123",
         "user": "456",
-        "month": main._current_month_key(),
+        "month": econ._current_month_key(),
         "counters": {**{k: 0 for k in ALL_GOAL_KEYS}, "duck_uses": target_for("duck_uses") - 1},
         "claimed": {k: False for k in ALL_GOAL_KEYS},
     }
     rewards_col = FakeMonthlyRewardsCol(doc)
     economy = FakeEconomyCol({"wallet": 0})
-    monkeypatch.setattr(main, "monthly_rewards_col", rewards_col)
-    monkeypatch.setattr(main, "economy_col", economy)
+    monkeypatch.setattr(state, "monthly_rewards_col", rewards_col)
+    monkeypatch.setattr(state, "economy_col", economy)
     guild, member = make_guild_and_member()
     channel = SimpleNamespace(send=AsyncMock())
 
-    await main.check_and_award_monthly_rewards(channel, guild, member)
+    await econ.check_and_award_monthly_rewards(channel, guild, member)
 
     assert economy.doc["wallet"] == 0
     channel.send.assert_not_awaited()
@@ -467,32 +473,53 @@ async def test_check_and_award_below_target_pays_nothing(monkeypatch):
 @pytest.mark.asyncio
 async def test_on_command_completion_increments_generic_and_mapped_counters(monkeypatch):
     col = FakeMonthlyRewardsCol(None)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
-    monkeypatch.setattr(main, "check_and_award_monthly_rewards", AsyncMock())
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
+    monkeypatch.setattr(econ, "check_and_award_monthly_rewards", AsyncMock())
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456)
     ctx = SimpleNamespace(guild=guild, author=author, command=SimpleNamespace(name="duck"))
 
-    await main.on_command_completion(ctx)
+    await xp.on_command_completion(ctx)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
     assert doc["counters"]["commands_used"] == 1
     assert doc["counters"]["duck_uses"] == 1
     assert doc["counters"]["work_uses"] == 0
 
 
 @pytest.mark.asyncio
+async def test_on_command_completion_skips_counters_when_command_was_on_cooldown(monkeypatch):
+    """Commands like .work/.beg/.daily use a manual cooldown check that sends a cooldown
+    message and returns normally instead of raising, so discord.py still fires
+    command_completion. xp_earn flags that invocation via ctx._skip_xp_award, and
+    on_command_completion must honor it - otherwise spamming an on-cooldown command
+    would let players farm monthly goal progress for free."""
+    col = FakeMonthlyRewardsCol(None)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
+    award_spy = AsyncMock()
+    monkeypatch.setattr(econ, "check_and_award_monthly_rewards", award_spy)
+    guild = SimpleNamespace(id=123)
+    author = SimpleNamespace(id=456)
+    ctx = SimpleNamespace(guild=guild, author=author, command=SimpleNamespace(name="work"), _skip_xp_award=True)
+
+    await xp.on_command_completion(ctx)
+
+    assert col.doc is None
+    award_spy.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_on_command_completion_unmapped_command_only_bumps_commands_used(monkeypatch):
     col = FakeMonthlyRewardsCol(None)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
-    monkeypatch.setattr(main, "check_and_award_monthly_rewards", AsyncMock())
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
+    monkeypatch.setattr(econ, "check_and_award_monthly_rewards", AsyncMock())
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456)
     ctx = SimpleNamespace(guild=guild, author=author, command=SimpleNamespace(name="balance"))
 
-    await main.on_command_completion(ctx)
+    await xp.on_command_completion(ctx)
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
     assert doc["counters"]["commands_used"] == 1
     assert all(doc["counters"][k] == 0 for k in ALL_GOAL_KEYS if k != "commands_used")
 
@@ -500,14 +527,14 @@ async def test_on_command_completion_unmapped_command_only_bumps_commands_used(m
 @pytest.mark.asyncio
 async def test_on_command_completion_skips_staff_commands(monkeypatch):
     col = FakeMonthlyRewardsCol(None)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
     award_spy = AsyncMock()
-    monkeypatch.setattr(main, "check_and_award_monthly_rewards", award_spy)
+    monkeypatch.setattr(econ, "check_and_award_monthly_rewards", award_spy)
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456)
     ctx = SimpleNamespace(guild=guild, author=author, command=SimpleNamespace(name="ban"))
 
-    await main.on_command_completion(ctx)
+    await xp.on_command_completion(ctx)
 
     assert col.doc is None
     award_spy.assert_not_awaited()
@@ -516,10 +543,10 @@ async def test_on_command_completion_skips_staff_commands(monkeypatch):
 @pytest.mark.asyncio
 async def test_on_command_completion_ignores_dm_context_with_no_guild(monkeypatch):
     col = FakeMonthlyRewardsCol(None)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
     ctx = SimpleNamespace(guild=None, author=SimpleNamespace(id=456), command=SimpleNamespace(name="duck"))
 
-    await main.on_command_completion(ctx)
+    await xp.on_command_completion(ctx)
 
     assert col.doc is None
 
@@ -527,14 +554,14 @@ async def test_on_command_completion_ignores_dm_context_with_no_guild(monkeypatc
 @pytest.mark.asyncio
 async def test_on_command_completion_checks_for_newly_completed_goals(monkeypatch):
     col = FakeMonthlyRewardsCol(None)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
     award_spy = AsyncMock()
-    monkeypatch.setattr(main, "check_and_award_monthly_rewards", award_spy)
+    monkeypatch.setattr(econ, "check_and_award_monthly_rewards", award_spy)
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456)
     ctx = SimpleNamespace(guild=guild, author=author, command=SimpleNamespace(name="duck"))
 
-    await main.on_command_completion(ctx)
+    await xp.on_command_completion(ctx)
 
     award_spy.assert_awaited_once_with(ctx, guild, author)
 
@@ -547,32 +574,32 @@ async def test_on_command_completion_checks_for_newly_completed_goals(monkeypatc
 @pytest.mark.asyncio
 async def test_quizview_finish_quiz_tracks_quiz_passes_on_a_passing_score(monkeypatch):
     col = FakeMonthlyRewardsCol(None)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
-    monkeypatch.setattr(main, "quiz_col", SimpleNamespace(update_one=AsyncMock()))
-    monkeypatch.setattr(main, "config_col", SimpleNamespace(find_one=AsyncMock(return_value={})))
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "quiz_col", SimpleNamespace(update_one=AsyncMock()))
+    monkeypatch.setattr(state, "config_col", SimpleNamespace(find_one=AsyncMock(return_value={})))
     guild = SimpleNamespace(id=123, get_role=lambda rid: None)
     author = SimpleNamespace(id=456)
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
 
-    view = main.QuizView(ctx, "quiz-1", [{"q": "?", "options": ["a"], "answer": 1}] * 10)
+    view = games_gambling.QuizView(ctx, "quiz-1", [{"q": "?", "options": ["a"], "answer": 1}] * 10)
     view.score = 10  # 100% - clears the PASS_PCT threshold
 
     await view.finish_quiz()
 
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
     assert doc["counters"]["quiz_passes"] == 1
 
 
 @pytest.mark.asyncio
 async def test_quizview_finish_quiz_does_not_track_quiz_passes_on_a_failing_score(monkeypatch):
     col = FakeMonthlyRewardsCol(None)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
-    monkeypatch.setattr(main, "quiz_col", SimpleNamespace(update_one=AsyncMock()))
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
+    monkeypatch.setattr(state, "quiz_col", SimpleNamespace(update_one=AsyncMock()))
     guild = SimpleNamespace(id=123, get_role=lambda rid: None)
     author = SimpleNamespace(id=456)
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
 
-    view = main.QuizView(ctx, "quiz-1", [{"q": "?", "options": ["a"], "answer": 1}] * 10)
+    view = games_gambling.QuizView(ctx, "quiz-1", [{"q": "?", "options": ["a"], "answer": 1}] * 10)
     view.score = 0  # 0% - well under PASS_PCT
 
     await view.finish_quiz()
@@ -586,23 +613,23 @@ async def test_quizview_finish_quiz_does_not_track_quiz_passes_on_a_failing_scor
 
 
 @pytest.mark.asyncio
-async def test_monthlyrewards_command_shows_progress_and_total_claimed(monkeypatch):
+async def test_monthlyrewards_command_shows_progress_and_total_claimed(monkeypatch, economy_cog):
     doc = {
         "_id": "123-456",
         "guild": "123",
         "user": "456",
-        "month": main._current_month_key(),
+        "month": econ._current_month_key(),
         "counters": {**{k: 0 for k in ALL_GOAL_KEYS}, "duck_uses": target_for("duck_uses"), "work_uses": 3},
         "claimed": {**{k: False for k in ALL_GOAL_KEYS}, "duck_uses": True},
     }
     col = FakeMonthlyRewardsCol(doc)
-    monkeypatch.setattr(main, "monthly_rewards_col", col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(state, "monthly_rewards_col", col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456)
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
 
-    await main.monthlyrewards.callback(ctx)
+    await economy_cog.monthlyrewards.callback(economy_cog, ctx)
 
     ctx.send.assert_awaited_once()
     embed = ctx.send.await_args.kwargs["embed"]
@@ -619,7 +646,7 @@ async def test_monthlyrewards_command_shows_progress_and_total_claimed(monkeypat
 async def test_monthlyrewards_command_has_no_xp_earn_decorator():
     """xp_earn-wrapped commands set __wrapped__ via functools.wraps; monthlyrewards must not
     be one of them since the task explicitly requires no XP for checking progress."""
-    assert not hasattr(main.monthlyrewards.callback, "__wrapped__")
+    assert not hasattr(Economy.monthlyrewards.callback, "__wrapped__")
 
 
 # ---------------------------------------------------------------------------
@@ -634,13 +661,13 @@ async def test_monthly_reward_helpers_are_safe_noops_against_a_real_looking_coll
     from motor.motor_asyncio import AsyncIOMotorClient
 
     lookalike = AsyncIOMotorClient("mongodb://localhost:27017")["test_db"]["monthly_rewards"]
-    monkeypatch.setattr(main, "monthly_rewards_col", lookalike)
+    monkeypatch.setattr(state, "monthly_rewards_col", lookalike)
     guild, member = make_guild_and_member()
     channel = SimpleNamespace(send=AsyncMock())
 
     # None of these should raise, hang, or attempt network I/O.
-    doc = await main.get_monthly_rewards_doc(123, 456)
+    doc = await econ.get_monthly_rewards_doc(123, 456)
     assert doc["counters"].keys() == ALL_GOAL_KEYS
-    await main.increment_monthly_goal(123, 456, "duck_uses", 1)
-    await main.check_and_award_monthly_rewards(channel, guild, member)
+    await econ.increment_monthly_goal(123, 456, "duck_uses", 1)
+    await econ.check_and_award_monthly_rewards(channel, guild, member)
     channel.send.assert_not_awaited()

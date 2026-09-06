@@ -17,9 +17,14 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
-import main
+from cogs import shop
+from core import economyHelperFuncs as econ
+from core import permsHelperFuncs as perms
+from core import state
+from core import xpHelperFuncs as xp
 
 
 class FakeBadgesCol:
@@ -110,14 +115,14 @@ async def test_shop_dropdown_purchases_award_shopaholic_badge(monkeypatch):
     economy = StatefulEconomyCol({"wallet": 1000, "inventory": []})
     badges = FakeBadgesCol()
     xp = FakeXpCol()
-    monkeypatch.setattr(main, "economy_col", economy)
-    monkeypatch.setattr(main, "badges_col", badges)
-    monkeypatch.setattr(main, "xp_col", xp)
+    monkeypatch.setattr(state, "economy_col", economy)
+    monkeypatch.setattr(state, "badges_col", badges)
+    monkeypatch.setattr(state, "xp_col", xp)
 
     async def fake_get_user(ctx, guild_id, user_id):
         return await economy.find_one({"_id": f"{guild_id}-{user_id}"})
 
-    monkeypatch.setattr(main, "get_user", fake_get_user)
+    monkeypatch.setattr(econ, "get_user", fake_get_user)
 
     sent_channel_messages = []
     channel = SimpleNamespace(send=AsyncMock(side_effect=lambda msg: sent_channel_messages.append(msg)))
@@ -129,8 +134,8 @@ async def test_shop_dropdown_purchases_award_shopaholic_badge(monkeypatch):
         followup=SimpleNamespace(edit_message=AsyncMock()),
         message=SimpleNamespace(id=999),
     )
-    option = main.discord.SelectOption(label="Coffee Cup - 🪙 50", value="123-coffee cup")
-    view = main.ShopDropdown(member.id, str(guild.id), [store_item], 1000, [option])
+    option = discord.SelectOption(label="Coffee Cup - 🪙 50", value="123-coffee cup")
+    view = shop.ShopDropdown(member.id, str(guild.id), [store_item], 1000, [option])
     view.dropdown._values = ["123-coffee cup"]
 
     for _ in range(10):
@@ -143,7 +148,7 @@ async def test_shop_dropdown_purchases_award_shopaholic_badge(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_buy_bulk_ten_items_awards_shopaholic_badge(monkeypatch):
+async def test_buy_bulk_ten_items_awards_shopaholic_badge(monkeypatch, shop_cog):
     """Buying 10 units of an item in a single `.buy item 10` call must count as 10
     shop purchases (not 1), so the Shopaholic badge (10 purchases) actually unlocks."""
     guild, member = make_guild_and_member()
@@ -180,14 +185,14 @@ async def test_buy_bulk_ten_items_awards_shopaholic_badge(monkeypatch):
         send=AsyncMock(side_effect=fake_send),
         interaction=None,
     )
-    monkeypatch.setattr(main, "check_channel", fake_check_channel)
-    monkeypatch.setattr(main, "get_user", fake_get_user)
-    monkeypatch.setattr(main, "guild_shop_col", FakeGuildShopCol(store_item))
-    monkeypatch.setattr(main, "economy_col", economy)
-    monkeypatch.setattr(main, "badges_col", badges)
-    monkeypatch.setattr(main, "xp_col", xp)
+    monkeypatch.setattr(perms, "check_channel", fake_check_channel)
+    monkeypatch.setattr(econ, "get_user", fake_get_user)
+    monkeypatch.setattr(state, "guild_shop_col", FakeGuildShopCol(store_item))
+    monkeypatch.setattr(state, "economy_col", economy)
+    monkeypatch.setattr(state, "badges_col", badges)
+    monkeypatch.setattr(state, "xp_col", xp)
 
-    await main.buy.callback(ctx, item="fishing rod 10")
+    await shop_cog.buy.callback(shop_cog, ctx, item="fishing rod 10")
 
     assert badges.doc["counters"]["shop_purchases"] == 10
     assert "shopaholic" in badges.doc["earned"]
@@ -196,7 +201,7 @@ async def test_buy_bulk_ten_items_awards_shopaholic_badge(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_buy_bulk_nine_items_does_not_award_shopaholic_badge(monkeypatch):
+async def test_buy_bulk_nine_items_does_not_award_shopaholic_badge(monkeypatch, shop_cog):
     """Sanity check on the fix: 9 purchases in one call should not cross the 10 threshold."""
     guild, member = make_guild_and_member()
     store_item = {
@@ -223,14 +228,14 @@ async def test_buy_bulk_nine_items_does_not_award_shopaholic_badge(monkeypatch):
         send=AsyncMock(),
         interaction=None,
     )
-    monkeypatch.setattr(main, "check_channel", fake_check_channel)
-    monkeypatch.setattr(main, "get_user", fake_get_user)
-    monkeypatch.setattr(main, "guild_shop_col", FakeGuildShopCol(store_item))
-    monkeypatch.setattr(main, "economy_col", economy)
-    monkeypatch.setattr(main, "badges_col", badges)
-    monkeypatch.setattr(main, "xp_col", xp)
+    monkeypatch.setattr(perms, "check_channel", fake_check_channel)
+    monkeypatch.setattr(econ, "get_user", fake_get_user)
+    monkeypatch.setattr(state, "guild_shop_col", FakeGuildShopCol(store_item))
+    monkeypatch.setattr(state, "economy_col", economy)
+    monkeypatch.setattr(state, "badges_col", badges)
+    monkeypatch.setattr(state, "xp_col", xp)
 
-    await main.buy.callback(ctx, item="fishing rod 9")
+    await shop_cog.buy.callback(shop_cog, ctx, item="fishing rod 9")
 
     assert badges.doc["counters"]["shop_purchases"] == 9
     assert "shopaholic" not in badges.doc.get("earned", [])
@@ -242,9 +247,9 @@ async def test_check_and_award_badges_awards_wallet_threshold_badge(monkeypatch)
     """pocket_change unlocks at wallet+bank >= 1000, independent of any counter."""
     guild, member = make_guild_and_member()
     ctx_channel = SimpleNamespace(send=AsyncMock())
-    monkeypatch.setattr(main, "badges_col", FakeBadgesCol())
-    monkeypatch.setattr(main, "xp_col", FakeXpCol())
-    await main.check_and_award_badges(ctx_channel, guild, member, {"wallet": 600, "bank": 500})
+    monkeypatch.setattr(state, "badges_col", FakeBadgesCol())
+    monkeypatch.setattr(state, "xp_col", FakeXpCol())
+    await xp.check_and_award_badges(ctx_channel, guild, member, {"wallet": 600, "bank": 500})
     member.add_roles.assert_awaited_once()
     assert any("Pocket Change" in (c.args[0] if c.args else "") for c in ctx_channel.send.await_args_list)
 
@@ -254,9 +259,9 @@ async def test_check_and_award_badges_awards_xp_threshold_badge(monkeypatch):
     """apprentice unlocks at 500 xp, read from the xp collection rather than economy_data."""
     guild, member = make_guild_and_member()
     ctx_channel = SimpleNamespace(send=AsyncMock())
-    monkeypatch.setattr(main, "badges_col", FakeBadgesCol())
-    monkeypatch.setattr(main, "xp_col", FakeXpCol(xp=500))
-    await main.check_and_award_badges(ctx_channel, guild, member, {"wallet": 0, "bank": 0})
+    monkeypatch.setattr(state, "badges_col", FakeBadgesCol())
+    monkeypatch.setattr(state, "xp_col", FakeXpCol(xp=500))
+    await xp.check_and_award_badges(ctx_channel, guild, member, {"wallet": 0, "bank": 0})
     member.add_roles.assert_awaited_once()
     assert any("Apprentice" in (c.args[0] if c.args else "") for c in ctx_channel.send.await_args_list)
 
@@ -266,10 +271,10 @@ async def test_check_and_award_badges_awards_inventory_based_badge(monkeypatch):
     """duck_whisperer unlocks by owning a pet_duck inventory entry."""
     guild, member = make_guild_and_member()
     ctx_channel = SimpleNamespace(send=AsyncMock())
-    monkeypatch.setattr(main, "badges_col", FakeBadgesCol())
-    monkeypatch.setattr(main, "xp_col", FakeXpCol())
+    monkeypatch.setattr(state, "badges_col", FakeBadgesCol())
+    monkeypatch.setattr(state, "xp_col", FakeXpCol())
     economy_data = {"wallet": 0, "bank": 0, "inventory": [{"_id": "pet_duck", "uses_left": 3}]}
-    await main.check_and_award_badges(ctx_channel, guild, member, economy_data)
+    await xp.check_and_award_badges(ctx_channel, guild, member, economy_data)
     member.add_roles.assert_awaited_once()
     assert any("Duck Whisperer" in (c.args[0] if c.args else "") for c in ctx_channel.send.await_args_list)
 
@@ -280,8 +285,8 @@ async def test_check_and_award_badges_skips_already_earned_badge(monkeypatch):
     guild, member = make_guild_and_member()
     ctx_channel = SimpleNamespace(send=AsyncMock())
     key = f"{guild.id}-{member.id}"
-    monkeypatch.setattr(main, "badges_col", FakeBadgesCol({"_id": key, "earned": ["pocket_change"], "counters": {}}))
-    monkeypatch.setattr(main, "xp_col", FakeXpCol())
-    await main.check_and_award_badges(ctx_channel, guild, member, {"wallet": 600, "bank": 500})
+    monkeypatch.setattr(state, "badges_col", FakeBadgesCol({"_id": key, "earned": ["pocket_change"], "counters": {}}))
+    monkeypatch.setattr(state, "xp_col", FakeXpCol())
+    await xp.check_and_award_badges(ctx_channel, guild, member, {"wallet": 600, "bank": 500})
     member.add_roles.assert_not_awaited()
     ctx_channel.send.assert_not_awaited()

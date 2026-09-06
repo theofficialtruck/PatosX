@@ -19,7 +19,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import main
+from cogs import tickets
+from core import state
 
 
 class FakeTicketPanelsCol:
@@ -46,43 +47,43 @@ def make_panel(buttons):
 
 
 @pytest.mark.asyncio
-async def test_ticketremovebutton_sends_select_menu_for_existing_panel(monkeypatch):
+async def test_ticketremovebutton_sends_select_menu_for_existing_panel(monkeypatch, tickets_cog):
     panel = make_panel([{"category_name": "General", "label": "Open Ticket", "emoji": "🎫"}])
-    monkeypatch.setattr(main, "ticket_panels_col", FakeTicketPanelsCol(panel))
+    monkeypatch.setattr(state, "ticket_panels_col", FakeTicketPanelsCol(panel))
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=1)
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
 
-    await main.ticketremovebutton.callback(ctx, panel_name="Support")
+    await tickets_cog.ticketremovebutton.callback(tickets_cog, ctx, panel_name="Support")
 
     ctx.send.assert_awaited_once()
     view = ctx.send.await_args.kwargs["view"]
-    assert isinstance(view, main.TicketRemoveButtonView)
+    assert isinstance(view, tickets.TicketRemoveButtonView)
     select = view.children[0]
     assert len(select.options) == 1
     assert select.options[0].label == "Open Ticket"
 
 
 @pytest.mark.asyncio
-async def test_ticketremovebutton_rejects_unknown_panel(monkeypatch):
-    monkeypatch.setattr(main, "ticket_panels_col", FakeTicketPanelsCol(None))
+async def test_ticketremovebutton_rejects_unknown_panel(monkeypatch, tickets_cog):
+    monkeypatch.setattr(state, "ticket_panels_col", FakeTicketPanelsCol(None))
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=1)
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
 
-    await main.ticketremovebutton.callback(ctx, panel_name="Ghost")
+    await tickets_cog.ticketremovebutton.callback(tickets_cog, ctx, panel_name="Ghost")
 
     ctx.send.assert_awaited_once_with("❌ No panel found with name `Ghost`.")
 
 
 @pytest.mark.asyncio
-async def test_ticketremovebutton_rejects_panel_with_no_buttons(monkeypatch):
-    monkeypatch.setattr(main, "ticket_panels_col", FakeTicketPanelsCol(make_panel([])))
+async def test_ticketremovebutton_rejects_panel_with_no_buttons(monkeypatch, tickets_cog):
+    monkeypatch.setattr(state, "ticket_panels_col", FakeTicketPanelsCol(make_panel([])))
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=1)
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
 
-    await main.ticketremovebutton.callback(ctx, panel_name="Support")
+    await tickets_cog.ticketremovebutton.callback(tickets_cog, ctx, panel_name="Support")
 
     ctx.send.assert_awaited_once_with("❌ Panel `Support` has no buttons to remove.")
 
@@ -96,13 +97,13 @@ async def test_ticket_remove_button_select_removes_only_the_chosen_button(monkey
         ]
     )
     panels_col = FakeTicketPanelsCol(panel)
-    monkeypatch.setattr(main, "ticket_panels_col", panels_col)
+    monkeypatch.setattr(state, "ticket_panels_col", panels_col)
 
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=1)
     ctx = SimpleNamespace(guild=guild, author=author)
 
-    select = main.TicketRemoveButtonSelect(ctx, panel)
+    select = tickets.TicketRemoveButtonSelect(ctx, panel)
     select._values = ["1"]  # select the second button, "Billing Help"
 
     interaction = SimpleNamespace(
@@ -123,14 +124,14 @@ async def test_ticket_remove_button_select_removes_only_the_chosen_button(monkey
 async def test_ticket_remove_button_select_blocks_other_users(monkeypatch):
     panel = make_panel([{"category_name": "General", "label": "Open Ticket", "emoji": "🎫"}])
     panels_col = FakeTicketPanelsCol(panel)
-    monkeypatch.setattr(main, "ticket_panels_col", panels_col)
+    monkeypatch.setattr(state, "ticket_panels_col", panels_col)
 
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=1)
     other_user = SimpleNamespace(id=999)
     ctx = SimpleNamespace(guild=guild, author=author)
 
-    select = main.TicketRemoveButtonSelect(ctx, panel)
+    select = tickets.TicketRemoveButtonSelect(ctx, panel)
     select._values = ["0"]
 
     interaction = SimpleNamespace(

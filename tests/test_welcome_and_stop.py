@@ -21,7 +21,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import main
+from cogs.admin import Admin
+from cogs.guildcfg import GuildConfig
+from core import config as cfg
+from core import state
 
 # === welcome message template substitution ===================================
 
@@ -104,7 +107,7 @@ def test_no_hardcoded_channel_ids_in_on_member_join():
     """Regression guard: hardcoded server-specific IDs must not appear in source."""
     import inspect
 
-    source = inspect.getsource(main.on_member_join)
+    source = inspect.getsource(GuildConfig.on_member_join)
     assert "1370374734037909576" not in source
     assert "1370374725108236379" not in source
     assert "1370367716892082236" not in source
@@ -113,7 +116,7 @@ def test_no_hardcoded_channel_ids_in_on_member_join():
 def test_no_hardcoded_cdn_url_in_on_member_join():
     import inspect
 
-    source = inspect.getsource(main.on_member_join)
+    source = inspect.getsource(GuildConfig.on_member_join)
     assert "1386456926300409939" not in source, "Hardcoded CDN attachment URL should not appear in on_member_join"
 
 
@@ -123,14 +126,14 @@ def test_no_hardcoded_cdn_url_in_on_member_join():
 def test_stop_command_source_has_no_cutebatak():
     import inspect
 
-    source = inspect.getsource(main.stop.callback)
+    source = inspect.getsource(Admin.stop.callback)
     assert "CuteBatak" not in source
 
 
 def test_stop_command_source_has_no_hardcoded_ids():
     import inspect
 
-    source = inspect.getsource(main.stop.callback)
+    source = inspect.getsource(Admin.stop.callback)
     assert "1059882387590365314" not in source
     assert "903123014420406302" not in source
 
@@ -139,11 +142,11 @@ def test_stop_command_source_has_no_hardcoded_ids():
 
 
 @pytest.mark.asyncio
-async def test_stop_command_lists_guild_members(monkeypatch):
+async def test_stop_command_lists_guild_members(monkeypatch, admin_cog):
     monkeypatch.setenv("AUTHORIZED_USER_IDS", "111,222")
     # rebuild the set exactly as main.py does: split the env value on commas
     auth_ids = {int(x) for x in os.environ["AUTHORIZED_USER_IDS"].split(",") if x.strip().isdigit()}
-    monkeypatch.setattr(main, "AUTHORIZED_USER_IDS", auth_ids)
+    monkeypatch.setattr(cfg, "AUTHORIZED_USER_IDS", auth_ids)
 
     ctx = MagicMock()
     ctx.guild.id = 9999
@@ -155,9 +158,9 @@ async def test_stop_command_lists_guild_members(monkeypatch):
     member_222.display_name = "Bob"
 
     ctx.guild.get_member = lambda uid: {111: member_111, 222: member_222}.get(uid)
-    monkeypatch.setattr(main, "bot_locks", {})
+    monkeypatch.setattr(state, "bot_locks", {})
 
-    await main.stop.callback(ctx)
+    await admin_cog.stop.callback(admin_cog, ctx)
 
     sent = ctx.send.call_args[0][0]
     assert "Alice" in sent
@@ -166,10 +169,10 @@ async def test_stop_command_lists_guild_members(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stop_command_falls_back_to_bot_cache(monkeypatch):
+async def test_stop_command_falls_back_to_bot_cache(monkeypatch, admin_cog, bot):
     monkeypatch.setenv("AUTHORIZED_USER_IDS", "555")
     auth_ids = {555}
-    monkeypatch.setattr(main, "AUTHORIZED_USER_IDS", auth_ids)
+    monkeypatch.setattr(cfg, "AUTHORIZED_USER_IDS", auth_ids)
 
     ctx = MagicMock()
     ctx.guild.id = 8888
@@ -178,27 +181,27 @@ async def test_stop_command_falls_back_to_bot_cache(monkeypatch):
 
     cached_user = MagicMock()
     cached_user.name = "CachedUser"
-    monkeypatch.setattr(main.bot, "get_user", lambda uid: cached_user)
-    monkeypatch.setattr(main, "bot_locks", {})
+    monkeypatch.setattr(bot, "get_user", lambda uid: cached_user)
+    monkeypatch.setattr(state, "bot_locks", {})
 
-    await main.stop.callback(ctx)
+    await admin_cog.stop.callback(admin_cog, ctx)
 
     sent = ctx.send.call_args[0][0]
     assert "CachedUser" in sent
 
 
 @pytest.mark.asyncio
-async def test_stop_command_generic_message_when_no_users_found(monkeypatch):
-    monkeypatch.setattr(main, "AUTHORIZED_USER_IDS", {99999999})
+async def test_stop_command_generic_message_when_no_users_found(monkeypatch, admin_cog, bot):
+    monkeypatch.setattr(cfg, "AUTHORIZED_USER_IDS", {99999999})
 
     ctx = MagicMock()
     ctx.guild.id = 7777
     ctx.send = AsyncMock()
     ctx.guild.get_member = lambda uid: None
-    monkeypatch.setattr(main.bot, "get_user", lambda uid: None)
-    monkeypatch.setattr(main, "bot_locks", {})
+    monkeypatch.setattr(bot, "get_user", lambda uid: None)
+    monkeypatch.setattr(state, "bot_locks", {})
 
-    await main.stop.callback(ctx)
+    await admin_cog.stop.callback(admin_cog, ctx)
 
     sent = ctx.send.call_args[0][0]
     assert "🔒" in sent

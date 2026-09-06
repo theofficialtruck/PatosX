@@ -20,24 +20,26 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-import main
+from cogs import tickets
+from core import errors, state
+from core import permsHelperFuncs as perms
 
 
 @pytest.mark.asyncio
-async def test_resolve_ticket_opener_uses_cache_when_available():
+async def test_resolve_ticket_opener_uses_cache_when_available(tickets_cog):
     """When the member is already cached, no API calls should be made at all."""
     cached_member = SimpleNamespace(id=42, mention="<@42>")
     guild = SimpleNamespace(
         get_member=MagicMock(return_value=cached_member),
         fetch_member=AsyncMock(),
     )
-    result = await main.resolve_ticket_opener(guild, "42")
+    result = await tickets_cog.resolve_ticket_opener(guild, "42")
     assert result is cached_member
     guild.fetch_member.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_resolve_ticket_opener_falls_back_to_fetch_member_on_cache_miss():
+async def test_resolve_ticket_opener_falls_back_to_fetch_member_on_cache_miss(tickets_cog):
     """A cache miss (member not in the local cache, e.g. inactive for a while)
     used to be treated as 'opener not found' - this is what made every closed
     ticket transcript record opener_id as None and display 'Opened by: Unknown'."""
@@ -46,13 +48,13 @@ async def test_resolve_ticket_opener_falls_back_to_fetch_member_on_cache_miss():
         get_member=MagicMock(return_value=None),
         fetch_member=AsyncMock(return_value=fetched_member),
     )
-    result = await main.resolve_ticket_opener(guild, "42")
+    result = await tickets_cog.resolve_ticket_opener(guild, "42")
     assert result is fetched_member
     guild.fetch_member.assert_awaited_once_with(42)
 
 
 @pytest.mark.asyncio
-async def test_resolve_ticket_opener_falls_back_to_global_user_fetch_when_member_left():
+async def test_resolve_ticket_opener_falls_back_to_global_user_fetch_when_member_left(monkeypatch, bot, tickets_cog):
     """If the opener has since left the guild, fetch_member 404s - fall back to a
     global user fetch so the transcript can still show who opened it."""
     not_found = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), None)
@@ -62,16 +64,16 @@ async def test_resolve_ticket_opener_falls_back_to_global_user_fetch_when_member
         fetch_member=AsyncMock(side_effect=not_found),
     )
     monkeypatch_bot = AsyncMock(return_value=fetched_user)
-    main.bot.fetch_user = monkeypatch_bot
-    result = await main.resolve_ticket_opener(guild, "42")
+    monkeypatch.setattr(bot, "fetch_user", monkeypatch_bot)
+    result = await tickets_cog.resolve_ticket_opener(guild, "42")
     assert result is fetched_user
     monkeypatch_bot.assert_awaited_once_with(42)
 
 
 @pytest.mark.asyncio
-async def test_resolve_ticket_opener_returns_none_for_missing_id():
+async def test_resolve_ticket_opener_returns_none_for_missing_id(tickets_cog):
     guild = SimpleNamespace(get_member=MagicMock(), fetch_member=AsyncMock())
-    result = await main.resolve_ticket_opener(guild, None)
+    result = await tickets_cog.resolve_ticket_opener(guild, None)
     assert result is None
     guild.get_member.assert_not_called()
 
@@ -85,9 +87,9 @@ async def test_resolve_ticket_access_members_uses_allowed_staff_when_set(monkeyp
     staff_member = SimpleNamespace(id=10)
     guild = SimpleNamespace(get_member=MagicMock(side_effect=lambda uid: staff_member if uid == 10 else None))
     category_support = AsyncMock()
-    monkeypatch.setattr(main, "get_category_support_members", category_support)
+    monkeypatch.setattr(tickets, "get_category_support_members", category_support)
 
-    members = await main.resolve_ticket_access_members(guild, {"allowed_staff": ["10", "999"]}, "support")
+    members = await tickets.resolve_ticket_access_members(guild, {"allowed_staff": ["10", "999"]}, "support")
 
     assert members == [staff_member]
     category_support.assert_not_awaited()
@@ -96,7 +98,7 @@ async def test_resolve_ticket_access_members_uses_allowed_staff_when_set(monkeyp
 @pytest.mark.asyncio
 async def test_resolve_ticket_access_members_skips_invalid_ids():
     guild = SimpleNamespace(get_member=MagicMock(return_value=None))
-    members = await main.resolve_ticket_access_members(guild, {"allowed_staff": ["not-a-number"]}, "support")
+    members = await tickets.resolve_ticket_access_members(guild, {"allowed_staff": ["not-a-number"]}, "support")
     assert members == []
 
 
@@ -105,9 +107,9 @@ async def test_resolve_ticket_access_members_falls_back_without_allowed_staff(mo
     """Buttons with no allowed_staff key fall through to the category-wide staff permissions."""
     category_member = SimpleNamespace(id=5)
     guild = SimpleNamespace(get_member=MagicMock())
-    monkeypatch.setattr(main, "get_category_support_members", AsyncMock(return_value=[category_member]))
+    monkeypatch.setattr(tickets, "get_category_support_members", AsyncMock(return_value=[category_member]))
 
-    members = await main.resolve_ticket_access_members(guild, {}, "support")
+    members = await tickets.resolve_ticket_access_members(guild, {}, "support")
 
     assert members == [category_member]
 
@@ -152,13 +154,13 @@ async def test_ping_ticket_roles_restricted_staff_only_pings_allowed_list(monkey
 
     channel = FakeChannel()
     monkeypatch.setattr(
-        main.tickets_col, "find_one", AsyncMock(return_value={"category": "support", "allowed_staff": ["2"]})
+        state.tickets_col, "find_one", AsyncMock(return_value={"category": "support", "allowed_staff": ["2"]})
     )
-    monkeypatch.setattr(main.settings_col, "find_one", AsyncMock(return_value={"staff_role": 99}))
+    monkeypatch.setattr(state.settings_col, "find_one", AsyncMock(return_value={"staff_role": 99}))
     category_support = AsyncMock(return_value=[other_member])
-    monkeypatch.setattr(main, "get_category_support_members", category_support)
+    monkeypatch.setattr(tickets, "get_category_support_members", category_support)
 
-    await main.ping_ticket_roles(channel, "123", opener_id=1)
+    await tickets.ping_ticket_roles(channel, "123", opener_id=1)
 
     assert len(sent_messages) == 1
     content = sent_messages[0]
@@ -181,16 +183,16 @@ async def test_ticket_button_staff_select_persists_only_staff_members(monkeypatc
     async def fake_has_staff_role(member, guild):
         return member.id == 10
 
-    monkeypatch.setattr(main, "has_staff_role", fake_has_staff_role)
+    monkeypatch.setattr(perms, "has_staff_role", fake_has_staff_role)
     update_calls = []
 
     class FakePanelsCol:
         async def update_one(self, query, update):
             update_calls.append((query, update))
 
-    monkeypatch.setattr(main, "ticket_panels_col", FakePanelsCol())
+    monkeypatch.setattr(state, "ticket_panels_col", FakePanelsCol())
 
-    select = main.TicketButtonStaffSelect("123", "Panel", "Support", author_id=1)
+    select = tickets.TicketButtonStaffSelect("123", "Panel", "Support", author_id=1)
     select._values = [staff_user, non_staff_user]
     select._view = SimpleNamespace(message=SimpleNamespace(), stop=MagicMock())
 
@@ -215,12 +217,12 @@ async def test_ticket_button_staff_select_persists_only_staff_members(monkeypatc
 async def test_ticket_button_staff_select_rejects_all_non_staff(monkeypatch):
     non_staff_user = SimpleNamespace(id=20, mention="<@20>")
 
-    monkeypatch.setattr(main, "has_staff_role", AsyncMock(return_value=False))
+    monkeypatch.setattr(perms, "has_staff_role", AsyncMock(return_value=False))
     panels_col = MagicMock()
     panels_col.update_one = AsyncMock()
-    monkeypatch.setattr(main, "ticket_panels_col", panels_col)
+    monkeypatch.setattr(state, "ticket_panels_col", panels_col)
 
-    select = main.TicketButtonStaffSelect("123", "Panel", "Support", author_id=1)
+    select = tickets.TicketButtonStaffSelect("123", "Panel", "Support", author_id=1)
     select._values = [non_staff_user]
     select._view = SimpleNamespace(message=SimpleNamespace(), stop=MagicMock())
 
@@ -259,7 +261,7 @@ def _make_find_router(closed, open_):
 
 
 @pytest.mark.asyncio
-async def test_transcriptlist_sorts_newest_first(monkeypatch):
+async def test_transcriptlist_sorts_newest_first(monkeypatch, tickets_cog):
     """.transcriptlist should show the most recently closed ticket first instead
     of the oldest ones (previously returned in raw insertion order)."""
     closed = [
@@ -280,18 +282,18 @@ async def test_transcriptlist_sorts_newest_first(monkeypatch):
             "closed_at": "2025-08-19 11:00:00+00:00",
         },
     ]
-    monkeypatch.setattr(main, "tickets_col", SimpleNamespace(find=_make_find_router(closed, [])))
+    monkeypatch.setattr(state, "tickets_col", SimpleNamespace(find=_make_find_router(closed, [])))
 
     async def fake_format_user(self, user_id):
         return f"<@{user_id}>"
 
-    monkeypatch.setattr(main.TranscriptPaginationView, "format_user", fake_format_user)
+    monkeypatch.setattr(tickets.TranscriptPaginationView, "format_user", fake_format_user)
 
     guild = SimpleNamespace(id=123)
     ctx = SimpleNamespace(guild=guild, interaction=None, send=AsyncMock(return_value=SimpleNamespace()))
-    monkeypatch.setattr(main, "is_prefix", lambda c: True)
+    monkeypatch.setattr(errors, "is_prefix", lambda c: True)
 
-    await main.transcriptlist.callback(ctx)
+    await tickets_cog.transcriptlist.callback(tickets_cog, ctx)
 
     ctx.send.assert_awaited_once()
     embed = ctx.send.await_args.kwargs["embed"]
@@ -302,7 +304,7 @@ async def test_transcriptlist_sorts_newest_first(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_transcriptlist_includes_ongoing_tickets(monkeypatch):
+async def test_transcriptlist_includes_ongoing_tickets(monkeypatch, tickets_cog):
     """Ongoing tickets are stored under a 'guild' field instead of 'guild_id'
     (a different schema than closed-ticket transcripts) and used to be silently
     excluded entirely since the command only ever queried by 'guild_id'."""
@@ -325,18 +327,18 @@ async def test_transcriptlist_includes_ongoing_tickets(monkeypatch):
             "created_at": "2025-08-20 10:00:00+00:00",
         }
     ]
-    monkeypatch.setattr(main, "tickets_col", SimpleNamespace(find=_make_find_router(closed, open_)))
+    monkeypatch.setattr(state, "tickets_col", SimpleNamespace(find=_make_find_router(closed, open_)))
 
     async def fake_format_user(self, user_id):
         return f"<@{user_id}>"
 
-    monkeypatch.setattr(main.TranscriptPaginationView, "format_user", fake_format_user)
+    monkeypatch.setattr(tickets.TranscriptPaginationView, "format_user", fake_format_user)
 
     guild = SimpleNamespace(id=123)
     ctx = SimpleNamespace(guild=guild, interaction=None, send=AsyncMock(return_value=SimpleNamespace()))
-    monkeypatch.setattr(main, "is_prefix", lambda c: True)
+    monkeypatch.setattr(errors, "is_prefix", lambda c: True)
 
-    await main.transcriptlist.callback(ctx)
+    await tickets_cog.transcriptlist.callback(tickets_cog, ctx)
 
     embed = ctx.send.await_args.kwargs["embed"]
     assert len(embed.fields) == 2
@@ -365,7 +367,7 @@ async def test_build_embed_resolves_opener_instead_of_unknown(monkeypatch):
         return {42: opener_user, 99: closer_user}.get(uid)
 
     ctx = SimpleNamespace(bot=SimpleNamespace(get_user=fake_get_user, fetch_user=AsyncMock()))
-    view = main.TranscriptPaginationView(ctx, [ticket])
+    view = tickets.TranscriptPaginationView(ctx, [ticket])
     embed = await view.build_embed()
     field_value = embed.fields[0].value
     assert "Unknown" not in field_value
