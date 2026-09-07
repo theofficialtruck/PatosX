@@ -18,4 +18,13 @@ line-length = 120
 # each of the 150+ occurrences to specific exception types would need a separate correctness
 # judgment call per site with real risk of leaving a genuine error path uncaught; the catch all is
 # the intended architecture here instead of an oversight.
+# main.py keeps the audioop shim, so it is the only file that still needs E402. The broad
+# `except Exception` error boundaries now live in the cogs (and a few core helpers such as
+# check_and_award_badges), so BLE001 is suppressed there instead of in main.py.
+# main.py also keeps BLE001: the extension loader and the slash-command sync deliberately
+# catch everything so one bad cog / one rate-limited guild cannot take the whole bot down.
 "main.py" = ["E402", "BLE001"]
+"cogs/*.py" = ["BLE001"]
+# N999: the core helper modules deliberately use the camelCase file names from the refactor
+# blueprint (economyHelperFuncs, permsHelperFuncs, xpHelperFuncs).
+"core/*.py" = ["BLE001", "N999"]

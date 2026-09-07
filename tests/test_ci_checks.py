@@ -17,8 +17,9 @@
 """
 CI quality gate checks, run these locally before pushing to avoid PR failures.
 
-Covers: Bandit (B110 bare-except-pass), Ruff (lint errors), codespell (spelling).
-Each test calls the real tool as a subprocess so the result matches CI exactly.
+Covers: Bandit (B110 bare-except-pass), Ruff (lint errors), codespell (spelling) across the
+bot source (main.py, core/, cogs/, data/) and the tests. Each test calls the real tool as a
+subprocess so the result matches CI exactly.
 """
 
 import json
@@ -27,6 +28,9 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
+
+# Everything that holds bot source code (tests are scanned separately with their own flags)
+SOURCE_TARGETS = ("main.py", "core", "cogs", "data")
 
 
 # === helpers ================================================================
@@ -50,14 +54,14 @@ def _run(*args, **kwargs) -> subprocess.CompletedProcess:
 # === bandit ================================================================
 
 
-def test_bandit_no_b110_in_main():
-    """Bandit must not find any B110 (bare except: pass) in main.py."""
+def test_bandit_no_b110_in_source():
+    """Bandit must not find any B110 (bare except: pass) in the bot source."""
     result = _run(
         sys.executable,
         "-m",
         "bandit",
         "-r",
-        "main.py",
+        *SOURCE_TARGETS,
         "-t",
         "B110",  # only check this specific test
         "-f",
@@ -80,8 +84,8 @@ def test_bandit_no_b110_in_main():
 
     issues = data.get("results", [])
     b110 = [r for r in issues if r.get("test_id") == "B110"]
-    assert b110 == [], f"Found {len(b110)} B110 (bare except: pass) violation(s) in main.py:\n" + "\n".join(
-        f"  line {r['line_number']}: {r['code'].strip()!r}" for r in b110
+    assert b110 == [], f"Found {len(b110)} B110 (bare except: pass) violation(s) in the bot source:\n" + "\n".join(
+        f"  {r['filename']}:{r['line_number']}: {r['code'].strip()!r}" for r in b110
     )
 
 
@@ -121,14 +125,14 @@ def test_bandit_no_b110_in_tests():
 # === ruff ================================================================
 
 
-def test_ruff_no_errors_main():
-    """Ruff must report zero lint errors on main.py."""
+def test_ruff_no_errors_source():
+    """Ruff must report zero lint errors on the bot source (main.py, core/, cogs/, data/)."""
     result = _run(
         sys.executable,
         "-m",
         "ruff",
         "check",
-        "main.py",
+        *SOURCE_TARGETS,
         "--select=E4,E7,E9,F",
         "--output-format=json",
     )
@@ -146,8 +150,8 @@ def test_ruff_no_errors_main():
         pytest.skip("ruff output was not JSON")
 
     errors = [d for d in diagnostics if d.get("code")]
-    assert errors == [], f"ruff reported {len(errors)} error(s) in main.py:\n" + "\n".join(
-        f"  line {d['location']['row']}: [{d['code']}] {d['message']}"
+    assert errors == [], f"ruff reported {len(errors)} error(s) in the bot source:\n" + "\n".join(
+        f"  {d['filename']}:{d['location']['row']}: [{d['code']}] {d['message']}"
         for d in errors[:20]  # cap at 20 to avoid overwhelming output
     )
 
@@ -186,7 +190,7 @@ def test_ruff_no_errors_tests():
 
 def test_codespell_no_spelling_errors():
     """codespell must not find spelling errors in Python source files."""
-    common_args = ("--config", ".codespellrc", "main.py", "tests/", "--quiet-level", "2")
+    common_args = ("--config", ".codespellrc", *SOURCE_TARGETS, "tests/", "--quiet-level", "2")
     # The importable module name varies by install: 'codespell' on Linux/Mac,
     # 'codespell_lib' on some Windows installs.  Try both before giving up.
     result = None

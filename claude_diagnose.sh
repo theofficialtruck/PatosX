@@ -76,11 +76,11 @@ PROMPT="A watchdog script just auto-restarted the patosx Discord bot (systemd se
 $new_incidents
 ---
 
-Investigate root cause: check recent git log for what was deployed just before the incident, check main.py for anything that could explain a hang or crash (blocking calls, unbounded loops, unhandled exceptions), and cross-reference with the incident's journal output.
+Investigate root cause: check recent git log for what was deployed just before the incident, check the bot source (main.py plus the core/ and cogs/ packages) for anything that could explain a hang or crash (blocking calls, unbounded loops, unhandled exceptions), and cross-reference with the incident's journal output.
 
 If you find a clear, narrowly-scoped code bug that plausibly explains this incident, fix it: create a new git branch off main named fix/incident-<short-description>, commit the fix with a clear message explaining the incident and the fix, and push that branch to origin. Do NOT merge to main, do NOT touch main directly, do NOT push to main, and do NOT restart or deploy the service yourself.
 
-If you are not confident about the root cause, do not guess-fix — instead write a short diagnosis to $PROJECT_DIR/claude_diagnose_findings.log (append, with a timestamp header) explaining what you found and did not find, and stop there without touching git or main.py."
+If you are not confident about the root cause, do not guess-fix — instead write a short diagnosis to $PROJECT_DIR/claude_diagnose_findings.log (append, with a timestamp header) explaining what you found and did not find, and stop there without touching git or the bot source."
 
 claude_output="$(mktemp)"
 if timeout 900 claude -p "$PROMPT" \

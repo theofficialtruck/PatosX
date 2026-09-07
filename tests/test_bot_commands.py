@@ -14,18 +14,24 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import random
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from discord.ext import commands
 
-import main
+from cogs import moderation, stickynotes
+from core import economyHelperFuncs as econ
+from core import errors, state
+from core import permsHelperFuncs as perms
+from core import xpHelperFuncs as xp
 
 
 def _suppress_xp_earn_side_effect(monkeypatch):
     """xp_earn only skips its "you earned X xp" bonus message when xp_col looks like a
-    real Motor collection (main._looks_like_motor_collection) - that's the intentional
+    real Motor collection (cfg._looks_like_motor_collection) - that's the intentional
     signal it uses to avoid firing that side effect during tests. A disconnected
     AsyncIOMotorCollection satisfies that check without ever touching the network, since
     the guard returns before any query would run. Use this in tests for xp_earn-decorated
@@ -34,11 +40,11 @@ def _suppress_xp_earn_side_effect(monkeypatch):
     from motor.motor_asyncio import AsyncIOMotorClient
 
     lookalike = AsyncIOMotorClient("mongodb://localhost:27017")["test_db"]["xp"]
-    monkeypatch.setattr(main, "xp_col", lookalike)
+    monkeypatch.setattr(state, "xp_col", lookalike)
 
 
 @pytest.mark.asyncio
-async def test_warn_command():
+async def test_warn_command(moderation_cog):
     ctx = MagicMock()
     member = MagicMock()
     ctx.guild.id = 123456789
@@ -47,15 +53,15 @@ async def test_warn_command():
     member.id = 222
     member.mention = "@TestUser"
     member.send = AsyncMock()
-    main.warnings_data.clear()
-    await main.warn(ctx, member, reason="Breaking rules")
-    assert str(ctx.guild.id) in main.warnings_data
-    assert str(member.id) in main.warnings_data[str(ctx.guild.id)]
-    assert main.warnings_data[str(ctx.guild.id)][str(member.id)][0]["reason"] == "Breaking rules"
+    moderation.warnings_data.clear()
+    await moderation_cog.warn(ctx, member, reason="Breaking rules")
+    assert str(ctx.guild.id) in moderation.warnings_data
+    assert str(member.id) in moderation.warnings_data[str(ctx.guild.id)]
+    assert moderation.warnings_data[str(ctx.guild.id)][str(member.id)][0]["reason"] == "Breaking rules"
 
 
 @pytest.mark.asyncio
-async def test_kick_command(monkeypatch):
+async def test_kick_command(monkeypatch, moderation_cog):
     ctx = MagicMock()
     member = AsyncMock()
     ctx.guild.id = 987654321
@@ -63,17 +69,17 @@ async def test_kick_command(monkeypatch):
     member.id = 222
     member.mention = "@UserToKick"
     member.kick = AsyncMock()
-    main.actions_data.clear()
-    monkeypatch.setattr(main, "check_target_permission", lambda ctx, m: None)
-    await main.kick(ctx, member, reason="Violation")
+    moderation.actions_data.clear()
+    monkeypatch.setattr(perms, "check_target_permission", lambda ctx, m: None)
+    await moderation_cog.kick(ctx, member, reason="Violation")
     member.kick.assert_awaited_with(reason="Violation")
-    assert str(ctx.guild.id) in main.actions_data
-    assert str(member.id) in main.actions_data[str(ctx.guild.id)]
-    assert main.actions_data[str(ctx.guild.id)][str(member.id)][-1]["type"] == "kick"
+    assert str(ctx.guild.id) in moderation.actions_data
+    assert str(member.id) in moderation.actions_data[str(ctx.guild.id)]
+    assert moderation.actions_data[str(ctx.guild.id)][str(member.id)][-1]["type"] == "kick"
 
 
 @pytest.mark.asyncio
-async def test_mute_command_with_duration(monkeypatch):
+async def test_mute_command_with_duration(monkeypatch, moderation_cog):
     ctx = MagicMock()
     member = MagicMock()
     mute_role = MagicMock()
@@ -86,41 +92,41 @@ async def test_mute_command_with_duration(monkeypatch):
     ctx.author = MagicMock(name="Mod", id=999)
     member.id = 888
     member.mention = "@User"
-    main.actions_data.clear()
-    monkeypatch.setattr(main, "check_target_permission", lambda ctx, m: None)
-    monkeypatch.setattr(main.mutes_col, "update_one", AsyncMock())
-    await main.mute(ctx, member, duration="10s", reason="Spamming")
+    moderation.actions_data.clear()
+    monkeypatch.setattr(perms, "check_target_permission", lambda ctx, m: None)
+    monkeypatch.setattr(state.mutes_col, "update_one", AsyncMock())
+    await moderation_cog.mute(ctx, member, duration="10s", reason="Spamming")
     member.add_roles.assert_awaited()
-    main.mutes_col.update_one.assert_awaited_once()
-    assert str(ctx.guild.id) in main.actions_data
-    assert str(member.id) in main.actions_data[str(ctx.guild.id)]
-    assert main.actions_data[str(ctx.guild.id)][str(member.id)][-1]["type"] == "mute"
+    state.mutes_col.update_one.assert_awaited_once()
+    assert str(ctx.guild.id) in moderation.actions_data
+    assert str(member.id) in moderation.actions_data[str(ctx.guild.id)]
+    assert moderation.actions_data[str(ctx.guild.id)][str(member.id)][-1]["type"] == "mute"
 
 
 def test_detect_discord_service_unavailable_from_wrapped_error():
-    wrapped = main.commands.CommandInvokeError(
+    wrapped = commands.CommandInvokeError(
         RuntimeError("DiscordServerError: 503 Service Unavailable (error code: 0): upstream connect error")
     )
-    assert main.is_discord_service_unavailable_error(wrapped) is True
+    assert errors.is_discord_service_unavailable_error(wrapped) is True
 
 
 def test_do_not_treat_generic_invoke_error_as_service_unavailable():
-    wrapped = main.commands.CommandInvokeError(RuntimeError("some unrelated failure"))
-    assert main.is_discord_service_unavailable_error(wrapped) is False
+    wrapped = commands.CommandInvokeError(RuntimeError("some unrelated failure"))
+    assert errors.is_discord_service_unavailable_error(wrapped) is False
 
 
 @pytest.mark.asyncio
-async def test_coinflip_error_hides_wrapped_503_details():
+async def test_coinflip_error_hides_wrapped_503_details(games_cog):
     ctx = MagicMock()
     ctx.send = AsyncMock()
     ctx.interaction = None
-    wrapped = main.commands.CommandInvokeError(RuntimeError("503 Service Unavailable: upstream connect error"))
-    await main.coinflip_error(ctx, wrapped)
-    ctx.send.assert_awaited_once_with(main.DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
+    wrapped = commands.CommandInvokeError(RuntimeError("503 Service Unavailable: upstream connect error"))
+    await games_cog.coinflip_error(ctx, wrapped)
+    ctx.send.assert_awaited_once_with(errors.DISCORD_SERVICE_UNAVAILABLE_MESSAGE)
 
 
 @pytest.mark.asyncio
-async def test_coinflip_zero_bet_does_not_award_xp(monkeypatch):
+async def test_coinflip_zero_bet_does_not_award_xp(monkeypatch, games_cog):
     ctx = MagicMock()
     ctx.guild.id = 123
     ctx.author.id = 456
@@ -130,16 +136,16 @@ async def test_coinflip_zero_bet_does_not_award_xp(monkeypatch):
     ctx.send = AsyncMock()
     mock_xp_col = MagicMock()
     mock_xp_col.update_one = AsyncMock()
-    monkeypatch.setattr(main, "xp_col", mock_xp_col)
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"wallet": 100}))
-    await main.coinflip(ctx, "0")
+    monkeypatch.setattr(state, "xp_col", mock_xp_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value={"wallet": 100}))
+    await games_cog.coinflip(ctx, "0")
     ctx.send.assert_awaited_once_with("❌ Invalid amount to coin flip.")
     mock_xp_col.update_one.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_ticketclose_slash_prompt_is_public(monkeypatch):
+async def test_ticketclose_slash_prompt_is_public(monkeypatch, tickets_cog):
     opener = SimpleNamespace(mention="@opener")
     guild = SimpleNamespace(id=123, get_member=MagicMock(return_value=opener))
     channel = SimpleNamespace(id=456, guild=guild)
@@ -150,8 +156,8 @@ async def test_ticketclose_slash_prompt_is_public(monkeypatch):
     fake_tickets_col = SimpleNamespace(
         find_one=AsyncMock(return_value={"_id": "ticket-1", "owner_id": "999"}), update_one=AsyncMock()
     )
-    monkeypatch.setattr(main, "tickets_col", fake_tickets_col)
-    await main.ticketclose.callback(ctx)
+    monkeypatch.setattr(state, "tickets_col", fake_tickets_col)
+    await tickets_cog.ticketclose.callback(tickets_cog, ctx)
     response.send_message.assert_awaited_once()
     send_kwargs = response.send_message.await_args.kwargs
     assert send_kwargs["ephemeral"] is False
@@ -160,7 +166,7 @@ async def test_ticketclose_slash_prompt_is_public(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ticketclose_slash_prompt_uses_public_followup_when_response_done(monkeypatch):
+async def test_ticketclose_slash_prompt_uses_public_followup_when_response_done(monkeypatch, tickets_cog):
     opener = SimpleNamespace(mention="@opener")
     guild = SimpleNamespace(id=123, get_member=MagicMock(return_value=opener))
     channel = SimpleNamespace(id=456, guild=guild)
@@ -171,8 +177,8 @@ async def test_ticketclose_slash_prompt_uses_public_followup_when_response_done(
     fake_tickets_col = SimpleNamespace(
         find_one=AsyncMock(return_value={"_id": "ticket-1", "owner_id": "999"}), update_one=AsyncMock()
     )
-    monkeypatch.setattr(main, "tickets_col", fake_tickets_col)
-    await main.ticketclose.callback(ctx)
+    monkeypatch.setattr(state, "tickets_col", fake_tickets_col)
+    await tickets_cog.ticketclose.callback(tickets_cog, ctx)
     followup.send.assert_awaited_once()
     send_kwargs = followup.send.await_args.kwargs
     assert send_kwargs["ephemeral"] is False
@@ -186,7 +192,7 @@ async def test_send_hybrid_error_uses_ephemeral_initial_response_for_slash():
     followup = SimpleNamespace(send=AsyncMock())
     interaction = SimpleNamespace(response=response, followup=followup)
     ctx = SimpleNamespace(interaction=interaction, send=AsyncMock())
-    await main.send_hybrid_error(ctx, content="⚠️ test")
+    await errors.send_hybrid_error(ctx, content="⚠️ test")
     response.send_message.assert_awaited_once()
     kwargs = response.send_message.await_args.kwargs
     assert kwargs["content"] == "⚠️ test"
@@ -201,7 +207,7 @@ async def test_send_hybrid_error_uses_ephemeral_followup_when_response_done_for_
     followup = SimpleNamespace(send=AsyncMock())
     interaction = SimpleNamespace(response=response, followup=followup)
     ctx = SimpleNamespace(interaction=interaction, send=AsyncMock())
-    await main.send_hybrid_error(ctx, content="⚠️ test")
+    await errors.send_hybrid_error(ctx, content="⚠️ test")
     followup.send.assert_awaited_once()
     kwargs = followup.send.await_args.kwargs
     assert kwargs["content"] == "⚠️ test"
@@ -211,7 +217,7 @@ async def test_send_hybrid_error_uses_ephemeral_followup_when_response_done_for_
 
 
 @pytest.mark.asyncio
-async def test_ticketclose_slash_error_is_ephemeral(monkeypatch):
+async def test_ticketclose_slash_error_is_ephemeral(monkeypatch, tickets_cog):
     guild = SimpleNamespace(id=123, get_member=MagicMock())
     channel = SimpleNamespace(id=456, guild=guild)
     response = SimpleNamespace(is_done=MagicMock(return_value=False), send_message=AsyncMock())
@@ -221,8 +227,8 @@ async def test_ticketclose_slash_error_is_ephemeral(monkeypatch):
     fake_tickets_col = SimpleNamespace(
         find_one=AsyncMock(side_effect=RuntimeError("db failed")), update_one=AsyncMock()
     )
-    monkeypatch.setattr(main, "tickets_col", fake_tickets_col)
-    await main.ticketclose.callback(ctx)
+    monkeypatch.setattr(state, "tickets_col", fake_tickets_col)
+    await tickets_cog.ticketclose.callback(tickets_cog, ctx)
     response.send_message.assert_awaited_once()
     kwargs = response.send_message.await_args.kwargs
     assert kwargs["ephemeral"] is True
@@ -231,7 +237,7 @@ async def test_ticketclose_slash_error_is_ephemeral(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_investstatus_handles_legacy_timestamp_without_date(monkeypatch):
+async def test_investstatus_handles_legacy_timestamp_without_date(monkeypatch, economy_cog):
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456, display_name="Tester")
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
@@ -250,10 +256,10 @@ async def test_investstatus_handles_legacy_timestamp_without_date(monkeypatch):
             ]
 
     investments_col = SimpleNamespace(find=MagicMock(return_value=_Cursor()), update_one=AsyncMock())
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "investments_col", investments_col)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(state, "investments_col", investments_col)
     _suppress_xp_earn_side_effect(monkeypatch)
-    await main.investstatus.callback(ctx)
+    await economy_cog.investstatus.callback(economy_cog, ctx)
     ctx.send.assert_awaited_once()
     sent_embed = ctx.send.await_args.kwargs["embed"]
     assert sent_embed is not None
@@ -262,22 +268,22 @@ async def test_investstatus_handles_legacy_timestamp_without_date(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_invest_slash_respects_active_investment_limit(monkeypatch):
+async def test_invest_slash_respects_active_investment_limit(monkeypatch, economy_cog):
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456)
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"wallet": 5000}))
-    monkeypatch.setattr(main, "create_investment", AsyncMock())
-    monkeypatch.setattr(main, "subtract_balance", AsyncMock())
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value={"wallet": 5000}))
+    monkeypatch.setattr(econ, "create_investment", AsyncMock())
+    monkeypatch.setattr(econ, "subtract_balance", AsyncMock())
     investments_col = SimpleNamespace(count_documents=AsyncMock(return_value=5))
-    monkeypatch.setattr(main, "investments_col", investments_col)
-    await main.invest.callback(ctx, "Techify", "500")
+    monkeypatch.setattr(state, "investments_col", investments_col)
+    await economy_cog.invest.callback(economy_cog, ctx, "Techify", "500")
     ctx.send.assert_awaited_once_with(
         "❌ You can only have up to **5 active investments** at a time. Sell some before investing again."
     )
-    main.create_investment.assert_not_awaited()
-    main.subtract_balance.assert_not_awaited()
+    econ.create_investment.assert_not_awaited()
+    econ.subtract_balance.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -290,7 +296,7 @@ async def test_calculate_investment_value_prefers_current_value():
         "date": "2026-01-01T00:00:00+00:00",
         "history": [999999, -500000],
     }
-    value = await main.calculate_investment_value(inv)
+    value = await econ.calculate_investment_value(inv)
     assert value == 24250
 
 
@@ -307,10 +313,10 @@ async def test_refresh_user_investments_for_today_updates_only_once(monkeypatch)
             "last_status_refresh_date": "2026-05-13",
         },
     ]
-    monkeypatch.setattr(main, "pick_daily_investment_change_pct", lambda: 0.02)
+    monkeypatch.setattr(econ, "pick_daily_investment_change_pct", lambda: 0.02)
     update_one = AsyncMock()
-    monkeypatch.setattr(main, "investments_col", SimpleNamespace(update_one=update_one))
-    refreshed = await main.refresh_user_investments_for_today(investments, now=today)
+    monkeypatch.setattr(state, "investments_col", SimpleNamespace(update_one=update_one))
+    refreshed = await econ.refresh_user_investments_for_today(investments, now=today)
     assert refreshed[0]["current_value"] == 1020
     assert refreshed[0]["last_status_refresh_date"] == "2026-05-13"
     assert refreshed[1]["current_value"] == 2000
@@ -328,23 +334,25 @@ async def test_find_sticky_note_doc_queries_legacy_and_canonical_ids(monkeypatch
             assert {"guild": 123, "channel": 456} in query["$or"]
             return expected_doc
 
-    monkeypatch.setattr(main, "sticky_col", _StickyCol())
-    doc = await main.find_sticky_note_doc(123, 456)
+    monkeypatch.setattr(state, "sticky_col", _StickyCol())
+    doc = await stickynotes.find_sticky_note_doc(123, 456)
     assert doc == expected_doc
 
 
 @pytest.mark.asyncio
-async def test_unstickynote_removes_doc_and_cache(monkeypatch):
+async def test_unstickynote_removes_doc_and_cache(monkeypatch, stickynotes_cog):
     channel = SimpleNamespace(id=456)
     message = SimpleNamespace(delete=AsyncMock())
     channel.fetch_message = AsyncMock(return_value=message)
     ctx = SimpleNamespace(guild=SimpleNamespace(id=123), channel=channel, send=AsyncMock())
-    main.last_sticky_msg[456] = 99999
-    monkeypatch.setattr(main, "find_sticky_note_doc", AsyncMock(return_value={"_id": "sticky-1", "message": 99999}))
-    monkeypatch.setattr(main, "sticky_col", SimpleNamespace(delete_one=AsyncMock()))
-    await main.unstickynote.callback(ctx)
-    main.sticky_col.delete_one.assert_awaited_once_with({"_id": "sticky-1"})
-    assert 456 not in main.last_sticky_msg
+    stickynotes.last_sticky_msg[456] = 99999
+    monkeypatch.setattr(
+        stickynotes, "find_sticky_note_doc", AsyncMock(return_value={"_id": "sticky-1", "message": 99999})
+    )
+    monkeypatch.setattr(state, "sticky_col", SimpleNamespace(delete_one=AsyncMock()))
+    await stickynotes_cog.unstickynote.callback(stickynotes_cog, ctx)
+    state.sticky_col.delete_one.assert_awaited_once_with({"_id": "sticky-1"})
+    assert 456 not in stickynotes.last_sticky_msg
     ctx.send.assert_awaited_with("✅ Sticky note removed.")
 
 
@@ -353,9 +361,9 @@ async def test_xp_earn_skips_xp_when_command_sends_error(monkeypatch):
     async def _failing_cmd(ctx):
         await ctx.send("❌ You cannot give coins to yourself.")
 
-    decorated = main.xp_earn(5, 5)(_failing_cmd)
+    decorated = xp.xp_earn(5, 5)(_failing_cmd)
     fake_xp_col = SimpleNamespace(update_one=AsyncMock())
-    monkeypatch.setattr(main, "xp_col", fake_xp_col)
+    monkeypatch.setattr(state, "xp_col", fake_xp_col)
     ctx = SimpleNamespace(
         guild=SimpleNamespace(id=123),
         author=SimpleNamespace(id=456, mention="@tester"),
@@ -371,9 +379,9 @@ async def test_xp_earn_awards_xp_on_success(monkeypatch):
     async def _successful_cmd(ctx):
         await ctx.send("✅ Success")
 
-    decorated = main.xp_earn(7, 7)(_successful_cmd)
+    decorated = xp.xp_earn(7, 7)(_successful_cmd)
     fake_xp_col = SimpleNamespace(update_one=AsyncMock())
-    monkeypatch.setattr(main, "xp_col", fake_xp_col)
+    monkeypatch.setattr(state, "xp_col", fake_xp_col)
     ctx = SimpleNamespace(
         guild=SimpleNamespace(id=123),
         author=SimpleNamespace(id=456, mention="@tester"),
@@ -385,70 +393,70 @@ async def test_xp_earn_awards_xp_on_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dig_requires_shovel_and_resets_cooldown(monkeypatch):
+async def test_dig_requires_shovel_and_resets_cooldown(monkeypatch, jobs_cog):
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456)
     command = SimpleNamespace(reset_cooldown=MagicMock())
     ctx = SimpleNamespace(guild=guild, author=author, command=command, send=AsyncMock())
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"inventory": []}))
-    monkeypatch.setattr(main, "economy_col", SimpleNamespace(update_one=AsyncMock()))
-    await main.dig.callback(ctx)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value={"inventory": []}))
+    monkeypatch.setattr(state, "economy_col", SimpleNamespace(update_one=AsyncMock()))
+    await jobs_cog.dig.callback(jobs_cog, ctx)
     command.reset_cooldown.assert_called_once_with(ctx)
     ctx.send.assert_awaited_once_with("🪏 You need a shovel to dig!")
-    main.economy_col.update_one.assert_not_awaited()
+    state.economy_col.update_one.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_dig_adds_rock_to_inventory(monkeypatch):
+async def test_dig_adds_rock_to_inventory(monkeypatch, jobs_cog):
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456)
     command = SimpleNamespace(reset_cooldown=MagicMock())
     ctx = SimpleNamespace(guild=guild, author=author, command=command, send=AsyncMock())
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"inventory": ["shovel"]}))
-    monkeypatch.setattr(main.random, "choice", MagicMock(return_value=("amber shard", 240)))
-    monkeypatch.setattr(main, "economy_col", SimpleNamespace(update_one=AsyncMock()))
-    await main.dig.callback(ctx)
-    main.economy_col.update_one.assert_awaited_once()
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value={"inventory": ["shovel"]}))
+    monkeypatch.setattr(random, "choice", MagicMock(return_value=("amber shard", 240)))
+    monkeypatch.setattr(state, "economy_col", SimpleNamespace(update_one=AsyncMock()))
+    await jobs_cog.dig.callback(jobs_cog, ctx)
+    state.economy_col.update_one.assert_awaited_once()
     sent_content = ctx.send.await_args.args[0]
     assert "amber shard" in sent_content
     command.reset_cooldown.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_bugcatch_requires_butterfly_net_and_resets_cooldown(monkeypatch):
+async def test_bugcatch_requires_butterfly_net_and_resets_cooldown(monkeypatch, jobs_cog):
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456)
     command = SimpleNamespace(reset_cooldown=MagicMock())
     ctx = SimpleNamespace(guild=guild, author=author, command=command, send=AsyncMock())
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
-    monkeypatch.setattr(main, "get_user", AsyncMock(return_value={"inventory": []}))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "economy_col", SimpleNamespace(update_one=AsyncMock()))
-    await main.bugcatch.callback(ctx)
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(econ, "get_user", AsyncMock(return_value={"inventory": []}))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(state, "economy_col", SimpleNamespace(update_one=AsyncMock()))
+    await jobs_cog.bugcatch.callback(jobs_cog, ctx)
     command.reset_cooldown.assert_called_once_with(ctx)
     sent_content = ctx.send.await_args.args[0]
     assert "Butterfly Net" in sent_content
-    main.add_balance.assert_not_awaited()
+    econ.add_balance.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_bugcatch_sells_immediately_and_breaks_net(monkeypatch):
+async def test_bugcatch_sells_immediately_and_breaks_net(monkeypatch, jobs_cog):
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456)
     command = SimpleNamespace(reset_cooldown=MagicMock())
     ctx = SimpleNamespace(guild=guild, author=author, command=command, send=AsyncMock())
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        main, "get_user", AsyncMock(return_value={"inventory": [{"_id": "butterfly net", "uses_left": 1}]})
+        econ, "get_user", AsyncMock(return_value={"inventory": [{"_id": "butterfly net", "uses_left": 1}]})
     )
-    monkeypatch.setattr(main.random, "choice", MagicMock(return_value=("🦋 butterfly", 180)))
-    monkeypatch.setattr(main, "add_balance", AsyncMock())
-    monkeypatch.setattr(main, "economy_col", SimpleNamespace(update_one=AsyncMock()))
-    await main.bugcatch.callback(ctx)
-    main.add_balance.assert_awaited_once_with(456, 123, 180)
-    main.economy_col.update_one.assert_awaited_once_with({"_id": "123-456"}, {"$set": {"inventory": []}})
+    monkeypatch.setattr(random, "choice", MagicMock(return_value=("🦋 butterfly", 180)))
+    monkeypatch.setattr(econ, "add_balance", AsyncMock())
+    monkeypatch.setattr(state, "economy_col", SimpleNamespace(update_one=AsyncMock()))
+    await jobs_cog.bugcatch.callback(jobs_cog, ctx)
+    econ.add_balance.assert_awaited_once_with(456, 123, 180)
+    state.economy_col.update_one.assert_awaited_once_with({"_id": "123-456"}, {"$set": {"inventory": []}})
     sent_content = ctx.send.await_args.args[0]
     assert "sold it immediately" in sent_content
     assert "Butterfly Net" in sent_content
@@ -457,7 +465,7 @@ async def test_bugcatch_sells_immediately_and_breaks_net(monkeypatch):
 
 def test_consume_tool_use_breaks_and_removes_tool():
     inventory = [{"_id": "lockpick", "uses_left": 1}]
-    consumed, broke, uses_left = main.consume_tool_use(inventory, "lockpick")
+    consumed, broke, uses_left = econ.consume_tool_use(inventory, "lockpick")
     assert consumed is True
     assert broke is True
     assert uses_left == 0
@@ -465,13 +473,13 @@ def test_consume_tool_use_breaks_and_removes_tool():
 
 
 @pytest.mark.asyncio
-async def test_inventory_shows_tool_durability(monkeypatch):
+async def test_inventory_shows_tool_durability(monkeypatch, shop_cog):
     guild = SimpleNamespace(id=123)
     author = SimpleNamespace(id=456, display_name="Tester")
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock())
-    monkeypatch.setattr(main, "check_channel", AsyncMock(return_value=True))
+    monkeypatch.setattr(perms, "check_channel", AsyncMock(return_value=True))
     monkeypatch.setattr(
-        main,
+        econ,
         "get_user",
         AsyncMock(
             return_value={"inventory": [{"_id": "shovel", "uses_left": 100}, {"_id": "pet_duck", "uses_left": 2}]}
@@ -486,9 +494,9 @@ async def test_inventory_shows_tool_durability(monkeypatch):
                 return {"name": "Shovel", "description": "Tool"}
             return None
 
-    monkeypatch.setattr(main, "shop_col", _ShopCol())
+    monkeypatch.setattr(state, "shop_col", _ShopCol())
     _suppress_xp_earn_side_effect(monkeypatch)
-    await main.inventory.callback(ctx)
+    await shop_cog.inventory.callback(shop_cog, ctx)
     embed = ctx.send.await_args.kwargs["embed"]
     assert embed is not None
     assert any("Shovel" in field.name for field in embed.fields)
@@ -496,9 +504,9 @@ async def test_inventory_shows_tool_durability(monkeypatch):
 
 
 def test_get_investment_date_handles_invalid_or_missing_values():
-    dt_missing = main.get_investment_date({})
-    dt_invalid = main.get_investment_date({"date": "not-a-date"})
-    dt_legacy = main.get_investment_date({"timestamp": "2026-04-10T10:00:00+00:00"})
+    dt_missing = econ.get_investment_date({})
+    dt_invalid = econ.get_investment_date({"date": "not-a-date"})
+    dt_legacy = econ.get_investment_date({"timestamp": "2026-04-10T10:00:00+00:00"})
     assert dt_missing.tzinfo is not None
     assert dt_invalid.tzinfo is not None
     assert dt_legacy.year == 2026

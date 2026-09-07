@@ -19,7 +19,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-import main
+from cogs import economy, shop, tickets
+from core import economyHelperFuncs as econ
+from core import permsHelperFuncs as perms
+from core import state
+from core import xpHelperFuncs as xp
 
 
 class FakeEconomyCol:
@@ -54,10 +58,10 @@ async def test_process_shop_refund_custom_item_success(monkeypatch):
         "name_lower": "mystery box",
         "price": 500,
     }
-    monkeypatch.setattr(main, "economy_col", economy)
-    monkeypatch.setattr(main, "guild_shop_col", FakeShopCol(guild_item=guild_item))
-    monkeypatch.setattr(main, "shop_col", FakeShopCol(default_item=None))
-    result = await main.process_shop_refund(member, guild, "mystery box", user_data)
+    monkeypatch.setattr(state, "economy_col", economy)
+    monkeypatch.setattr(state, "guild_shop_col", FakeShopCol(guild_item=guild_item))
+    monkeypatch.setattr(state, "shop_col", FakeShopCol(default_item=None))
+    result = await shop.process_shop_refund(member, guild, "mystery box", user_data)
     assert result["ok"] is True
     assert result["refund_amount"] == 250
     assert result["new_wallet"] == 350
@@ -69,9 +73,9 @@ async def test_process_shop_refund_fails_if_missing_from_inventory(monkeypatch):
     member = SimpleNamespace(id=42)
     guild = SimpleNamespace(id=123)
     user_data = {"wallet": 100, "inventory": []}
-    monkeypatch.setattr(main, "guild_shop_col", FakeShopCol(guild_item=None))
-    monkeypatch.setattr(main, "shop_col", FakeShopCol(default_item=None))
-    result = await main.process_shop_refund(member, guild, "mystery box", user_data)
+    monkeypatch.setattr(state, "guild_shop_col", FakeShopCol(guild_item=None))
+    monkeypatch.setattr(state, "shop_col", FakeShopCol(default_item=None))
+    result = await shop.process_shop_refund(member, guild, "mystery box", user_data)
     assert result["ok"] is False
     assert "not in your inventory" in result["message"].lower()
 
@@ -109,10 +113,10 @@ async def test_ping_ticket_roles_mentions_staff_with_access(monkeypatch):
             return sent_message
 
     channel = FakeChannel()
-    monkeypatch.setattr(main.tickets_col, "find_one", AsyncMock(return_value={"category": "support"}))
-    monkeypatch.setattr(main.settings_col, "find_one", AsyncMock(return_value={"staff_role": 99}))
-    monkeypatch.setattr(main, "get_category_support_members", AsyncMock(return_value=[category_member]))
-    await main.ping_ticket_roles(channel, "123", opener_id=1)
+    monkeypatch.setattr(state.tickets_col, "find_one", AsyncMock(return_value={"category": "support"}))
+    monkeypatch.setattr(state.settings_col, "find_one", AsyncMock(return_value={"staff_role": 99}))
+    monkeypatch.setattr(tickets, "get_category_support_members", AsyncMock(return_value=[category_member]))
+    await tickets.ping_ticket_roles(channel, "123", opener_id=1)
     assert len(sent_messages) == 1
     content, _ = sent_messages[0]
     assert "<@&99>" in content
@@ -123,7 +127,7 @@ async def test_ping_ticket_roles_mentions_staff_with_access(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fish_resets_cooldown_when_tool_missing(monkeypatch):
+async def test_fish_resets_cooldown_when_tool_missing(monkeypatch, jobs_cog):
     async def fake_check_channel(*args, **kwargs):
         return True
 
@@ -143,9 +147,9 @@ async def test_fish_resets_cooldown_when_tool_missing(monkeypatch):
         send=AsyncMock(side_effect=fake_send),
         interaction=None,
     )
-    monkeypatch.setattr(main, "check_channel", fake_check_channel)
-    monkeypatch.setattr(main, "get_user", fake_get_user)
-    await main.fish.callback(ctx)
+    monkeypatch.setattr(perms, "check_channel", fake_check_channel)
+    monkeypatch.setattr(econ, "get_user", fake_get_user)
+    await jobs_cog.fish.callback(jobs_cog, ctx)
     reset_cooldown.assert_called_once_with(ctx)
     assert sent
     assert "need a fishing rod" in sent[0].lower()
@@ -156,7 +160,7 @@ async def test_ensure_badge_role_for_guild_creates_missing_role():
     created_role = SimpleNamespace(id=777, name="🎣 First Cast")
     guild = SimpleNamespace(roles=[], create_role=AsyncMock(return_value=created_role))
     badge = {"emoji": "🎣", "name": "First Cast"}
-    role = await main.ensure_badge_role_for_guild(guild, badge)
+    role = await xp.ensure_badge_role_for_guild(guild, badge)
     assert role is created_role
     guild.create_role.assert_awaited_once()
 
@@ -221,42 +225,42 @@ def _patch_sell_dependencies(monkeypatch, xp_col):
     async def fake_refresh(investments):
         return investments
 
-    monkeypatch.setattr(main, "check_channel", fake_check_channel)
-    monkeypatch.setattr(main, "get_user", fake_get_user)
-    monkeypatch.setattr(main, "refresh_user_investments_for_today", fake_refresh)
-    monkeypatch.setattr(main, "investments_col", FakeInvestmentsCol())
-    monkeypatch.setattr(main, "xp_col", xp_col)
+    monkeypatch.setattr(perms, "check_channel", fake_check_channel)
+    monkeypatch.setattr(econ, "get_user", fake_get_user)
+    monkeypatch.setattr(econ, "refresh_user_investments_for_today", fake_refresh)
+    monkeypatch.setattr(state, "investments_col", FakeInvestmentsCol())
+    monkeypatch.setattr(state, "xp_col", xp_col)
 
 
 @pytest.mark.asyncio
-async def test_sell_all_nothing_to_sell_awards_no_xp(monkeypatch):
+async def test_sell_all_nothing_to_sell_awards_no_xp(monkeypatch, economy_cog):
     xp_col = FakeXpCol()
     _patch_sell_dependencies(monkeypatch, xp_col)
-    monkeypatch.setattr(main, "ConfirmSellAll", _make_fake_confirm_sell_all(True))
+    monkeypatch.setattr(economy, "ConfirmSellAll", _make_fake_confirm_sell_all(True))
     ctx, confirm_msg = _make_sell_ctx()
-    await main.sell.callback(ctx, item="all")
+    await economy_cog.sell.callback(economy_cog, ctx, item="all")
     confirm_msg.edit.assert_awaited_once()
     assert "nothing to sell" in confirm_msg.edit.call_args.kwargs["content"].lower()
     assert xp_col.update_calls == []
 
 
 @pytest.mark.asyncio
-async def test_sell_all_cancelled_awards_no_xp(monkeypatch):
+async def test_sell_all_cancelled_awards_no_xp(monkeypatch, economy_cog):
     xp_col = FakeXpCol()
     _patch_sell_dependencies(monkeypatch, xp_col)
-    monkeypatch.setattr(main, "ConfirmSellAll", _make_fake_confirm_sell_all(False))
+    monkeypatch.setattr(economy, "ConfirmSellAll", _make_fake_confirm_sell_all(False))
     ctx, confirm_msg = _make_sell_ctx()
-    await main.sell.callback(ctx, item="all")
+    await economy_cog.sell.callback(economy_cog, ctx, item="all")
     confirm_msg.edit.assert_awaited_once()
     assert "cancelled" in confirm_msg.edit.call_args.kwargs["content"].lower()
     assert xp_col.update_calls == []
 
 
 @pytest.mark.asyncio
-async def test_sell_inventory_empty_awards_no_xp(monkeypatch):
+async def test_sell_inventory_empty_awards_no_xp(monkeypatch, economy_cog):
     xp_col = FakeXpCol()
     _patch_sell_dependencies(monkeypatch, xp_col)
     ctx, _ = _make_sell_ctx()
-    await main.sell.callback(ctx, item="inv")
+    await economy_cog.sell.callback(economy_cog, ctx, item="inv")
     assert any("nothing to sell" in str(c.args[0]).lower() for c in ctx.send.await_args_list if c.args)
     assert xp_col.update_calls == []

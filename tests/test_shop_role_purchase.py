@@ -17,9 +17,14 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
-import main
+from cogs import shop
+from core import config as cfg
+from core import economyHelperFuncs as econ
+from core import permsHelperFuncs as perms
+from core import state
 
 
 class FakeEconomyCol:
@@ -51,8 +56,8 @@ async def test_process_shop_purchase_role_item_grants_role_without_inventory(mon
         "role_id": 555,
     }
     economy = FakeEconomyCol()
-    monkeypatch.setattr(main, "economy_col", economy)
-    result = await main.process_shop_purchase(member, guild, store_item, {"wallet": 20000000, "inventory": []})
+    monkeypatch.setattr(state, "economy_col", economy)
+    result = await shop.process_shop_purchase(member, guild, store_item, {"wallet": 20000000, "inventory": []})
     assert result["ok"] is True
     assert result["purchase_type"] == "role"
     assert result["new_wallet"] == 5000000
@@ -61,7 +66,7 @@ async def test_process_shop_purchase_role_item_grants_role_without_inventory(mon
 
 
 @pytest.mark.asyncio
-async def test_buy_role_item_grants_role_instead_of_inventory(monkeypatch):
+async def test_buy_role_item_grants_role_instead_of_inventory(monkeypatch, shop_cog):
     role = SimpleNamespace(id=555, mention="@PondRoyalty")
     guild = SimpleNamespace(id=123, get_role=lambda role_id: role if role_id == 555 else None)
     author = SimpleNamespace(id=42, roles=[], add_roles=AsyncMock())
@@ -87,11 +92,11 @@ async def test_buy_role_item_grants_role_instead_of_inventory(monkeypatch):
 
     ctx = SimpleNamespace(guild=guild, author=author, send=AsyncMock(side_effect=fake_send))
     economy = FakeEconomyCol()
-    monkeypatch.setattr(main, "check_channel", fake_check_channel)
-    monkeypatch.setattr(main, "get_user", fake_get_user)
-    monkeypatch.setattr(main, "guild_shop_col", FakeGuildShopCol(store_item))
-    monkeypatch.setattr(main, "economy_col", economy)
-    await main.buy.callback(ctx, item="Pond Royalty+")
+    monkeypatch.setattr(perms, "check_channel", fake_check_channel)
+    monkeypatch.setattr(econ, "get_user", fake_get_user)
+    monkeypatch.setattr(state, "guild_shop_col", FakeGuildShopCol(store_item))
+    monkeypatch.setattr(state, "economy_col", economy)
+    await shop_cog.buy.callback(shop_cog, ctx, item="Pond Royalty+")
     author.add_roles.assert_awaited_once()
     assert any("You bought **Pond Royalty+** for 15000000 coins" in message for message in sent_messages)
     assert not any("@PondRoyalty" in message for message in sent_messages)
@@ -124,10 +129,10 @@ async def test_shop_dropdown_role_item_grants_role(monkeypatch):
         user=user, guild=guild, response=response, followup=followup, message=SimpleNamespace(id=999)
     )
     economy = FakeEconomyCol()
-    monkeypatch.setattr(main, "get_user", fake_get_user)
-    monkeypatch.setattr(main, "economy_col", economy)
-    option = main.discord.SelectOption(label="Pond Royalty+ - 🪙 15000000", value="123-pond royalty+")
-    view = main.ShopDropdown(user.id, str(guild.id), [store_item], 20000000, [option])
+    monkeypatch.setattr(econ, "get_user", fake_get_user)
+    monkeypatch.setattr(state, "economy_col", economy)
+    option = discord.SelectOption(label="Pond Royalty+ - 🪙 15000000", value="123-pond royalty+")
+    view = shop.ShopDropdown(user.id, str(guild.id), [store_item], 20000000, [option])
     view.dropdown._values = ["123-pond royalty+"]
     await view.dropdown_callback(interaction)
     user.add_roles.assert_awaited_once()
@@ -143,8 +148,8 @@ async def test_process_shop_purchase_durable_tool_gets_uses_left(monkeypatch):
     guild = SimpleNamespace(id=123)
     store_item = {"_id": "123-fishing rod", "name": "Fishing Rod", "name_lower": "fishing rod", "price": 150}
     economy = FakeEconomyCol()
-    monkeypatch.setattr(main, "economy_col", economy)
-    result = await main.process_shop_purchase(member, guild, store_item, {"wallet": 1000, "inventory": []})
+    monkeypatch.setattr(state, "economy_col", economy)
+    result = await shop.process_shop_purchase(member, guild, store_item, {"wallet": 1000, "inventory": []})
     assert result["ok"] is True
     assert result["purchase_type"] == "inventory"
     assert "Durability" in result["message"]
@@ -154,7 +159,7 @@ async def test_process_shop_purchase_durable_tool_gets_uses_left(monkeypatch):
             {
                 "$set": {
                     "wallet": 850,
-                    "inventory": [{"_id": "fishing rod", "uses_left": main.TOOL_DURABILITIES["fishing rod"]}],
+                    "inventory": [{"_id": "fishing rod", "uses_left": cfg.TOOL_DURABILITIES["fishing rod"]}],
                 }
             },
             False,

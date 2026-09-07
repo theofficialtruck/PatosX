@@ -31,6 +31,10 @@ jobs:
           VALIDATE_ALL_CODEBASE: true
           DEFAULT_BRANCH: "main"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use the project's own ruff.toml (repo root) instead of super-linter's bundled defaults,
+          # so CI applies the same per-file-ignores as a local `ruff check .`.
+          LINTER_RULES_PATH: .
+          PYTHON_RUFF_CONFIG_FILE: ruff.toml
           # Ruff is the project's sole Python linter/formatter — disable the
           # conflicting tools so they don't produce spurious failures.
           VALIDATE_PYTHON_BLACK: "false"
