@@ -495,8 +495,7 @@ class GiveawayModal(discord.ui.Modal, title="Create Giveaway"):
         required_roles = parse_role_ids(self.role_requirements.value)
         if self.role_requirements.value.strip() and not required_roles:
             await interaction.response.send_message(
-                "❌ Couldn't read any role IDs from the role requirements. "
-                "Give the role IDs, separated by commas.",
+                "❌ Couldn't read any role IDs from the role requirements. Give the role IDs, separated by commas.",
                 ephemeral=True,
             )
             return
