@@ -243,6 +243,10 @@ class MinesButtons(ui.View):
         self.max_safe_tiles = 25 - bombs
         self.house_edge = house_edge
         self.message = message
+        # The dedicated Cash Out button lives in its own message below the board: a 5x5 grid
+        # already fills all 5 rows / 25 buttons Discord allows on one message, leaving no room
+        # for another button on the same view.
+        self.cashout_message = None
         self.setup_buttons()
 
     def setup_buttons(self):
@@ -279,15 +283,9 @@ class MinesButtons(ui.View):
                     btn.disabled = True
                 self.add_item(btn)
 
-    async def button_cashout(self, interaction: discord.Interaction):
-        if interaction.user.id != self.interaction.user.id:
-            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
-            return
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        row, col = map(int, interaction.data["custom_id"].split())
-        if self.has_cashed_out:
-            await interaction.followup.send("❌ You already cashed out!", ephemeral=True)
+    async def do_cashout(self, interaction: discord.Interaction):
+        if self.has_cashed_out or self.exploded:
+            await interaction.followup.send("❌ This game has already ended!", ephemeral=True)
             return
         self.has_cashed_out = True
         multi = round(calculate_mines_multiplier(self.bombs, self.usersafes, self.house_edge), 2)
@@ -302,9 +300,24 @@ class MinesButtons(ui.View):
             value=f"💎 Bet: {format_with_suffix(self.bet)}\n💰 Winnings: {format_with_suffix(winnings)}\n📈 Multiplier: {multi}x\n⏱ Next Click: {format_with_suffix(next_winnings)}",
         )
         self.exploded = True
-        self.userboard[row][col] = "s"
         self.setup_buttons()
         await self.message.edit(embed=embed, view=self)
+        await self.end_cashout_message("✅ Cashed out!")
+
+    async def end_cashout_message(self, content: str):
+        """Disable the standalone Cash Out message once the game is over (win, loss, or cashout)."""
+        if self.cashout_message is not None:
+            await self.cashout_message.edit(content=content, view=None)
+
+    async def button_cashout(self, interaction: discord.Interaction):
+        # Clicking an already-revealed diamond also cashes out, alongside the dedicated Cash Out
+        # button below the board.
+        if interaction.user.id != self.interaction.user.id:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        await self.do_cashout(interaction)
 
     async def button_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.interaction.user.id:
@@ -341,6 +354,24 @@ class MinesButtons(ui.View):
             )
             self.setup_buttons()
             await self.message.edit(embed=embed, view=self)
+            await self.end_cashout_message("💥 You hit a mine!")
+
+
+class MinesCashOutView(ui.View):
+    """Holds the standalone Cash Out button in its own message below the board."""
+
+    def __init__(self, game: MinesButtons):
+        super().__init__(timeout=None)
+        self.game = game
+
+    @ui.button(label="Cash Out", style=ButtonStyle.blurple, emoji="💰")
+    async def cash_out(self, interaction: discord.Interaction, button: ui.Button):
+        if interaction.user.id != self.game.interaction.user.id:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        await self.game.do_cashout(interaction)
 
 
 class MinesBombSelect(ui.Select):
@@ -367,6 +398,9 @@ class MinesBombSelect(ui.Select):
         await interaction.response.defer()
         game_message = await interaction.followup.send(embed=embed, view=view)
         view.message = game_message
+        view.cashout_message = await interaction.followup.send(
+            "💰 Cash out anytime to lock in your current winnings.", view=MinesCashOutView(view)
+        )
 
 
 async def ensure_user(uid: str):

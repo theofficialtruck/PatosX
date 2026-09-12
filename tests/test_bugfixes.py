@@ -464,3 +464,76 @@ def test_parse_gemini_keys_ignores_empty_entries():
     assert cfg.parse_gemini_keys(" , ,") == []
     assert cfg.parse_gemini_keys(None) == []
     assert cfg.parse_gemini_keys("") == []
+
+
+# --- mines cash-out button ----------------------------------------------------------------------
+
+
+class _FakeGameMessage:
+    def __init__(self):
+        self.edit = AsyncMock()
+
+
+def _make_mines_game(bombs=1, usersafes=2):
+    board = [["s"] * 5 for _ in range(5)]
+    userboard = [["" for _ in range(5)] for _ in range(5)]
+    game_interaction = SimpleNamespace(user=SimpleNamespace(id=1))
+    game = games_gambling.MinesButtons(board, bombs, 100, userboard, usersafes, game_interaction, False, 0.15)
+    game.message = _FakeGameMessage()
+    game.cashout_message = _FakeGameMessage()
+    return game
+
+
+@pytest.mark.asyncio
+async def test_cashout_button_pays_out_and_closes_both_messages(monkeypatch):
+    """A 5x5 board already uses all 25 button slots Discord allows on one message, so cashing out
+    used to only be reachable by clicking an already-revealed tile - easy to miss entirely. The
+    dedicated Cash Out button below the board should pay out and shut down both messages."""
+    game = _make_mines_game()
+    monkeypatch.setattr(econ, "update_user_balance", AsyncMock())
+    monkeypatch.setattr(state, "minigameplayerdata_col", SimpleNamespace(update_one=AsyncMock()))
+    view = games_gambling.MinesCashOutView(game)
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=1),
+        guild=SimpleNamespace(id=1),
+        response=SimpleNamespace(is_done=lambda: False, defer=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+
+    await view.cash_out.callback(interaction)
+
+    econ.update_user_balance.assert_awaited_once()
+    assert game.has_cashed_out is True
+    game.message.edit.assert_awaited_once()
+    game.cashout_message.edit.assert_awaited_once_with(content="✅ Cashed out!", view=None)
+
+
+@pytest.mark.asyncio
+async def test_cashout_button_rejects_a_different_users_click():
+    game = _make_mines_game()
+    view = games_gambling.MinesCashOutView(game)
+    interaction = SimpleNamespace(user=SimpleNamespace(id=999), response=SimpleNamespace(send_message=AsyncMock()))
+
+    await view.cash_out.callback(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    assert game.has_cashed_out is False
+
+
+@pytest.mark.asyncio
+async def test_cashout_button_is_a_no_op_after_the_board_already_exploded(monkeypatch):
+    """A click that lands after a mine already ended the game must not still pay out."""
+    game = _make_mines_game()
+    game.exploded = True
+    monkeypatch.setattr(econ, "update_user_balance", AsyncMock())
+    view = games_gambling.MinesCashOutView(game)
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=1),
+        response=SimpleNamespace(is_done=lambda: False, defer=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+
+    await view.cash_out.callback(interaction)
+
+    econ.update_user_balance.assert_not_awaited()
+    interaction.followup.send.assert_awaited_once()
