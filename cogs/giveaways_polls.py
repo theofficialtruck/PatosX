@@ -474,7 +474,7 @@ class GiveawayModal(discord.ui.Modal, title="Create Giveaway"):
     )
     role_requirements = discord.ui.TextInput(
         label="Role Requirements (optional)",
-        placeholder="Role IDs or @role mentions separated by commas",
+        placeholder="Role IDs separated by commas (modals can't autocomplete @mentions)",
         required=False,
     )
     bonus_roles = discord.ui.TextInput(
@@ -496,7 +496,7 @@ class GiveawayModal(discord.ui.Modal, title="Create Giveaway"):
         if self.role_requirements.value.strip() and not required_roles:
             await interaction.response.send_message(
                 "❌ Couldn't read any role IDs from the role requirements. "
-                "Use role IDs or @role mentions separated by commas.",
+                "Give the role IDs, separated by commas.",
                 ephemeral=True,
             )
             return
@@ -886,10 +886,19 @@ class GiveawaysPolls(commands.Cog):
     @commands.hybrid_command(
         name="draw", description="Instantly draw winners from a giveaway using its message ID. Staff only."
     )
+    @app_commands.describe(message_id="The giveaway message's ID")
     @perms.staffperm("giveaways")
     @perms.staff_only()
-    async def draw(self, ctx: commands.Context, message_id: int):
-        data = await state.giveaway_col.find_one({"message_id": message_id})
+    async def draw(self, ctx: commands.Context, message_id: str):
+        # message_id is a str, not int: message IDs are 64-bit snowflakes that can exceed the
+        # ~9e15 safe integer range Discord enforces on slash command INTEGER options, which made
+        # every real message ID get rejected client-side with "Input a valid integer".
+        try:
+            message_id_int = int(message_id)
+        except ValueError:
+            await ctx.send("❌ Please provide a valid message ID.", ephemeral=True)
+            return
+        data = await state.giveaway_col.find_one({"message_id": message_id_int})
         if not data:
             await ctx.send("❌ Giveaway not found.", ephemeral=True)
             return
