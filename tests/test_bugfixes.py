@@ -298,9 +298,10 @@ async def test_purge_reports_only_the_purged_messages(monkeypatch, moderation_co
 
 
 class _FakeResponse:
-    def __init__(self, status=200, payload=None):
+    def __init__(self, status=200, payload=None, headers=None):
         self.status = status
         self._payload = payload or {}
+        self.headers = headers or {}
 
     async def json(self):
         return self._payload
@@ -313,16 +314,25 @@ class _FakeResponse:
 
 
 class _FakeSession:
-    """Stands in for the shared aiohttp session: records requests, never opens a socket."""
+    """Stands in for the shared aiohttp session: records requests, never opens a socket. HEAD
+    checks report a valid image by default so callers that don't care about that (e.g. slap)
+    aren't affected."""
 
-    def __init__(self, payload):
+    def __init__(self, payload, head_status=200, head_content_type="image/jpeg"):
         self.payload = payload
+        self.head_status = head_status
+        self.head_content_type = head_content_type
         self.requests = []
+        self.head_requests = []
         self.closed = False
 
     def get(self, url, **kwargs):
         self.requests.append((url, kwargs))
         return _FakeResponse(payload=self.payload)
+
+    def head(self, url, **kwargs):
+        self.head_requests.append((url, kwargs))
+        return _FakeResponse(status=self.head_status, headers={"Content-Type": self.head_content_type})
 
 
 @pytest.mark.asyncio
@@ -363,6 +373,65 @@ async def test_duck_and_quote_use_the_shared_session(monkeypatch, fun_cog):
     assert not duck_session.closed
 
 
+class _RetryingDuckSession:
+    """Plays back one (payload, head_status, head_content_type) triple per attempt, so the duck
+    command's retry loop can be driven through a dead link followed by a real one."""
+
+    def __init__(self, attempts):
+        self.attempts = attempts
+        self.get_calls = 0
+        self.head_calls = 0
+        self.closed = False
+
+    def get(self, url, **kwargs):
+        payload, _status, _content_type = self.attempts[self.get_calls]
+        self.get_calls += 1
+        return _FakeResponse(payload=payload)
+
+    def head(self, url, **kwargs):
+        _payload, status, content_type = self.attempts[self.head_calls]
+        self.head_calls += 1
+        return _FakeResponse(status=status, headers={"Content-Type": content_type})
+
+
+@pytest.mark.asyncio
+async def test_duck_retries_when_the_api_forwards_a_dead_link(monkeypatch, fun_cog):
+    """random-d.uk occasionally forwards a url that isn't actually an image (a dead link or an
+    error page). The command used to embed that url anyway, so Discord rendered a bare "Quack!"
+    title with no picture. It should now check the link and retry until it gets a real image."""
+    session = _RetryingDuckSession(
+        [
+            ({"url": "https://random-d.test/dead.jpg"}, 404, "text/html"),
+            ({"url": "https://random-d.test/real.jpg"}, 200, "image/jpeg"),
+        ]
+    )
+    monkeypatch.setattr(state, "http_session", lambda: session)
+    monkeypatch.setattr(state, "config_col", SimpleNamespace(find_one=AsyncMock(return_value={})))
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(id=1), channel=SimpleNamespace(id=5), send=AsyncMock(), interaction=None
+    )
+
+    await fun_cog.duck.callback(fun_cog, ctx)
+
+    assert ctx.send.await_args.kwargs["embed"].image.url == "https://random-d.test/real.jpg"
+    assert session.get_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_duck_gives_up_after_repeated_dead_links(monkeypatch, fun_cog):
+    session = _RetryingDuckSession([({"url": "https://random-d.test/dead.jpg"}, 404, "text/html")] * 3)
+    monkeypatch.setattr(state, "http_session", lambda: session)
+    monkeypatch.setattr(state, "config_col", SimpleNamespace(find_one=AsyncMock(return_value={})))
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(id=1), channel=SimpleNamespace(id=5), send=AsyncMock(), interaction=None
+    )
+
+    await fun_cog.duck.callback(fun_cog, ctx)
+
+    assert "Could not get a duck picture" in ctx.send.await_args.args[0]
+    assert session.get_calls == 3
+
+
 @pytest.mark.asyncio
 async def test_duckfact_thumbnail_is_an_image_endpoint(fun_cog):
     """`/api/v2/random` returns JSON, which Discord cannot render as a thumbnail."""
@@ -395,3 +464,76 @@ def test_parse_gemini_keys_ignores_empty_entries():
     assert cfg.parse_gemini_keys(" , ,") == []
     assert cfg.parse_gemini_keys(None) == []
     assert cfg.parse_gemini_keys("") == []
+
+
+# --- mines cash-out button ----------------------------------------------------------------------
+
+
+class _FakeGameMessage:
+    def __init__(self):
+        self.edit = AsyncMock()
+
+
+def _make_mines_game(bombs=1, usersafes=2):
+    board = [["s"] * 5 for _ in range(5)]
+    userboard = [["" for _ in range(5)] for _ in range(5)]
+    game_interaction = SimpleNamespace(user=SimpleNamespace(id=1))
+    game = games_gambling.MinesButtons(board, bombs, 100, userboard, usersafes, game_interaction, False, 0.15)
+    game.message = _FakeGameMessage()
+    game.cashout_message = _FakeGameMessage()
+    return game
+
+
+@pytest.mark.asyncio
+async def test_cashout_button_pays_out_and_closes_both_messages(monkeypatch):
+    """A 5x5 board already uses all 25 button slots Discord allows on one message, so cashing out
+    used to only be reachable by clicking an already-revealed tile - easy to miss entirely. The
+    dedicated Cash Out button below the board should pay out and shut down both messages."""
+    game = _make_mines_game()
+    monkeypatch.setattr(econ, "update_user_balance", AsyncMock())
+    monkeypatch.setattr(state, "minigameplayerdata_col", SimpleNamespace(update_one=AsyncMock()))
+    view = games_gambling.MinesCashOutView(game)
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=1),
+        guild=SimpleNamespace(id=1),
+        response=SimpleNamespace(is_done=lambda: False, defer=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+
+    await view.cash_out.callback(interaction)
+
+    econ.update_user_balance.assert_awaited_once()
+    assert game.has_cashed_out is True
+    game.message.edit.assert_awaited_once()
+    game.cashout_message.edit.assert_awaited_once_with(content="✅ Cashed out!", view=None)
+
+
+@pytest.mark.asyncio
+async def test_cashout_button_rejects_a_different_users_click():
+    game = _make_mines_game()
+    view = games_gambling.MinesCashOutView(game)
+    interaction = SimpleNamespace(user=SimpleNamespace(id=999), response=SimpleNamespace(send_message=AsyncMock()))
+
+    await view.cash_out.callback(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    assert game.has_cashed_out is False
+
+
+@pytest.mark.asyncio
+async def test_cashout_button_is_a_no_op_after_the_board_already_exploded(monkeypatch):
+    """A click that lands after a mine already ended the game must not still pay out."""
+    game = _make_mines_game()
+    game.exploded = True
+    monkeypatch.setattr(econ, "update_user_balance", AsyncMock())
+    view = games_gambling.MinesCashOutView(game)
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=1),
+        response=SimpleNamespace(is_done=lambda: False, defer=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+
+    await view.cash_out.callback(interaction)
+
+    econ.update_user_balance.assert_not_awaited()
+    interaction.followup.send.assert_awaited_once()

@@ -96,6 +96,31 @@ def _read_duck_facts():
         return [line.strip() for line in f if line.strip()]
 
 
+DUCK_API_URL = "https://random-d.uk/api/random"
+MAX_DUCK_ATTEMPTS = 3
+
+
+async def _fetch_duck_url(session) -> str | None:
+    """Ask the API for a duck image URL, retrying if it doesn't actually forward a real image -
+    the API occasionally returns a dead or non-image link, which Discord then renders as a bare
+    embed with no picture."""
+    for _ in range(MAX_DUCK_ATTEMPTS):
+        async with session.get(DUCK_API_URL) as resp:
+            if resp.status != 200:
+                continue
+            data = await resp.json()
+        url = data.get("url")
+        if not url:
+            continue
+        try:
+            async with session.head(url, allow_redirects=True) as img_resp:
+                if img_resp.status == 200 and img_resp.headers.get("Content-Type", "").startswith("image/"):
+                    return url
+        except aiohttp.ClientError:
+            continue
+    return None
+
+
 class Fun(commands.Cog):
     """Fun commands (slap, duckfact, duck, quote, afk, quack counter) plus the AFK and quack on_message handlers."""
 
@@ -227,13 +252,9 @@ class Fun(commands.Cog):
         allowed_channels = config.get("ALLOWED_DUCK_CHANNELS", [])
         if allowed_channels and ctx.channel.id not in allowed_channels:
             return await ctx.send("🚫 You can't use this command here.")
-        async with state.http_session().get("https://random-d.uk/api/random") as resp:
-            if resp.status != 200:
-                return await ctx.send("❌ Could not get a duck right now, try again later!")
-            data = await resp.json()
-            url = data.get("url")
-            if not url:
-                return await ctx.send("❌ Duck image not found, sorry!")
+        url = await _fetch_duck_url(state.http_session())
+        if not url:
+            return await ctx.send("❌ Could not get a duck picture right now, try again later!")
         embed = discord.Embed(title="🦆 Quack!", color=discord.Color.blue())
         embed.set_image(url=url)
         await ctx.send(embed=embed, ephemeral=False)
