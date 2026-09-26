@@ -25,6 +25,7 @@ coins_collected goal, and the core import graph only flows xp -> economy, never 
 import random
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import discord
@@ -194,17 +195,73 @@ def consume_tool_use(inventory, tool_name):
     return (False, False, None)
 
 
-def consume_nitro_boost(inventory: list):
-    """Decrement the uses_left on the first Nitro Boost in inventory in place, matching the
-    Pet Duck stacking pattern. Returns (used, expired); expired is True once its last use is spent."""
+@dataclass(frozen=True)
+class DuckUse:
+    """One spent Pet Duck use: the luck bonus it grants, its display name, and the farewell
+    message to send when that use emptied the duck (None while it still has uses left)."""
+
+    bonus: float
+    name: str
+    farewell: str | None
+
+    @property
+    def pct(self) -> int:
+        return round(self.bonus * 100)
+
+
+@dataclass(frozen=True)
+class NitroUse:
+    """One spent Nitro Boost use: the fraction of a cooldown it shaves off, its display name, and
+    the farewell message to send when that use emptied it (None while it still has uses left)."""
+
+    reduction: float
+    name: str
+    farewell: str | None
+
+
+def _consume_dict_use(inventory: list, variants: dict):
+    """Spend one use of the first dict inventory entry whose _id is a key of variants, removing the
+    entry once it is empty. Returns (variant, expired), or (None, False) when there is no such entry."""
     for idx, item in enumerate(inventory):
-        if isinstance(item, dict) and item.get("_id") == "nitro_boost":
+        if isinstance(item, dict) and item.get("_id") in variants:
             item["uses_left"] -= 1
             expired = item["uses_left"] <= 0
             if expired:
                 inventory.pop(idx)
-            return (True, expired)
-    return (False, False)
+            return (variants[item["_id"]], expired)
+    return (None, False)
+
+
+def consume_pet_duck(inventory: list) -> DuckUse | None:
+    """Spend one use of the first Pet Duck (regular or premium) in inventory, in place. Returns None
+    when the inventory holds no duck."""
+    variant, expired = _consume_dict_use(inventory, cfg.PET_DUCK_VARIANTS)
+    if variant is None:
+        return None
+    return DuckUse(variant["bonus"], variant["name"], variant["farewell"] if expired else None)
+
+
+def consume_nitro(inventory: list) -> NitroUse | None:
+    """Spend one use of the first Nitro Boost (regular or premium) in inventory, in place. Returns
+    None when the inventory holds no boost."""
+    variant, expired = _consume_dict_use(inventory, cfg.NITRO_VARIANTS)
+    if variant is None:
+        return None
+    return NitroUse(variant["reduction"], variant["name"], variant["farewell"] if expired else None)
+
+
+def pop_variant_item(inventory: list, variants: dict):
+    """Remove the first plain consumable in inventory whose key (underscores read as spaces) is a key
+    of variants, in place. Returns that variant's config dict, or None when none is held."""
+    for i, item in enumerate(inventory):
+        item_key = normalize_item_key(item)
+        if item_key is None:
+            continue
+        variant = variants.get(item_key.replace("_", " "))
+        if variant is not None:
+            inventory.pop(i)
+            return variant
+    return None
 
 
 def reduce_command_cooldown(ctx, seconds: float) -> None:

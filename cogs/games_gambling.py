@@ -873,24 +873,21 @@ class GamesGambling(commands.Cog):
             return await ctx.send("🎟️ You need at least 300 coins to buy a lottery ticket.")
         inventory = data.get("inventory", [])
         luck_boost = 1.0
-        for i, item in enumerate(inventory):
-            if isinstance(item, dict) and item.get("_id") == "pet_duck":
-                luck_boost = 1.3
-                item["uses_left"] -= 1
-                await ctx.send("🦆 Your Pet Duck boosted your lottery luck by 30%!")
-                if item["uses_left"] <= 0:
-                    inventory.pop(i)
-                    await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
-                break
-        nitro_used, nitro_expired = econ.consume_nitro_boost(inventory)
+        duck = econ.consume_pet_duck(inventory)
+        if duck:
+            luck_boost = 1 + duck.bonus
+            await ctx.send(f"🦆 Your {duck.name} boosted your lottery luck by {duck.pct}%!")
+            if duck.farewell:
+                await ctx.send(duck.farewell)
+        nitro = econ.consume_nitro(inventory)
         nitro_reduction_seconds = 0
-        if nitro_used:
-            nitro_reduction_seconds = int(3600 * cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+        if nitro:
+            nitro_reduction_seconds = int(3600 * nitro.reduction)
             await ctx.send(
-                f"🚀 Your Nitro Boost cut your next lottery cooldown by {nitro_reduction_seconds // 60} minutes!"
+                f"🚀 Your {nitro.name} cut your next lottery cooldown by {nitro_reduction_seconds // 60} minutes!"
             )
-            if nitro_expired:
-                await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
+            if nitro.farewell:
+                await ctx.send(nitro.farewell)
         chance = base_chance * luck_boost
         data["wallet"] -= ticket_price
         await state.economy_col.update_one({"_id": user_id}, {"$set": {"wallet": data["wallet"]}})

@@ -172,7 +172,7 @@ def _imports(path: Path) -> set[str]:
 def test_discover_cogs_skips_templates():
     names = main.discover_cogs()
     assert "cogs._base_cog" not in names
-    assert len(names) == 15
+    assert len(names) == 16
 
 
 @pytest.mark.asyncio

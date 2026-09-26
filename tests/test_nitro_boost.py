@@ -31,31 +31,41 @@ from core import permsHelperFuncs as perms
 from core import state
 from core import xpHelperFuncs as xp
 
-# === consume_nitro_boost helper ================================================================
+# === consume_nitro helper ======================================================================
 
 
-def test_consume_nitro_boost_decrements_uses():
+def test_consume_nitro_decrements_uses():
     inv = [{"_id": "nitro_boost", "uses_left": 3}]
-    used, expired = econ.consume_nitro_boost(inv)
-    assert used is True
-    assert expired is False
+    use = econ.consume_nitro(inv)
+    assert use is not None
+    assert use.name == "Nitro Boost"
+    assert use.reduction == cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT
+    assert use.farewell is None
     assert inv == [{"_id": "nitro_boost", "uses_left": 2}]
 
 
-def test_consume_nitro_boost_removes_when_exhausted():
+def test_consume_nitro_removes_when_exhausted():
     inv = [{"_id": "nitro_boost", "uses_left": 1}]
-    used, expired = econ.consume_nitro_boost(inv)
-    assert used is True
-    assert expired is True
+    use = econ.consume_nitro(inv)
+    assert use is not None
+    assert use.farewell == "💨 Your Nitro Boost ran out after 3 uses."
     assert inv == []
 
 
-def test_consume_nitro_boost_returns_false_when_absent():
+def test_consume_nitro_returns_none_when_absent():
     inv = ["fishing rod"]
-    used, expired = econ.consume_nitro_boost(inv)
-    assert used is False
-    assert expired is False
+    assert econ.consume_nitro(inv) is None
     assert inv == ["fishing rod"]
+
+
+def test_consume_nitro_premium_is_double_strength_single_use():
+    inv = [{"_id": "premium_nitro_boost", "uses_left": 1}]
+    use = econ.consume_nitro(inv)
+    assert use is not None
+    assert use.name == "Premium Nitro Boost"
+    assert use.reduction == cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT * 2
+    assert use.farewell is not None
+    assert inv == []
 
 
 # === reduce_command_cooldown helper ============================================================
