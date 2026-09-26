@@ -140,9 +140,9 @@ class JobsGathering(commands.Cog):
             promo_level = data.get("promotion_level", 0)
             has_drink = econ.pop_food_item(inventory, "energy_drink")
             cooldown_reduction = 0.5 if has_drink else 1.0
-            has_cookie = econ.pop_food_item(inventory, "lucky_cookie")
-            earnings_multiplier = 2.0 if has_cookie else 1.0
-            inventory_dirty = has_drink or has_cookie
+            cookie = econ.pop_variant_item(inventory, cfg.LUCKY_COOKIE_VARIANTS)
+            earnings_multiplier = cookie["multiplier"] if cookie else 1.0
+            inventory_dirty = has_drink or bool(cookie)
             tool_break_notice = ""
             if job == "developer":
                 consumed, broke, _ = econ.consume_tool_use(inventory, "laptop")
@@ -151,23 +151,17 @@ class JobsGathering(commands.Cog):
                 inventory_dirty = True
                 if broke:
                     tool_break_notice = "\n💥 Your **Laptop** broke. Buy a new one with `.buy laptop`."
-            duck_used = False
-            for i, item in enumerate(inventory):
-                if isinstance(item, dict) and item.get("_id") == "pet_duck":
-                    earnings_multiplier *= 1.3
-                    item["uses_left"] -= 1
-                    await ctx.send("🦆 Your Pet Duck boosted your work earnings by 30%!")
-                    if item["uses_left"] <= 0:
-                        inventory.pop(i)
-                        await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
-                    duck_used = True
-                    break
-            nitro_used, nitro_expired = econ.consume_nitro_boost(inventory)
-            nitro_reduction_seconds = 0
-            if nitro_used:
-                nitro_reduction_seconds = int(43200 * cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            duck = econ.consume_pet_duck(inventory)
+            if duck:
+                earnings_multiplier *= 1 + duck.bonus
+                await ctx.send(f"🦆 Your {duck.name} boosted your work earnings by {duck.pct}%!")
+                if duck.farewell:
+                    await ctx.send(duck.farewell)
                 inventory_dirty = True
-            if duck_used:
+            nitro = econ.consume_nitro(inventory)
+            nitro_reduction_seconds = 0
+            if nitro:
+                nitro_reduction_seconds = int(43200 * nitro.reduction)
                 inventory_dirty = True
             if inventory_dirty:
                 await state.economy_col.update_one(
@@ -175,12 +169,12 @@ class JobsGathering(commands.Cog):
                 )
             if has_drink:
                 await ctx.send("⚡ **Energy Drink consumed!** Work cooldown reduced by 50%!")
-            if nitro_used:
+            if nitro:
                 await ctx.send(
-                    f"🚀 Your Nitro Boost cut your next work cooldown by {nitro_reduction_seconds // 3600} hours!"
+                    f"🚀 Your {nitro.name} cut your next work cooldown by {nitro_reduction_seconds // 3600} hours!"
                 )
-                if nitro_expired:
-                    await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
+                if nitro.farewell:
+                    await ctx.send(nitro.farewell)
             base_payouts = {"developer": (300, 600), "duck": (200, 500)}
             descriptions = {
                 "developer": "You wrote some killer code 💻",
@@ -200,8 +194,8 @@ class JobsGathering(commands.Cog):
                 {"_id": cooldown_key}, {"$set": {"timestamp": effective_ts.isoformat()}}, upsert=True
             )
             msg = f"🧾 {descriptions.get(job, 'You worked hard!')}\n💰 You earned **{earned} coins** as a level `{promo_level}` {job}!"
-            if has_cookie:
-                msg += "\n🍪 **Lucky Cookie consumed!** Earnings doubled!"
+            if cookie:
+                msg += f"\n🍪 **{cookie['name']} consumed!** {cookie['blurb']}"
             if tool_break_notice:
                 msg += tool_break_notice
             await ctx.send(msg)
@@ -368,22 +362,21 @@ class JobsGathering(commands.Cog):
             )
             base_chance = 1.0
             luck_buff = 0.0
-            for i, item in enumerate(inventory):
-                if isinstance(item, dict) and item.get("_id") == "pet_duck":
-                    luck_buff = 0.3
-                    item["uses_left"] -= 1
-                    await ctx.send("🦆 Your Pet Duck helped you catch more fish!")
-                    if item["uses_left"] <= 0:
-                        inventory.pop(i)
-                        await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
-                    break
-            nitro_used, nitro_expired = econ.consume_nitro_boost(inventory)
-            if nitro_used:
-                reduction_seconds = int(3600 * cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            duck = econ.consume_pet_duck(inventory)
+            if duck:
+                luck_buff = duck.bonus
+                await ctx.send(f"🦆 Your {duck.name} helped you catch more fish!")
+                if duck.farewell:
+                    await ctx.send(duck.farewell)
+            nitro = econ.consume_nitro(inventory)
+            if nitro:
+                reduction_seconds = int(3600 * nitro.reduction)
                 econ.reduce_command_cooldown(ctx, reduction_seconds)
-                await ctx.send(f"🚀 Your Nitro Boost cut your next fish cooldown by {reduction_seconds // 60} minutes!")
-                if nitro_expired:
-                    await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
+                await ctx.send(
+                    f"🚀 Your {nitro.name} cut your next fish cooldown by {reduction_seconds // 60} minutes!"
+                )
+                if nitro.farewell:
+                    await ctx.send(nitro.farewell)
             adjusted_chance = min(base_chance + luck_buff, 1.0)
             success = random.random() < adjusted_chance
             if not success:
@@ -441,22 +434,21 @@ class JobsGathering(commands.Cog):
             )
             base_chance = 1.0
             luck_buff = 0.0
-            for i, item in enumerate(inventory):
-                if isinstance(item, dict) and item.get("_id") == "pet_duck":
-                    luck_buff = 0.3
-                    item["uses_left"] -= 1
-                    await ctx.send("🦆 Your Pet Duck brought you luck in the deep!")
-                    if item["uses_left"] <= 0:
-                        inventory.pop(i)
-                        await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
-                    break
-            nitro_used, nitro_expired = econ.consume_nitro_boost(inventory)
-            if nitro_used:
-                reduction_seconds = int(3600 * cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            duck = econ.consume_pet_duck(inventory)
+            if duck:
+                luck_buff = duck.bonus
+                await ctx.send(f"🦆 Your {duck.name} brought you luck in the deep!")
+                if duck.farewell:
+                    await ctx.send(duck.farewell)
+            nitro = econ.consume_nitro(inventory)
+            if nitro:
+                reduction_seconds = int(3600 * nitro.reduction)
                 econ.reduce_command_cooldown(ctx, reduction_seconds)
-                await ctx.send(f"🚀 Your Nitro Boost cut your next swim cooldown by {reduction_seconds // 60} minutes!")
-                if nitro_expired:
-                    await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
+                await ctx.send(
+                    f"🚀 Your {nitro.name} cut your next swim cooldown by {reduction_seconds // 60} minutes!"
+                )
+                if nitro.farewell:
+                    await ctx.send(nitro.farewell)
             adjusted_chance = min(base_chance + luck_buff, 1.0)
             success = random.random() < adjusted_chance
             if not success:
@@ -613,28 +605,27 @@ class JobsGathering(commands.Cog):
             }
             conf = config[choice]
             luck_buff = 0.0
-            for i, item in enumerate(inventory):
-                if isinstance(item, dict) and item.get("_id") == "pet_duck":
-                    luck_buff = 0.3
-                    item["uses_left"] -= 1
-                    await ctx.send("🦆 Your Pet Duck increased your crime success chance!")
-                    if item["uses_left"] <= 0:
-                        inventory.pop(i)
-                        await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
-                    break
-            coffee_used = econ.pop_food_item(inventory, "coffee_cup")
-            coffee_bonus = 0.25 if coffee_used else 0.0
-            if coffee_used:
-                await ctx.send("☕ **Coffee Cup consumed!** Crime success chance increased by 25%!")
-            nitro_used, nitro_expired = econ.consume_nitro_boost(inventory)
-            nitro_reduction_seconds = 0
-            if nitro_used:
-                nitro_reduction_seconds = int(86400 * cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            duck = econ.consume_pet_duck(inventory)
+            if duck:
+                luck_buff = duck.bonus
+                await ctx.send(f"🦆 Your {duck.name} increased your crime success chance!")
+                if duck.farewell:
+                    await ctx.send(duck.farewell)
+            coffee = econ.pop_variant_item(inventory, cfg.COFFEE_CUP_VARIANTS)
+            coffee_bonus = coffee["bonus"] if coffee else 0.0
+            if coffee:
                 await ctx.send(
-                    f"🚀 Your Nitro Boost cut your next crime cooldown by {nitro_reduction_seconds // 3600} hours!"
+                    f"☕ **{coffee['name']} consumed!** Crime success chance increased by {round(coffee_bonus * 100)}%!"
                 )
-                if nitro_expired:
-                    await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
+            nitro = econ.consume_nitro(inventory)
+            nitro_reduction_seconds = 0
+            if nitro:
+                nitro_reduction_seconds = int(86400 * nitro.reduction)
+                await ctx.send(
+                    f"🚀 Your {nitro.name} cut your next crime cooldown by {nitro_reduction_seconds // 3600} hours!"
+                )
+                if nitro.farewell:
+                    await ctx.send(nitro.farewell)
             adjusted_chance = min(conf["chance"] + luck_buff + coffee_bonus, 1.0)
             success = random.random() < adjusted_chance
             if success:
@@ -824,24 +815,21 @@ class JobsGathering(commands.Cog):
                     "🦋 You need a **Butterfly Net** to catch bugs! Buy one with `.buy butterfly net`."
                 )
             coins_multiplier = 1.0
-            for i, item in enumerate(inventory):
-                if isinstance(item, dict) and item.get("_id") == "pet_duck":
-                    coins_multiplier *= 1.3
-                    item["uses_left"] -= 1
-                    await ctx.send("🦆 Your Pet Duck helped you sniff out better bugs!")
-                    if item["uses_left"] <= 0:
-                        inventory.pop(i)
-                        await ctx.send("💔 One of your Pet Ducks has left after 3 uses.")
-                    break
-            nitro_used, nitro_expired = econ.consume_nitro_boost(inventory)
-            if nitro_used:
-                reduction_seconds = int(3600 * cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            duck = econ.consume_pet_duck(inventory)
+            if duck:
+                coins_multiplier *= 1 + duck.bonus
+                await ctx.send(f"🦆 Your {duck.name} helped you sniff out better bugs!")
+                if duck.farewell:
+                    await ctx.send(duck.farewell)
+            nitro = econ.consume_nitro(inventory)
+            if nitro:
+                reduction_seconds = int(3600 * nitro.reduction)
                 econ.reduce_command_cooldown(ctx, reduction_seconds)
                 await ctx.send(
-                    f"🚀 Your Nitro Boost cut your next bugcatch cooldown by {reduction_seconds // 60} minutes!"
+                    f"🚀 Your {nitro.name} cut your next bugcatch cooldown by {reduction_seconds // 60} minutes!"
                 )
-                if nitro_expired:
-                    await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
+                if nitro.farewell:
+                    await ctx.send(nitro.farewell)
             bug_name, base_value = random.choice(cfg.bugs_to_catch)
             coins_earned = int(base_value * coins_multiplier)
             await econ.add_balance(ctx.author.id, ctx.guild.id, coins_earned)

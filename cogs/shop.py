@@ -871,9 +871,13 @@ class Shop(commands.Cog):
         duck_uses = 0
         nitro_total = 0
         nitro_uses = 0
+        premium_by_key = {spec.get("inventory_key", key): spec for key, spec in cfg.PREMIUM_SHOP_ITEMS.items()}
+        premium_counts = {}
         for item in inv:
             item_key = econ.normalize_item_key(item)
-            if item_key == "pet_duck":
+            if item_key in premium_by_key:
+                premium_counts[item_key] = premium_counts.get(item_key, 0) + 1
+            elif item_key == "pet_duck":
                 duck_total += 1
                 duck_uses += item.get("uses_left", 0) if isinstance(item, dict) else 0
             elif item_key == "nitro_boost":
@@ -906,6 +910,11 @@ class Shop(commands.Cog):
                 name=f"{shop_item['name']} x{nitro_total}",
                 value=f"{shop_item.get('description', '')} ({nitro_uses} uses left total)",
                 inline=False,
+            )
+        for premium_key, premium_count in premium_counts.items():
+            spec = premium_by_key[premium_key]
+            embed.add_field(
+                name=f"{spec['emoji']} {spec['name']} x{premium_count}", value=spec["description"], inline=False
             )
         for tool_key, durability_values in tool_durability.items():
             shop_item = await state.shop_col.find_one({"name_lower": tool_key})

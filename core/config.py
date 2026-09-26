@@ -209,6 +209,98 @@ PASS_PCT = 80.0
 # (same tier as the Pet Duck's 30% luck buff, but for cooldowns instead of earnings).
 NITRO_BOOST_COOLDOWN_REDUCTION_PCT = 0.2
 
+# Inventory variants of each boost item, keyed by the normalised inventory key (underscores as
+# spaces for the plain-string consumables). The premium variants come from the premium shop below:
+# every effect is 2x the regular item's but lasts a single use. Read through the econ helpers
+# (consume_pet_duck, consume_nitro, pop_variant_item), never directly by the commands.
+PET_DUCK_LUCK_BONUS = 0.3
+PET_DUCK_VARIANTS = {
+    "pet_duck": {
+        "name": "Pet Duck",
+        "bonus": PET_DUCK_LUCK_BONUS,
+        "farewell": "💔 One of your Pet Ducks has left after 3 uses.",
+    },
+    "premium_pet_duck": {
+        "name": "Premium Pet Duck",
+        "bonus": PET_DUCK_LUCK_BONUS * 2,
+        "farewell": "💔 Your Premium Pet Duck flew off after its single use.",
+    },
+}
+NITRO_VARIANTS = {
+    "nitro_boost": {
+        "name": "Nitro Boost",
+        "reduction": NITRO_BOOST_COOLDOWN_REDUCTION_PCT,
+        "farewell": "💨 Your Nitro Boost ran out after 3 uses.",
+    },
+    "premium_nitro_boost": {
+        "name": "Premium Nitro Boost",
+        "reduction": NITRO_BOOST_COOLDOWN_REDUCTION_PCT * 2,
+        "farewell": "💨 Your Premium Nitro Boost fizzled out after its single use.",
+    },
+}
+LUCKY_COOKIE_VARIANTS = {
+    "lucky cookie": {"name": "Lucky Cookie", "multiplier": 2.0, "blurb": "Earnings doubled!"},
+    "premium lucky cookie": {"name": "Premium Lucky Cookie", "multiplier": 3.0, "blurb": "Earnings tripled!"},
+}
+COFFEE_CUP_VARIANTS = {
+    "coffee cup": {"name": "Coffee Cup", "bonus": 0.25},
+    "premium coffee cup": {"name": "Premium Coffee Cup", "bonus": 0.5},
+}
+
+# ============================================================
+# Premium shop: a limited stock shop that pops up in each guild's economy channel at random
+# times for a short while. Every item boosts its regular counterpart's effect by 2x but is
+# single use, and its price is that boost applied to the regular item's *per use* cost
+# (Pet Duck / Nitro Boost: 1000 coins / 3 uses = ~333 per use, x2 = ~700; Lucky Cookie 150 x2 = 300;
+# Coffee Cup 100 x2 = 200). Premium items cannot be refunded.
+# ============================================================
+
+# Hours between one premium shop closing and the next one opening (uniform random)
+PREMIUM_SHOP_GAP_HOURS = (3, 10)
+# How long each opening lasts, in minutes (uniform random)
+PREMIUM_SHOP_OPEN_MINUTES = (30, 60)
+# How many distinct items are stocked per opening (random pick from PREMIUM_SHOP_ITEMS)
+PREMIUM_SHOP_ITEMS_PER_OPENING = (2, 3)
+# Inventory entries are dicts with uses_left for "dict" items and plain name_lower strings otherwise.
+# stock_range is the (min, max) units available to the whole guild per opening.
+PREMIUM_SHOP_ITEMS = {
+    "premium_pet_duck": {
+        "name": "Premium Pet Duck",
+        "emoji": "🦆",
+        "price": 700,
+        "stock_range": (1, 3),
+        "inventory_kind": "dict",
+        "description": "Gives 60% luck (2x a Pet Duck) on certain activities. **1 use only.**",
+    },
+    "premium_nitro_boost": {
+        "name": "Premium Nitro Boost",
+        "emoji": "🚀",
+        "price": 700,
+        "stock_range": (1, 3),
+        "inventory_kind": "dict",
+        "description": "Cuts the cooldown of beg, lottery, work, fish, swim, crime, and bugcatch by 40% "
+        "(2x a Nitro Boost). **1 use only.**",
+    },
+    "premium_lucky_cookie": {
+        "name": "Premium Lucky Cookie",
+        "emoji": "🍪",
+        "price": 300,
+        "stock_range": (2, 5),
+        "inventory_kind": "string",
+        "inventory_key": "premium lucky cookie",
+        "description": "Triples your next work/beg earnings (a Lucky Cookie only doubles). **1 use only.**",
+    },
+    "premium_coffee_cup": {
+        "name": "Premium Coffee Cup",
+        "emoji": "☕",
+        "price": 200,
+        "stock_range": (2, 5),
+        "inventory_kind": "string",
+        "inventory_key": "premium coffee cup",
+        "description": "Gives a 50% bonus on your next crime success chance (a Coffee Cup gives 25%). **1 use only.**",
+    },
+}
+
 # Discord system message types emitted when a member boosts the server. The guild config
 # cog turns these into a thank-you message; the other on_message listeners skip them, just
 # as the original single on_message handler returned early after handling a boost.

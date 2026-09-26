@@ -167,6 +167,7 @@ minigameplayerdata_col = db["minigameplayerdata"]  # persistent minigame state
 xp_col = db["xp"]  # experience point totals per user per guild
 badges_col = db["badges"]  # earned badge IDs and activity counters
 monthly_rewards_col = db["monthly_rewards"]  # monthly reward goal progress and claims per user
+premium_shop_col = db["premium_shop"]  # per guild premium shop schedule, live stock and announcement message
 
 
 # ============================================================

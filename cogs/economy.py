@@ -439,27 +439,25 @@ class Economy(commands.Cog):
                     print(f"[BEG] Failed to parse timestamp: {e}")
             amount = random.randint(50, 200)
             inventory = data.get("inventory", [])
-            has_cookie = econ.pop_food_item(inventory, "lucky_cookie")
-            earnings_multiplier = 2.0 if has_cookie else 1.0
-            duck_used = False
-            for i, item in enumerate(inventory):
-                if isinstance(item, dict) and item.get("_id") == "pet_duck":
-                    earnings_multiplier *= 1.3
-                    item["uses_left"] -= 1
-                    await ctx.send("🦆 Your Pet Duck boosted your begging earnings by 30%!")
-                    duck_used = True
-                    break
-            nitro_used, nitro_expired = econ.consume_nitro_boost(inventory)
+            cookie = econ.pop_variant_item(inventory, cfg.LUCKY_COOKIE_VARIANTS)
+            earnings_multiplier = cookie["multiplier"] if cookie else 1.0
+            duck = econ.consume_pet_duck(inventory)
+            if duck:
+                earnings_multiplier *= 1 + duck.bonus
+                await ctx.send(f"🦆 Your {duck.name} boosted your begging earnings by {duck.pct}%!")
+                if duck.farewell:
+                    await ctx.send(duck.farewell)
+            nitro = econ.consume_nitro(inventory)
             nitro_reduction_seconds = 0
-            if nitro_used:
-                nitro_reduction_seconds = int(900 * cfg.NITRO_BOOST_COOLDOWN_REDUCTION_PCT)
+            if nitro:
+                nitro_reduction_seconds = int(900 * nitro.reduction)
                 await ctx.send(
-                    f"🚀 Your Nitro Boost cut your next beg cooldown by {nitro_reduction_seconds // 60} minutes!"
+                    f"🚀 Your {nitro.name} cut your next beg cooldown by {nitro_reduction_seconds // 60} minutes!"
                 )
-                if nitro_expired:
-                    await ctx.send("💨 Your Nitro Boost ran out after 3 uses.")
+                if nitro.farewell:
+                    await ctx.send(nitro.farewell)
             amount = int(amount * earnings_multiplier)
-            if duck_used or has_cookie or nitro_used:
+            if duck or cookie or nitro:
                 await state.economy_col.update_one(
                     {"_id": f"{ctx.guild.id}-{ctx.author.id}"}, {"$set": {"inventory": inventory}}, upsert=True
                 )
@@ -471,8 +469,8 @@ class Economy(commands.Cog):
                 {"$set": {"last_beg": effective_beg_ts.isoformat(timespec="seconds")}},
             )
             msg = f"🙇 {donor} was kind enough to donate **{amount} coins** to you!"
-            if has_cookie:
-                msg += "\n🍪 **Lucky Cookie consumed!** Earnings doubled!"
+            if cookie:
+                msg += f"\n🍪 **{cookie['name']} consumed!** {cookie['blurb']}"
             await ctx.send(msg)
         except Exception as e:
             print(f"[ERROR] beg command: {type(e).__name__} - {e}")
