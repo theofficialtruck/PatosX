@@ -7,13 +7,13 @@ pymongo==4.18.2
 python-dotenv==1.2.4
 motor==3.7.1
 aiohttp==3.14.3
-pytz==2026.4
+pytz==2026.5
 python-dateutil==2.9.0.post0
 google-generativeai==0.8.6
 google-genai==2.28.0
 
 flake8==7.4.1
-black==26.5.1
+black==26.10.0
 isort==9.0.2
 ruff==0.16.10
 codespell==2.4.3
