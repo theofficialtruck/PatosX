@@ -582,9 +582,20 @@ async def calculate_investment_value(inv: dict) -> int:
         return max(0, int(inv.get("amount", 0) or 0))
 
 
+# Days after purchase during which an investment's value does not move at all.
+INVESTMENT_GRACE_DAYS = 2
+
+# Possible daily percentage changes and how likely each one is. Gains (60 percent of days) are a
+# little more common than losses (40 percent), so an investment drifts upward by roughly 0.4 percent a
+# day on average (about 3 percent a week, a few hundred coins a week on the biggest positions) while
+# still having losing days and losing streaks.
+_DAILY_CHANGE_PCTS = [-0.03, -0.02, -0.01, 0.01, 0.02, 0.03]
+_DAILY_CHANGE_WEIGHTS = [8, 14, 18, 22, 22, 16]
+
+
 def pick_daily_investment_change_pct() -> float:
-    """Sample a daily percentage change for an investment. Weighted slightly toward small losses."""
-    return random.choices([-0.03, -0.02, -0.01, 0.01, 0.02, 0.03], weights=[18, 18, 18, 16, 15, 15], k=1)[0]
+    """Sample a daily percentage change for an investment. Weighted slightly toward small gains."""
+    return random.choices(_DAILY_CHANGE_PCTS, weights=_DAILY_CHANGE_WEIGHTS, k=1)[0]
 
 
 async def refresh_user_investments_for_today(investments: list[dict], now: datetime | None = None) -> list[dict]:
@@ -627,8 +638,15 @@ async def refresh_user_investments_for_today(investments: list[dict], now: datet
         if not isinstance(history, list):
             history = []
         inv_id = str(inv.get("_id") or "")
+        # The value stays flat for INVESTMENT_GRACE_DAYS days after purchase. Records without a
+        # purchase date predate that rule and are never held back.
+        grace_ends = None
+        if inv.get("date") or inv.get("timestamp"):
+            grace_ends = get_investment_date(inv).date() + timedelta(days=INVESTMENT_GRACE_DAYS)
         for offset in range(1, days_elapsed + 1):
             day = last_refresh_date + timedelta(days=offset)
+            if grace_ends is not None and day <= grace_ends:
+                continue
             day_str = day.isoformat()
             saved_state = random.getstate()
             try:
