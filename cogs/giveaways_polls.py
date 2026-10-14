@@ -631,6 +631,47 @@ async def end_after_delay(view: GiveawayView, delay: float):
         print(f"[Giveaway] Failed to end giveaway {view.giveaway_id}: {e}")
 
 
+# Discord allows at most 25 buttons (5 rows of 5) on one message.
+MAX_CLAIMABLE_ROLES = 25
+
+
+class RoleRemoveConfirmView(View):
+    """Ephemeral follow up shown when someone presses the button of a role they already have, so a
+    misclick (or checking whether they have the role) never strips it by accident."""
+
+    def __init__(self, role: discord.Role, user_id: int):
+        super().__init__(timeout=60)
+        self.role = role
+        self.user_id = user_id
+
+    async def _finish(self, interaction: discord.Interaction, content: str):
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content=content, view=self)
+        self.stop()
+
+    @discord.ui.button(label="Yes, remove it", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ This confirmation isn't for you.", ephemeral=True)
+        member = interaction.user
+        if self.role not in member.roles:
+            return await self._finish(interaction, f"ℹ️ You no longer have {self.role.mention}.")
+        try:
+            await member.remove_roles(self.role)
+        except discord.Forbidden:
+            return await self._finish(interaction, "⚠️ I don't have permission to manage that role.")
+        except discord.HTTPException as e:
+            return await self._finish(interaction, f"❌ Something went wrong: `{e}`")
+        await self._finish(interaction, f"❌ Removed {self.role.mention}")
+
+    @discord.ui.button(label="No, keep it", style=discord.ButtonStyle.secondary)
+    async def keep(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ This confirmation isn't for you.", ephemeral=True)
+        await self._finish(interaction, f"👍 Okay, you still have {self.role.mention}.")
+
+
 class RoleButtons(View):
     def __init__(self, roles, guild_id, guild: discord.Guild):
         super().__init__(timeout=None)
@@ -648,15 +689,17 @@ class RoleButtons(View):
             role = interaction.guild.get_role(role_id)
             if not role:
                 return await interaction.response.send_message("❌ Role not found.", ephemeral=True)
+            if role in interaction.user.roles:
+                # Pressing again could be a misclick or just a check, so never remove without asking.
+                return await interaction.response.send_message(
+                    f"⚠️ You already have {role.mention}. Do you want to remove it?",
+                    view=RoleRemoveConfirmView(role, interaction.user.id),
+                    ephemeral=True,
+                )
             await interaction.response.defer(ephemeral=True)
             try:
-                if role in interaction.user.roles:
-                    await interaction.user.remove_roles(role)
-                    msg = f"❌ Removed {role.mention}"
-                else:
-                    await interaction.user.add_roles(role)
-                    msg = f"✅ You claimed {role.mention}"
-                await interaction.followup.send(msg, ephemeral=True)
+                await interaction.user.add_roles(role)
+                await interaction.followup.send(f"✅ You claimed {role.mention}", ephemeral=True)
             except discord.Forbidden:
                 await interaction.followup.send("⚠️ I don't have permission to manage roles.", ephemeral=True)
             except Exception as e:
@@ -665,32 +708,66 @@ class RoleButtons(View):
         return callback
 
 
-async def refresh_roles_embed(ctx, guild_id):
-    settings = await state.roles_col.find_one({"_id": guild_id})
-    if not settings:
-        return
-    role_ids = settings.get("roles", [])
-    message_id = settings.get("message_id")
-    if not message_id:
-        return
-    try:
-        msg = await ctx.channel.fetch_message(message_id)
-    except discord.NotFound:
-        return
-    roles = [ctx.guild.get_role(r) for r in role_ids if ctx.guild.get_role(r)]
+def build_roles_embed(guild: discord.Guild, role_ids) -> tuple[discord.Embed, View | None]:
+    """The claimable roles embed and its buttons. Roles that no longer exist are skipped; with none
+    left the embed says so and has no buttons."""
+    roles = [role for role in (guild.get_role(r) for r in role_ids) if role]
     if not roles:
         embed = discord.Embed(
             title="🎭 Claim Your Roles", description="⚠️ No valid roles available.", color=discord.Color.red()
         )
-        await msg.edit(embed=embed, view=None)
-        return
+        return embed, None
     embed = discord.Embed(
         title="🎭 Claim Your Roles",
-        description="\n".join([role.mention for role in roles]),
+        description="\n".join(role.mention for role in roles),
         color=discord.Color.blurple(),
     )
-    view = RoleButtons(role_ids, guild_id, ctx.guild)
-    await msg.edit(embed=embed, view=view)
+    return embed, RoleButtons([role.id for role in roles], guild.id, guild)
+
+
+async def refresh_roles_embed(guild: discord.Guild, fallback_channel=None) -> bool:
+    """Bring the live ``.roles`` message in line with the saved claimable roles. Returns True when the
+    message was edited. ``fallback_channel`` is only used for messages posted before the channel was
+    stored with them. A message that no longer exists is forgotten so it is not retried forever."""
+    settings = await state.roles_col.find_one({"_id": guild.id})
+    if not settings or not settings.get("message_id"):
+        return False
+    channel = None
+    if settings.get("channel_id"):
+        channel = guild.get_channel_or_thread(int(settings["channel_id"]))
+    channel = channel or fallback_channel
+    if channel is None:
+        return False
+    try:
+        msg = await channel.fetch_message(settings["message_id"])
+    except discord.NotFound:
+        if settings.get("channel_id") or fallback_channel is None:
+            await state.roles_col.update_one({"_id": guild.id}, {"$unset": {"message_id": "", "channel_id": ""}})
+        return False
+    except discord.HTTPException as e:
+        print(f"[Roles] Could not fetch the roles message for guild {guild.id}: {e}")
+        return False
+    embed, view = build_roles_embed(guild, settings.get("roles", []))
+    try:
+        await msg.edit(embed=embed, view=view)
+    except discord.HTTPException as e:
+        print(f"[Roles] Could not update the roles message for guild {guild.id}: {e}")
+        return False
+    return True
+
+
+async def prune_deleted_roles(guild: discord.Guild, role_ids: list[int]) -> list[int]:
+    """Drop claimable roles that were deleted while the bot was offline (the delete event was missed),
+    update the live embed to match, and return the role IDs that still exist."""
+    stale = [r for r in role_ids if guild.get_role(r) is None]
+    if not stale:
+        return role_ids
+    try:
+        await state.roles_col.update_one({"_id": guild.id}, {"$pull": {"roles": {"$in": stale}}})
+        await refresh_roles_embed(guild)
+    except Exception as e:
+        print(f"[Roles] Failed to reconcile roles for guild {guild.id}: {e}")
+    return [r for r in role_ids if r not in stale]
 
 
 class GiveawaysPolls(commands.Cog):
@@ -764,7 +841,8 @@ class GiveawaysPolls(commands.Cog):
         """Wait for the bot to be ready before starting the reminder polling loop."""
         await self.bot.wait_until_ready()
 
-    @commands.hybrid_command(name="poll", description="Create a poll")
+    @commands.hybrid_command(name="poll", description="Create a poll. Staff only.")
+    @perms.staff_only()
     async def poll(self, ctx):
         # Slash invocations get the form; prefix invocations get the step-by-step wizard below.
         if ctx.interaction is not None:
@@ -976,18 +1054,14 @@ class GiveawaysPolls(commands.Cog):
         settings = await state.roles_col.find_one({"_id": guild_id})
         if not settings or not settings.get("roles"):
             return await ctx.send("⚠️ No claimable roles set yet!", ephemeral=True)
-        role_ids = settings["roles"]
-        roles = [ctx.guild.get_role(r) for r in role_ids if ctx.guild.get_role(r)]
-        if not roles:
+        if not any(ctx.guild.get_role(r) for r in settings["roles"]):
             return await ctx.send("⚠️ All stored roles are invalid.", ephemeral=True)
-        embed = discord.Embed(
-            title="🎭 Claim Your Roles",
-            description="\n".join([role.mention for role in roles]),
-            color=discord.Color.blurple(),
-        )
-        view = RoleButtons(role_ids, guild_id, ctx.guild)
+        embed, view = build_roles_embed(ctx.guild, settings["roles"])
         msg = await ctx.send(embed=embed, view=view)
-        await state.roles_col.update_one({"_id": guild_id}, {"$set": {"message_id": msg.id}}, upsert=True)
+        # The channel is stored with the message so later role changes can find and edit it live
+        await state.roles_col.update_one(
+            {"_id": guild_id}, {"$set": {"message_id": msg.id, "channel_id": ctx.channel.id}}, upsert=True
+        )
 
     @commands.hybrid_command(name="roleadd", description="Add a claimable role")
     @perms.staffperm("roles")
@@ -996,13 +1070,19 @@ class GiveawaysPolls(commands.Cog):
         guild_id = ctx.guild.id
         settings = await state.roles_col.find_one({"_id": guild_id})
         if settings:
-            if role.id in settings["roles"]:
+            if role.id in settings.get("roles", []):
                 return await ctx.send("⚠️ That role is already claimable.", ephemeral=True)
+            if len(settings.get("roles", [])) >= MAX_CLAIMABLE_ROLES:
+                return await ctx.send(
+                    f"⚠️ You can have at most {MAX_CLAIMABLE_ROLES} claimable roles (Discord's button limit).",
+                    ephemeral=True,
+                )
             await state.roles_col.update_one({"_id": guild_id}, {"$push": {"roles": role.id}})
         else:
             await state.roles_col.insert_one({"_id": guild_id, "roles": [role.id]})
-        await ctx.send(f"✅ {role.mention} has been added as a claimable role!", ephemeral=True)
-        await refresh_roles_embed(ctx, guild_id)
+        updated = await refresh_roles_embed(ctx.guild, ctx.channel)
+        note = " The live roles embed was updated." if updated else ""
+        await ctx.send(f"✅ {role.mention} has been added as a claimable role!{note}", ephemeral=True)
 
     @commands.hybrid_command(name="roleremove", description="Remove a claimable role")
     @perms.staffperm("roles")
@@ -1013,8 +1093,9 @@ class GiveawaysPolls(commands.Cog):
         if not settings or role.id not in settings.get("roles", []):
             return await ctx.send("⚠️ That role is not claimable.", ephemeral=True)
         await state.roles_col.update_one({"_id": guild_id}, {"$pull": {"roles": role.id}})
-        await ctx.send(f"❌ {role.mention} has been removed from claimable roles.", ephemeral=True)
-        await refresh_roles_embed(ctx, guild_id)
+        updated = await refresh_roles_embed(ctx.guild, ctx.channel)
+        note = " The live roles embed was updated." if updated else ""
+        await ctx.send(f"❌ {role.mention} has been removed from claimable roles.{note}", ephemeral=True)
 
     @commands.hybrid_command(name="addmoney", description="Add money to one or more users (economy admin only).")
     @app_commands.describe(
@@ -1246,6 +1327,30 @@ class GiveawaysPolls(commands.Cog):
             )
 
     @commands.Cog.listener()
+    async def on_guild_role_delete(self, role: discord.Role):
+        """A deleted role can no longer be claimed: drop it from the claimable list and update the live
+        roles embed straight away."""
+        try:
+            result = await state.roles_col.update_one(
+                {"_id": role.guild.id, "roles": role.id}, {"$pull": {"roles": role.id}}
+            )
+            if result.matched_count:
+                await refresh_roles_embed(role.guild)
+        except Exception as e:
+            print(f"[Roles] Failed to handle the deletion of role {role.id}: {e}")
+
+    @commands.Cog.listener()
+    async def on_guild_role_update(self, before: discord.Role, after: discord.Role):
+        """Buttons are labelled with the role name, so a rename has to be pushed to the live embed."""
+        if before.name == after.name:
+            return
+        try:
+            if await state.roles_col.find_one({"_id": after.guild.id, "roles": after.id}):
+                await refresh_roles_embed(after.guild)
+        except Exception as e:
+            print(f"[Roles] Failed to handle the update of role {after.id}: {e}")
+
+    @commands.Cog.listener()
     async def on_ready(self):
         """Start the drop/poll/reminder loops, register the persistent role-claim and drop-claim
         views, resume unfinished giveaways and restore open polls (runs once)."""
@@ -1262,6 +1367,9 @@ class GiveawaysPolls(commands.Cog):
             if not guild:
                 continue
             role_ids = doc.get("roles", [])
+            if not role_ids:
+                continue
+            role_ids = await prune_deleted_roles(guild, role_ids)
             if not role_ids:
                 continue
             view = RoleButtons(role_ids, guild_id, guild)

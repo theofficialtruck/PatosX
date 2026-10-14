@@ -340,19 +340,18 @@ async def test_find_sticky_note_doc_queries_legacy_and_canonical_ids(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_unstickynote_removes_doc_and_cache(monkeypatch, stickynotes_cog):
-    channel = SimpleNamespace(id=456)
-    message = SimpleNamespace(delete=AsyncMock())
-    channel.fetch_message = AsyncMock(return_value=message)
+async def test_unstickynote_removes_doc_and_message(monkeypatch, stickynotes_cog):
+    partial = SimpleNamespace(delete=AsyncMock())
+    channel = SimpleNamespace(id=456, get_partial_message=MagicMock(return_value=partial))
     ctx = SimpleNamespace(guild=SimpleNamespace(id=123), channel=channel, send=AsyncMock())
-    stickynotes.last_sticky_msg[456] = 99999
     monkeypatch.setattr(
         stickynotes, "find_sticky_note_doc", AsyncMock(return_value={"_id": "sticky-1", "message": 99999})
     )
     monkeypatch.setattr(state, "sticky_col", SimpleNamespace(delete_one=AsyncMock()))
     await stickynotes_cog.unstickynote.callback(stickynotes_cog, ctx)
+    channel.get_partial_message.assert_called_once_with(99999)
+    partial.delete.assert_awaited_once()
     state.sticky_col.delete_one.assert_awaited_once_with({"_id": "sticky-1"})
-    assert 456 not in stickynotes.last_sticky_msg
     ctx.send.assert_awaited_with("✅ Sticky note removed.")
 
 
