@@ -20,7 +20,7 @@ them), and send_hybrid_error/is_prefix for per-command error replies.
 """
 
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Union
 
 import discord
@@ -173,7 +173,7 @@ async def handle_command_error(bot, ctx, error):
                 "command": ctx.command.name if ctx.command else "unknown",
                 "error": str(root_error),
                 "traceback": traceback.format_exc(),
-                "time": datetime.now(timezone.utc),
+                "time": datetime.now(UTC),
             }
         )
         if len(state.recent_errors) > 5:
@@ -250,7 +250,7 @@ async def handle_app_command_error(bot, interaction: discord.Interaction, error)
                     "command": interaction.command.name if interaction.command else "unknown",
                     "error": str(root_error),
                     "traceback": traceback.format_exc(),
-                    "time": datetime.now(timezone.utc),
+                    "time": datetime.now(UTC),
                 }
             )
             if len(state.recent_errors) > 5:

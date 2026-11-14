@@ -36,7 +36,7 @@ import asyncio
 import random
 import re
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import discord
 from discord.ext import commands, tasks
@@ -82,7 +82,7 @@ def parse_time(raw) -> datetime | None:
         parsed = datetime.fromisoformat(raw)
     except (TypeError, ValueError):
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def is_sold_out(items: list[dict]) -> bool:
@@ -176,7 +176,7 @@ async def purchase_premium_item(guild_id, user_id, key: str) -> dict:
         return {"ok": False, "message": "❌ That item isn't sold here."}
     guild_key = str(guild_id)
     doc = await state.premium_shop_col.find_one({"_id": guild_key})
-    if not is_open_now(doc, datetime.now(timezone.utc)):
+    if not is_open_now(doc, datetime.now(UTC)):
         return {"ok": False, "message": "⌛ The premium shop has closed."}
     price = int(spec["price"])
     user_data = await econ.get_user(None, guild_key, user_id)
@@ -284,7 +284,7 @@ async def sync_shop(guild: discord.Guild, now: datetime | None = None) -> None:
     safe to call as often as needed: it does nothing when the message is already up to date."""
     guild_id = str(guild.id)
     async with _lock_for(guild_id):
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         doc = await state.premium_shop_col.find_one({"_id": guild_id})
         if not doc or not doc.get("is_open"):
             return
@@ -320,7 +320,7 @@ class PremiumShopView(discord.ui.View):
     @discord.ui.button(label="🛒 Shop the Deals", style=discord.ButtonStyle.green, custom_id=BUY_BUTTON_ID)
     async def open_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
         doc = await state.premium_shop_col.find_one({"_id": str(interaction.guild.id)})
-        if not is_open_now(doc, datetime.now(timezone.utc)) or doc.get("message_id") != interaction.message.id:
+        if not is_open_now(doc, datetime.now(UTC)) or doc.get("message_id") != interaction.message.id:
             await interaction.response.send_message("⌛ This premium shop has closed.", ephemeral=True)
             # The shop may have only just expired or sold out: close the announcement now rather than
             # leaving the button up until the next scheduler tick.
@@ -470,7 +470,7 @@ class PremiumShop(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def premium_shop_loop(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for guild in self.bot.guilds:
             try:
                 await self._tick_guild(guild, now)

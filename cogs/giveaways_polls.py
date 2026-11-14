@@ -23,7 +23,7 @@ import random
 import re
 import traceback
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import discord
 from discord import (
@@ -65,7 +65,7 @@ class DropClaimView(discord.ui.View):
                 "$set": {
                     "claimed": True,
                     "claimer_id": str(interaction.user.id),
-                    "claimed_at": datetime.now(timezone.utc).isoformat(),
+                    "claimed_at": datetime.now(UTC).isoformat(),
                 }
             },
         )
@@ -176,9 +176,7 @@ def apply_result_to_embed(embed: discord.Embed, winners_mentions: str) -> None:
     """Mark a giveaway embed as finished: Ends -> Ended, Winners -> the drawn winners."""
     for idx, field in enumerate(embed.fields):
         if field.name == "Ends":
-            embed.set_field_at(
-                idx, name="Ended", value=f"<t:{int(datetime.now(timezone.utc).timestamp())}:F>", inline=False
-            )
+            embed.set_field_at(idx, name="Ended", value=f"<t:{int(datetime.now(UTC).timestamp())}:F>", inline=False)
         elif field.name == "Winners":
             embed.set_field_at(idx, name="Winners", value=winners_mentions or "No winners", inline=False)
 
@@ -321,7 +319,7 @@ class GiveawayView(discord.ui.View):
             # Persist first: whatever fails below, the giveaway must never be re-run after a restart.
             await state.giveaway_col.update_one(
                 {"_id": self.giveaway_id},
-                {"$set": {"ended": True, "winners": winners, "ended_at": datetime.now(timezone.utc).isoformat()}},
+                {"$set": {"ended": True, "winners": winners, "ended_at": datetime.now(UTC).isoformat()}},
             )
             winners_mentions = ", ".join(f"<@{uid}>" for uid in winners)
             try:
@@ -435,7 +433,7 @@ class PollModal(discord.ui.Modal, title="Create a Poll"):
             return
         try:
             await interaction.response.defer(ephemeral=True, thinking=True)
-            end_time = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+            end_time = datetime.now(UTC) + timedelta(seconds=duration_seconds)
             options = [
                 self.option1.value,
                 self.option2.value,
@@ -521,7 +519,7 @@ class GiveawayModal(discord.ui.Modal, title="Create Giveaway"):
             return
         # Everything below can take longer than Discord's 3 second interaction window
         await interaction.response.defer(ephemeral=True, thinking=True)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         end_time = now + timedelta(seconds=duration_seconds)
         embed = build_giveaway_embed(
             self.prize.value, interaction.user.mention, end_time, winners_count, required_roles, bonus_roles
@@ -572,7 +570,7 @@ async def resume_giveaways(bot):
     """Re-attach views to every unfinished giveaway after a restart, ending the ones that expired
     while the bot was offline. A giveaway whose message no longer exists is closed out so it is
     not retried on every start."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async for data in state.giveaway_col.find({"ended": False}):
         giveaway_id = data["_id"]
         if giveaway_id in ACTIVE_GIVEAWAYS:
@@ -580,7 +578,7 @@ async def resume_giveaways(bot):
         try:
             end_time = datetime.fromisoformat(data["end_time"])
             if end_time.tzinfo is None:
-                end_time = end_time.replace(tzinfo=timezone.utc)
+                end_time = end_time.replace(tzinfo=UTC)
             remaining = (end_time - now).total_seconds()
             channel = bot.get_channel(int(data["channel_id"]))
             if not channel:
@@ -780,7 +778,7 @@ class GiveawaysPolls(commands.Cog):
     @tasks.loop(hours=1)
     async def check_expired_drops(self):
         """Expire unclaimed money drops older than 3 days: delete their messages, refund non staff drops."""
-        three_days_ago = datetime.now(timezone.utc) - timedelta(days=3)
+        three_days_ago = datetime.now(UTC) - timedelta(days=3)
         query = {"claimed": False, "created_at": {"$lt": three_days_ago.isoformat()}}
         async for drop in state.drop_instances_col.find(query):
             try:
@@ -805,7 +803,7 @@ class GiveawaysPolls(commands.Cog):
 
     @tasks.loop(seconds=30)
     async def check_polls(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async for poll in state.polls_col.find({"end_time": {"$lte": now}}):
             channel = self.bot.get_channel(int(poll["channel_id"]))
             if not channel:
@@ -825,7 +823,7 @@ class GiveawaysPolls(commands.Cog):
     @tasks.loop(seconds=30)
     async def check_reminders(self):
         """Fire any due reminders by DMing the requesting user, then delete the reminder record."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         reminders = await state.reminders_col.find({"remind_at": {"$lte": now}}).to_list(length=None)
         for reminder in reminders:
             user = self.bot.get_user(int(reminder["user_id"]))
@@ -894,7 +892,7 @@ class GiveawaysPolls(commands.Cog):
                 duration_seconds = econ.parse_time(msg.content)
             except Exception as e:
                 return await ctx.send(f"⚠️ Invalid duration format. {e}")
-            end_time = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+            end_time = datetime.now(UTC) + timedelta(seconds=duration_seconds)
             final_options = [opt for opt in options if opt]
             poll_id = f"{ctx.guild.id}-{ctx.message.id}"
             counts = {}
@@ -914,7 +912,7 @@ class GiveawaysPolls(commands.Cog):
                 }
             )
             await ctx.send("✅ Poll created successfully!")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await ctx.send("⌛ Poll creation timed out due to inactivity.")
         except Exception as e:
             await ctx.send(f"⚠️ Error: {e}")
@@ -1002,7 +1000,7 @@ class GiveawaysPolls(commands.Cog):
             winners_mentions = ", ".join(f"<@{wid}>" for wid in winners)
             await state.giveaway_col.update_one(
                 {"_id": data["_id"]},
-                {"$set": {"ended": True, "winners": winners, "ended_at": datetime.now(timezone.utc).isoformat()}},
+                {"$set": {"ended": True, "winners": winners, "ended_at": datetime.now(UTC).isoformat()}},
             )
             try:
                 channel = ctx.bot.get_channel(int(data["channel_id"]))
@@ -1297,7 +1295,7 @@ class GiveawaysPolls(commands.Cog):
                         "amount": int(coins),
                         "author_id": str(user_id),
                         "claimed": False,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "created_at": datetime.now(UTC).isoformat(),
                         "staff_drop": is_staff,
                     }
                 },
@@ -1377,7 +1375,7 @@ class GiveawaysPolls(commands.Cog):
         print("✅ Persistent role buttons loaded.")
         self.bot.add_view(DropClaimView())
         asyncio.create_task(resume_giveaways(self.bot))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async for poll_doc in state.polls_col.find({"end_time": {"$gt": now}}):
             try:
                 channel = self.bot.get_channel(int(poll_doc["channel_id"]))

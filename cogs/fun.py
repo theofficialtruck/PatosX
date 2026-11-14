@@ -21,7 +21,7 @@ import json
 import random
 import re
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiohttp
@@ -224,7 +224,7 @@ class Fun(commands.Cog):
             {
                 "$set": {
                     "reason": reason,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "original_nick": ctx.author.nick,
                 }
             },
@@ -332,7 +332,7 @@ class Fun(commands.Cog):
                     timestamp = doc.get("timestamp")
                     if timestamp:
                         dt = parser.isoparse(timestamp)
-                        elapsed = datetime.now(timezone.utc) - dt.replace(tzinfo=timezone.utc)
+                        elapsed = datetime.now(UTC) - dt.replace(tzinfo=UTC)
                         mins = int(elapsed.total_seconds() // 60)
                         hours, mins = divmod(mins, 60)
                         time_str = f"{hours}h {mins}m ago" if hours else f"{mins} minutes ago"

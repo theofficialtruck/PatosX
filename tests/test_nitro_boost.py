@@ -206,7 +206,7 @@ async def test_beg_nitro_boost_reduces_cooldown_and_consumed(monkeypatch, econom
     ]
     assert saved
     saved_ts = dt_module.datetime.fromisoformat(saved[0])
-    delta = (dt_module.datetime.now(dt_module.timezone.utc) - saved_ts).total_seconds()
+    delta = (dt_module.datetime.now(dt_module.UTC) - saved_ts).total_seconds()
     assert 175 <= delta <= 185  # 20% of 900s = 180s
 
 
@@ -250,7 +250,7 @@ async def test_lottery_nitro_boost_reduces_cooldown_and_consumed(monkeypatch, ga
     ]
     assert saved
     saved_ts = dt_module.datetime.fromisoformat(saved[0])
-    delta = (dt_module.datetime.now(dt_module.timezone.utc) - saved_ts).total_seconds()
+    delta = (dt_module.datetime.now(dt_module.UTC) - saved_ts).total_seconds()
     assert 715 <= delta <= 725  # 20% of 3600s = 720s
 
 
@@ -297,7 +297,7 @@ async def test_work_nitro_boost_reduces_cooldown_and_consumed(monkeypatch, jobs_
     ]
     assert saved
     saved_ts = dt_module.datetime.fromisoformat(saved[0])
-    delta = (dt_module.datetime.now(dt_module.timezone.utc) - saved_ts).total_seconds()
+    delta = (dt_module.datetime.now(dt_module.UTC) - saved_ts).total_seconds()
     assert 8630 <= delta <= 8650  # 20% of 43200s = 8640s
 
 
@@ -341,7 +341,7 @@ async def test_crime_nitro_boost_reduces_cooldown_on_success(monkeypatch, jobs_c
     ]
     assert saved
     saved_ts = dt_module.datetime.fromisoformat(saved[0])
-    delta = (dt_module.datetime.now(dt_module.timezone.utc) - saved_ts).total_seconds()
+    delta = (dt_module.datetime.now(dt_module.UTC) - saved_ts).total_seconds()
     assert 17270 <= delta <= 17290  # 20% of 86400s = 17280s
 
 

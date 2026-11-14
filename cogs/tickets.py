@@ -19,7 +19,7 @@
 import io
 import re
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import discord
 from discord import (
@@ -546,7 +546,7 @@ class TicketCategoryButton(discord.ui.Button):
                 "owner_id": str(author.id),
                 "category": category_name.lower(),
                 "allowed_staff": self.btn_data.get("allowed_staff"),
-                "created_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(UTC),
             }
         )
         embed = discord.Embed(
@@ -621,7 +621,7 @@ async def actually_close_ticket(ctx, opener, forced=False):
     channel = ctx.channel
     messages = [msg async for msg in channel.history(limit=None, oldest_first=True)]
     transcript_text = "\n".join([f"[{msg.created_at}] {msg.author}: {msg.content}" for msg in messages])
-    ticket_id = f"{channel.id}-{int(datetime.now(timezone.utc).timestamp())}"
+    ticket_id = f"{channel.id}-{int(datetime.now(UTC).timestamp())}"
     await state.tickets_col.insert_one(
         {
             "ticket_id": ticket_id,
@@ -632,7 +632,7 @@ async def actually_close_ticket(ctx, opener, forced=False):
             "closer_name": str(ctx.author),
             "transcript": transcript_text,
             "created_at": str(channel.created_at),
-            "closed_at": datetime.now(timezone.utc).isoformat(),
+            "closed_at": datetime.now(UTC).isoformat(),
             "forced": forced,
         }
     )
@@ -737,14 +737,14 @@ def _ticket_sort_key(t: dict) -> datetime:
     closed tickets sort by when they closed, open ones by when they were opened."""
     raw = t.get("closed_at") or t.get("created_at")
     if isinstance(raw, datetime):
-        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+        return raw if raw.tzinfo else raw.replace(tzinfo=UTC)
     if isinstance(raw, str):
         try:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            dt = datetime.fromisoformat(raw)
+            return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
         except ValueError:
             pass
-    return datetime.min.replace(tzinfo=timezone.utc)
+    return datetime.min.replace(tzinfo=UTC)
 
 
 class TranscriptPaginationView(discord.ui.View):
@@ -762,7 +762,7 @@ class TranscriptPaginationView(discord.ui.View):
             return "Unknown"
         if isinstance(dt, str):
             try:
-                dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(dt)
             except ValueError:
                 return str(dt)
         if not isinstance(dt, datetime):
@@ -771,7 +771,7 @@ class TranscriptPaginationView(discord.ui.View):
             # Mongo strips tzinfo from stored datetimes and always returns UTC wall-clock
             # values, so a naive dt here is UTC, not local time - without this, .timestamp()
             # would assume the local system timezone and skew the rendered time by that offset.
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         ts = int(dt.timestamp())
         if style == "full":
             return f"<t:{ts}:F>"
@@ -1169,7 +1169,7 @@ class Tickets(commands.Cog):
                     return "Unknown"
                 if isinstance(dt, str):
                     try:
-                        dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+                        dt = datetime.fromisoformat(dt)
                     except ValueError:
                         return str(dt)
                 if not isinstance(dt, datetime):
@@ -1178,7 +1178,7 @@ class Tickets(commands.Cog):
                     # Mongo strips tzinfo from stored datetimes and always returns UTC wall-clock
                     # values, so a naive dt here is UTC, not local time - without this, .timestamp()
                     # would assume the local system timezone and skew the rendered time by that offset.
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.replace(tzinfo=UTC)
                 ts = int(dt.timestamp())
                 if style == "full":
                     return f"<t:{ts}:F>"
@@ -1189,7 +1189,7 @@ class Tickets(commands.Cog):
                 else:
                     return f"<t:{ts}:f> • <t:{ts}:R>"
 
-            embed = Embed(title=f"🎟 Transcript for {ticket_id}", color=5793266, timestamp=datetime.now(timezone.utc))
+            embed = Embed(title=f"🎟 Transcript for {ticket_id}", color=5793266, timestamp=datetime.now(UTC))
             embed.add_field(name="Opened by", value=f"<@{ticket['opener_id']}>", inline=True)
             embed.add_field(name="Closed by", value=f"<@{ticket['closer_id']}>", inline=True)
             embed.add_field(name="Opened at", value=format_time(ticket.get("created_at")), inline=True)

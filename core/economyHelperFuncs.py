@@ -26,7 +26,7 @@ import random
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import discord
 from pymongo.errors import DuplicateKeyError
@@ -540,7 +540,7 @@ async def get_crime_bonus(user_id, guild_id):
 async def create_investment(user_id: str, company: str, amount: int):
     """Insert a new investment record with a generated UUID. Sets current_value equal to amount at creation."""
     inv_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     now_iso = now.isoformat()
     await state.investments_col.insert_one(
         {
@@ -561,13 +561,13 @@ def get_investment_date(inv: dict) -> datetime:
     """Parse the investment creation date from the record, falling back to now when missing or malformed."""
     date_raw = inv.get("date") or inv.get("timestamp")
     if not date_raw:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     try:
         parsed = datetime.fromisoformat(date_raw)
     except (TypeError, ValueError):
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
+        return parsed.replace(tzinfo=UTC)
     return parsed
 
 
@@ -602,7 +602,7 @@ async def refresh_user_investments_for_today(investments: list[dict], now: datet
     """Apply daily price changes to each investment that has not been refreshed today.
     Returns the updated list of investment dicts."""
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
     refresh_date = now.date().isoformat()
     refreshed: list[dict] = []
     for inv in investments:
@@ -669,7 +669,7 @@ async def refresh_user_investments_for_today(investments: list[dict], now: datet
 
 def _current_month_key() -> str:
     """Return the current calendar month as 'YYYY-MM' in UTC, used to detect month rollover."""
-    return datetime.now(timezone.utc).strftime("%Y-%m")
+    return datetime.now(UTC).strftime("%Y-%m")
 
 
 def _monthly_rewards_default_doc(guild_id: str, user_id: str, month: str) -> dict:

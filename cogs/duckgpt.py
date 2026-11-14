@@ -20,7 +20,7 @@ import asyncio
 import random
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from itertools import cycle
 
 import discord
@@ -84,7 +84,7 @@ def sanitize_duck_text(text, guild=None):
 async def cleanup_old_conversations():
     """Remove DuckGPT conversation histories that have not been updated in 30 days."""
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        cutoff = datetime.now(UTC) - timedelta(days=30)
         result = await state.duck_conversations_col.delete_many({"last_updated": {"$lt": cutoff}})
         print(f"[DuckGPT Cleanup] Deleted {result.deleted_count} old conversations.")
         return result.deleted_count
@@ -345,7 +345,7 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
     duck_conversations[conv_key].append({"role": "assistant", "content": text})
     await state.duck_conversations_col.update_one(
         {"user_id": user_id, "guild_id": guild_id},
-        {"$set": {"messages": duck_conversations[conv_key], "last_updated": datetime.now(timezone.utc)}},
+        {"$set": {"messages": duck_conversations[conv_key], "last_updated": datetime.now(UTC)}},
         upsert=True,
     )
     text = " ".join(text.split())

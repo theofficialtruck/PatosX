@@ -14,7 +14,6 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import asyncio
 import random
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -164,7 +163,7 @@ async def test_riddle_timeout_on_answer_awards_no_coins(monkeypatch, bot, games_
     monkeypatch.setattr(random, "choice", lambda seq: seq[0])
 
     async def raise_timeout(*args, **kwargs):
-        raise asyncio.TimeoutError
+        raise TimeoutError
 
     monkeypatch.setattr(bot, "wait_for", raise_timeout)
 

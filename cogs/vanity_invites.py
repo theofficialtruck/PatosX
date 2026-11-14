@@ -19,7 +19,7 @@ invite stats/leaderboard commands, join/leave attribution, and the vanity status
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import discord
 from discord import (
@@ -344,7 +344,7 @@ class VanityInvites(commands.Cog):
             msg = await self.bot.wait_for(
                 "message", check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=30
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return await ctx.send("❌ Timeout - cancelled.")
         if msg.content.strip() != "I confirm I want to reset all the promoters.":
             return await ctx.send("❌ Confirmation failed - cancelled.")
@@ -409,7 +409,7 @@ class VanityInvites(commands.Cog):
                         title="Vanity Added ✨",
                         description=f"{member.mention} has been awarded **{role.name}** for proudly displaying our vanity `{keyword}` in their status!",
                         color=discord.Color.magenta(),
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=datetime.now(UTC),
                     ).set_thumbnail(url=member.display_avatar.url)
                 )
                 if repost_sticky:
@@ -431,7 +431,7 @@ class VanityInvites(commands.Cog):
                         title="Vanity Removed",
                         description=f"{member.mention} has lost **{role.name}** for no longer displaying our vanity `{keyword}`.",
                         color=discord.Color.light_gray(),
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=datetime.now(UTC),
                     ).set_thumbnail(url=member.display_avatar.url)
                 )
                 if repost_sticky:

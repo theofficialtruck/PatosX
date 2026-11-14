@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -302,7 +302,7 @@ async def test_calculate_investment_value_prefers_current_value():
 
 @pytest.mark.asyncio
 async def test_refresh_user_investments_for_today_updates_only_once(monkeypatch):
-    today = datetime(2026, 5, 13, 12, 0, tzinfo=timezone.utc)
+    today = datetime(2026, 5, 13, 12, 0, tzinfo=UTC)
     investments = [
         {"_id": "inv-a", "amount": 1000, "current_value": 1000, "history": []},
         {

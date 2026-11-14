@@ -20,7 +20,7 @@ toggles, maintenance mode, welcome/boost message testing, and the guild-join / w
 import asyncio
 import re
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import discord
 from discord.ext import commands
@@ -51,7 +51,7 @@ async def _prompt_config_value(ctx, check, question, parse_fn, *, allow_skip=Tru
     while True:
         try:
             msg = await ctx.bot.wait_for("message", timeout=90, check=check)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await ctx.send("⌛ Timed out. Configuration cancelled.")
             raise _ConfigAborted
         content = msg.content.strip()
@@ -288,7 +288,7 @@ class GuildConfig(commands.Cog):
 
                 try:
                     msg = await self.bot.wait_for("message", timeout=180, check=check)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     return await ctx.send("⌛ Timed out. Configuration cancelled.")
                 content = msg.content.strip()
                 if content.lower() == "cancel":
@@ -331,7 +331,7 @@ class GuildConfig(commands.Cog):
                             else:
                                 await ctx.send("✅ No emoji reaction will be added to boost messages.")
                                 config["boost_react_emoji"] = None
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         await ctx.send("⌛ No emoji selected, skipping reaction setup.")
                     except Exception as e:
                         await ctx.send(f"⚠️ Error while setting emoji: `{e}`")
@@ -673,7 +673,7 @@ class GuildConfig(commands.Cog):
             .replace("{server}", ctx.guild.name)
             .replace("{boostcount}", str(ctx.guild.premium_subscription_count or 0))
         )
-        embed = discord.Embed(description=text, color=discord.Color.gold(), timestamp=datetime.now(timezone.utc))
+        embed = discord.Embed(description=text, color=discord.Color.gold(), timestamp=datetime.now(UTC))
         embed.set_author(name="Boost Alert!", icon_url=member.display_avatar.url)
         try:
             sent_message = await channel.send(embed=embed)
@@ -731,7 +731,7 @@ class GuildConfig(commands.Cog):
                             embed = discord.Embed(
                                 description=msg_content,
                                 color=discord.Color.fuchsia(),
-                                timestamp=datetime.now(timezone.utc),
+                                timestamp=datetime.now(UTC),
                             )
                             embed.set_author(name="Boost Alert!", icon_url=booster.display_avatar.url)
                             embed.set_thumbnail(url=booster.display_avatar.url)
@@ -801,7 +801,7 @@ class GuildConfig(commands.Cog):
                             title="🚀 Boost Alert!",
                             description=text,
                             color=discord.Color.fuchsia(),
-                            timestamp=datetime.now(timezone.utc),
+                            timestamp=datetime.now(UTC),
                         )
                         boost_embed.set_thumbnail(url=member.display_avatar.url)
                         sent_msg = await boost_ch.send(embed=boost_embed)

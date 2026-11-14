@@ -22,7 +22,7 @@ DB record was deleted without ever removing the Discord role, leaving members
 stuck muted forever after a bot restart or a rejoin."""
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -41,25 +41,27 @@ def test_parse_mute_end_none_returns_none():
 
 
 def test_parse_mute_end_aware_datetime_passthrough():
-    dt = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    dt = datetime(2025, 1, 1, tzinfo=UTC)
     assert moderation.parse_mute_end(dt) == dt
 
 
 def test_parse_mute_end_naive_datetime_gets_utc():
-    dt = datetime(2025, 1, 1)  # noqa: DTZ001 - intentionally naive, testing the UTC-attach path
+    # Intentionally naive, to test the UTC-attach path. Stripping the tzinfo (rather than a noqa'd
+    # naive datetime() call) keeps both ruff 0.16 (DTZ001) and ruff 0.17 (RUF100) happy.
+    dt = datetime(2025, 1, 1, tzinfo=UTC).replace(tzinfo=None)
     result = moderation.parse_mute_end(dt)
-    assert result.tzinfo == timezone.utc
+    assert result.tzinfo == UTC
 
 
 def test_parse_mute_end_iso_string_parses():
-    dt = datetime(2025, 6, 1, 12, 30, tzinfo=timezone.utc)
+    dt = datetime(2025, 6, 1, 12, 30, tzinfo=UTC)
     result = moderation.parse_mute_end(dt.isoformat())
     assert result == dt
 
 
 def test_parse_mute_end_legacy_string_format_parses():
     result = moderation.parse_mute_end("2025-06-01 12:30:00")
-    assert result == datetime(2025, 6, 1, 12, 30, tzinfo=timezone.utc)
+    assert result == datetime(2025, 6, 1, 12, 30, tzinfo=UTC)
 
 
 def test_parse_mute_end_garbage_string_returns_none():
@@ -126,7 +128,7 @@ async def test_reapply_or_clear_mute_removes_role_when_expired(monkeypatch, bot)
     mute_role = SimpleNamespace(name="Muted")
     guild = SimpleNamespace(roles=[mute_role])
     member = SimpleNamespace(roles=[mute_role], add_roles=AsyncMock(), remove_roles=AsyncMock())
-    past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    past = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
     doc = {"_id": "doc1", "mute_end": past}
 
     delete_one = AsyncMock()
@@ -144,7 +146,7 @@ async def test_reapply_or_clear_mute_keeps_active_mute(monkeypatch):
     mute_role = SimpleNamespace(name="Muted")
     guild = SimpleNamespace(roles=[mute_role])
     member = SimpleNamespace(roles=[], add_roles=AsyncMock(), remove_roles=AsyncMock())
-    future = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    future = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
     doc = {"_id": "doc1", "mute_end": future}
 
     delete_one = AsyncMock()
@@ -183,7 +185,7 @@ async def test_handle_rejoin_mute_does_not_reapply_expired(monkeypatch, bot, mod
     mute_role = SimpleNamespace(name="Muted")
     guild = SimpleNamespace(id=1, roles=[mute_role])
     member = SimpleNamespace(id=2, guild=guild, roles=[], add_roles=AsyncMock(), remove_roles=AsyncMock())
-    past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    past = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
     doc = {"mute_end": past}
 
     delete_one = AsyncMock()
@@ -203,7 +205,7 @@ async def test_handle_rejoin_mute_reapplies_active(monkeypatch, bot, moderation_
     mute_role = SimpleNamespace(name="Muted")
     guild = SimpleNamespace(id=1, roles=[mute_role])
     member = SimpleNamespace(id=2, guild=guild, roles=[], add_roles=AsyncMock(), remove_roles=AsyncMock())
-    future = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    future = (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
     doc = {"mute_end": future}
 
     delete_one = AsyncMock()

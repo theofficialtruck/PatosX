@@ -16,8 +16,6 @@
 
 """Sticky notes: stickynote/unstickynote commands and a timer loop that re-posts every sticky note."""
 
-import asyncio
-
 import discord
 from discord.ext import commands, tasks
 
@@ -134,7 +132,7 @@ class StickyNotes(commands.Cog):
                 upsert=True,
             )
             await ctx.send(f"✅ Sticky note created. It will be re-posted every {STICKY_REPOST_MINUTES} minutes.")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await ctx.send("❌ Timeout. Sticky note creation cancelled.")
 
     @commands.hybrid_command(name="unstickynote", description="Remove the sticky note. Staff only.")

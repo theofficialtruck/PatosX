@@ -24,7 +24,7 @@ the live ``Bot`` and wires them up, which keeps this module importable without a
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import discord
 from discord.ext import commands
@@ -316,7 +316,7 @@ async def log_action(ctx, message, user_id=None, action_type=None, *, guild: dis
                     title="📋 Moderation Log",
                     description=message,
                     color=discord.Color.dark_blue(),
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                 )
                 embed.set_footer(text=f"By {actor} • {actor.id}" if actor else "Automated action")
                 await log_channel.send(embed=embed)
@@ -327,7 +327,7 @@ async def log_action(ctx, message, user_id=None, action_type=None, *, guild: dis
                 "action": action_type,
                 "by": {"name": str(actor), "id": str(actor.id)} if actor else {"name": "System", "id": None},
                 "message": message,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
             await state.logs_col.insert_one(log_doc)
     except Exception as e:

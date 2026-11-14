@@ -170,7 +170,7 @@ async def test_work_energy_drink_not_consumed_when_still_on_cooldown(monkeypatch
         "promotion_level": 0,
     }
     # Last worked 2h ago, with 50% reduction cooldown is 6h, still 4h remaining
-    two_hours_ago = (dt_module.datetime.now(dt_module.timezone.utc) - dt_module.timedelta(hours=2)).isoformat()
+    two_hours_ago = (dt_module.datetime.now(dt_module.UTC) - dt_module.timedelta(hours=2)).isoformat()
     cooldown_data = {"_id": "work_cooldown_100-200", "timestamp": two_hours_ago}
 
     mock_col = MagicMock()
@@ -211,7 +211,7 @@ async def test_work_energy_drink_allows_work_after_half_cooldown(monkeypatch, jo
         "promotion_level": 0,
     }
     # Worked 7h ago, normally 5h remaining, but with drink cooldown is 6h so 1h elapsed past threshold
-    seven_hours_ago = (dt_module.datetime.now(dt_module.timezone.utc) - dt_module.timedelta(hours=7)).isoformat()
+    seven_hours_ago = (dt_module.datetime.now(dt_module.UTC) - dt_module.timedelta(hours=7)).isoformat()
     cooldown_data = {"_id": "work_cooldown_100-200", "timestamp": seven_hours_ago}
 
     mock_col = MagicMock()

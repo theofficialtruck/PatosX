@@ -20,7 +20,7 @@ passive mode, leaderboards, badges and monthly rewards display."""
 import random
 import re
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import discord
 from discord import (
@@ -28,7 +28,6 @@ from discord import (
 )
 from discord.ext import commands
 from discord.ui import Button, Select, View
-from pytz import UTC
 
 from core import config as cfg
 from core import economyHelperFuncs as econ
@@ -319,8 +318,8 @@ class Economy(commands.Cog):
             if passive_until:
                 dt = datetime.fromisoformat(passive_until)
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                now = datetime.now(timezone.utc)
+                    dt = dt.replace(tzinfo=UTC)
+                now = datetime.now(UTC)
                 if dt > now:
                     rem = dt - now
                     hours = rem.seconds // 3600
@@ -343,13 +342,13 @@ class Economy(commands.Cog):
             return
         try:
             data = await econ.get_user(ctx, ctx.guild.id, ctx.author.id)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             last_daily = data.get("last_daily")
             if last_daily:
                 try:
                     last_time = datetime.fromisoformat(last_daily)
                     if last_time.tzinfo is None:
-                        last_time = last_time.replace(tzinfo=timezone.utc)
+                        last_time = last_time.replace(tzinfo=UTC)
                     time_since_last = now - last_time
                     if time_since_last < timedelta(hours=24):
                         remaining = timedelta(hours=24) - time_since_last
@@ -422,15 +421,15 @@ class Economy(commands.Cog):
             return
         try:
             data = await econ.get_user(ctx, ctx.guild.id, ctx.author.id)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             last_beg = data.get("last_beg")
             if last_beg:
                 try:
                     last_time = datetime.fromisoformat(last_beg)
                     if last_time.tzinfo is None:
-                        last_time = last_time.replace(tzinfo=timezone.utc)
+                        last_time = last_time.replace(tzinfo=UTC)
                     if last_time.tzinfo is None:
-                        last_time = last_time.replace(tzinfo=timezone.utc)
+                        last_time = last_time.replace(tzinfo=UTC)
                     if now - last_time < timedelta(minutes=15):
                         remaining = timedelta(minutes=15) - (now - last_time)
                         minutes = remaining.seconds // 60
@@ -677,7 +676,7 @@ class Economy(commands.Cog):
             doc = await econ.get_monthly_rewards_doc(ctx.guild.id, ctx.author.id)
             counters = doc.get("counters", {})
             claimed = doc.get("claimed", {})
-            month_label = datetime.now(timezone.utc).strftime("%B %Y")
+            month_label = datetime.now(UTC).strftime("%B %Y")
             embed = discord.Embed(
                 title=f"🗓️ Monthly Rewards - {month_label}",
                 description="Complete goals before the month ends to earn bonus coins. Progress resets on the 1st.",
@@ -720,14 +719,14 @@ class Economy(commands.Cog):
         else:
             target = ctx.author
         user_id = f"{ctx.guild.id}-{target.id}"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         user_data = await state.economy_col.find_one({"_id": user_id}) or {}
         passive_until = user_data.get("passive_until")
         last_toggle = user_data.get("last_passive_toggle")
         if last_toggle:
             last_toggle_dt = datetime.fromisoformat(last_toggle)
             if last_toggle_dt.tzinfo is None:
-                last_toggle_dt = last_toggle_dt.replace(tzinfo=timezone.utc)
+                last_toggle_dt = last_toggle_dt.replace(tzinfo=UTC)
             time_since = (now - last_toggle_dt).total_seconds()
             if time_since < 180:
                 remaining = int(180 - time_since)
@@ -735,7 +734,7 @@ class Economy(commands.Cog):
         if passive_until:
             dt = datetime.fromisoformat(passive_until)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             if dt > now:
                 await state.economy_col.update_one(
                     {"_id": user_id},

@@ -26,7 +26,7 @@ path crashed on an invalid kwarg."""
 import asyncio
 import copy
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -148,7 +148,7 @@ def giveaway_doc(gid="555", **overrides):
         "message_id": int(gid),
         "prize": "Nitro",
         "host_id": 1,
-        "end_time": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "end_time": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
         "winners_count": 1,
         "participants": {},
         "ended": False,
@@ -346,11 +346,9 @@ async def test_entry_button_enforces_required_roles_and_counts_bonus_tickets(mon
     monkeypatch.setattr(state, "giveaway_col", col)
     guild = make_guild(role_ids=(10, 20))
     channel = make_channel(guild=guild)
-    embed = gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(timezone.utc), 1, [10], {"20": 2})
+    embed = gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(UTC), 1, [10], {"20": 2})
     message = make_message(555, channel, embed)
-    view = gp.GiveawayView(
-        message, "555", datetime.now(timezone.utc), 1, "Nitro", required_roles=[10], bonus_roles={"20": 2}
-    )
+    view = gp.GiveawayView(message, "555", datetime.now(UTC), 1, "Nitro", required_roles=[10], bonus_roles={"20": 2})
 
     outsider = make_interaction(make_member(2), guild, channel)
     await view.entry_button.callback(outsider)
@@ -375,7 +373,7 @@ async def test_entry_button_refuses_after_end(monkeypatch):
     monkeypatch.setattr(state, "giveaway_col", FakeCol([giveaway_doc()]))
     guild = make_guild()
     channel = make_channel(guild=guild)
-    view = gp.GiveawayView(make_message(555, channel), "555", datetime.now(timezone.utc), 1, "Nitro")
+    view = gp.GiveawayView(make_message(555, channel), "555", datetime.now(UTC), 1, "Nitro")
     view.ended = True
     interaction = make_interaction(make_member(3), guild, channel)
     await view.entry_button.callback(interaction)
@@ -392,9 +390,9 @@ async def test_end_giveaway_persists_before_announcing_and_is_idempotent(monkeyp
     monkeypatch.setattr(state, "giveaway_col", col)
     guild = make_guild()
     channel = make_channel(guild=guild)
-    embed = gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(timezone.utc), 1, [], {})
+    embed = gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(UTC), 1, [], {})
     message = make_message(555, channel, embed)
-    view = gp.GiveawayView(message, "555", datetime.now(timezone.utc), 1, "Nitro")
+    view = gp.GiveawayView(message, "555", datetime.now(UTC), 1, "Nitro")
     view.participants[3] = 1
 
     winners = await view.end_giveaway()
@@ -421,7 +419,7 @@ async def test_end_giveaway_with_no_participants(monkeypatch):
     col = FakeCol([giveaway_doc()])
     monkeypatch.setattr(state, "giveaway_col", col)
     channel = make_channel(guild=make_guild())
-    view = gp.GiveawayView(make_message(555, channel), "555", datetime.now(timezone.utc), 1, "Nitro")
+    view = gp.GiveawayView(make_message(555, channel), "555", datetime.now(UTC), 1, "Nitro")
 
     assert await view.end_giveaway() == []
     assert col.docs["555"]["ended"] is True
@@ -434,7 +432,7 @@ async def test_end_giveaway_does_nothing_when_already_ended_in_db(monkeypatch):
     col = FakeCol([giveaway_doc(ended=True, participants={"3": 1})])
     monkeypatch.setattr(state, "giveaway_col", col)
     channel = make_channel(guild=make_guild())
-    view = gp.GiveawayView(make_message(555, channel), "555", datetime.now(timezone.utc), 1, "Nitro")
+    view = gp.GiveawayView(make_message(555, channel), "555", datetime.now(UTC), 1, "Nitro")
     view.participants[3] = 1
 
     assert await view.end_giveaway() is None
@@ -449,11 +447,9 @@ async def test_end_giveaway_survives_deleted_message(monkeypatch):
     col = FakeCol([giveaway_doc(participants={"3": 1})])
     monkeypatch.setattr(state, "giveaway_col", col)
     channel = make_channel(guild=make_guild())
-    message = make_message(
-        555, channel, gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(timezone.utc), 1, [], {})
-    )
+    message = make_message(555, channel, gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(UTC), 1, [], {}))
     message.edit = AsyncMock(side_effect=discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), None))
-    view = gp.GiveawayView(message, "555", datetime.now(timezone.utc), 1, "Nitro")
+    view = gp.GiveawayView(message, "555", datetime.now(UTC), 1, "Nitro")
     view.participants[3] = 1
 
     assert await view.end_giveaway() == [3]
@@ -466,7 +462,7 @@ async def test_end_after_delay_finishes_giveaway(monkeypatch):
     col = FakeCol([giveaway_doc(participants={"3": 1})])
     monkeypatch.setattr(state, "giveaway_col", col)
     channel = make_channel(guild=make_guild())
-    view = gp.GiveawayView(make_message(555, channel), "555", datetime.now(timezone.utc), 1, "Nitro")
+    view = gp.GiveawayView(make_message(555, channel), "555", datetime.now(UTC), 1, "Nitro")
     view.participants[3] = 1
     task = view.schedule_end(0)
     await asyncio.wait_for(task, timeout=2)
@@ -488,7 +484,7 @@ async def test_draw_ends_live_giveaway_through_view_and_cancels_timer(monkeypatc
     col = FakeCol([giveaway_doc(participants={"3": 1, "4": 1}, winners_count=1)])
     monkeypatch.setattr(state, "giveaway_col", col)
     channel = make_channel(guild=make_guild())
-    view = gp.GiveawayView(make_message(555, channel), "555", datetime.now(timezone.utc), 1, "Nitro")
+    view = gp.GiveawayView(make_message(555, channel), "555", datetime.now(UTC), 1, "Nitro")
     view.participants.update({3: 1, 4: 1})
     timer = view.schedule_end(3600)
     ctx = make_ctx(bot)
@@ -524,9 +520,7 @@ async def test_draw_falls_back_to_stored_data_when_not_live(monkeypatch, giveawa
     col = FakeCol([giveaway_doc(participants={"3": 2})])
     monkeypatch.setattr(state, "giveaway_col", col)
     channel = make_channel(guild=make_guild())
-    message = make_message(
-        555, channel, gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(timezone.utc), 1, [], {})
-    )
+    message = make_message(555, channel, gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(UTC), 1, [], {}))
     channel.fetch_message = AsyncMock(return_value=message)
     monkeypatch.setattr(bot, "get_channel", lambda cid: channel)
     ctx = make_ctx(bot)
@@ -550,9 +544,7 @@ async def test_reroll_requires_ended_giveaway_and_updates_winners(monkeypatch, g
     )
     monkeypatch.setattr(state, "giveaway_col", col)
     channel = make_channel(guild=make_guild())
-    message = make_message(
-        556, channel, gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(timezone.utc), 1, [], {})
-    )
+    message = make_message(556, channel, gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(UTC), 1, [], {}))
     channel.fetch_message = AsyncMock(return_value=message)
     monkeypatch.setattr(bot, "get_channel", lambda cid: channel)
     ctx = make_ctx(bot)
@@ -625,13 +617,11 @@ async def test_resume_reattaches_view_and_schedules_end(monkeypatch, bot):
 
 @pytest.mark.asyncio
 async def test_resume_ends_giveaway_that_expired_offline(monkeypatch, bot):
-    past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    past = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
     col = FakeCol([giveaway_doc(participants={"3": 1}, end_time=past)])
     monkeypatch.setattr(state, "giveaway_col", col)
     channel = make_channel(guild=make_guild())
-    message = make_message(
-        555, channel, gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(timezone.utc), 1, [], {})
-    )
+    message = make_message(555, channel, gp.build_giveaway_embed("Nitro", "<@1>", datetime.now(UTC), 1, [], {}))
     channel.fetch_message = AsyncMock(return_value=message)
     monkeypatch.setattr(bot, "get_channel", lambda cid: channel)
 

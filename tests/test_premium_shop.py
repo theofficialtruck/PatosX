@@ -16,7 +16,7 @@
 
 import asyncio
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,7 +29,7 @@ from core import economyHelperFuncs as econ
 from core import permsHelperFuncs as perms
 from core import state
 
-NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
 class FakePremiumCol:
@@ -89,7 +89,7 @@ def open_doc(items, closes_in=timedelta(minutes=30)):
     return {
         "_id": "1",
         "is_open": True,
-        "closes_at": (datetime.now(timezone.utc) + closes_in).isoformat(),
+        "closes_at": (datetime.now(UTC) + closes_in).isoformat(),
         "items": items,
     }
 
@@ -297,7 +297,7 @@ async def test_sold_out_shop_closes_early(monkeypatch, cog):
     doc.update({"channel_id": 99, "message_id": 555})
     shop_col = FakePremiumCol({"1": doc})
     monkeypatch.setattr(state, "premium_shop_col", shop_col)
-    await cog._tick_guild(guild, datetime.now(timezone.utc))
+    await cog._tick_guild(guild, datetime.now(UTC))
     assert shop_col.docs["1"]["is_open"] is False
 
 
@@ -414,7 +414,7 @@ async def test_open_shop_is_resynced_on_the_first_tick_after_a_restart(monkeypat
     shop_col = FakePremiumCol({"1": open_shop_doc([{"key": "premium_pet_duck", "stock": 1}])})
     monkeypatch.setattr(state, "premium_shop_col", shop_col)
 
-    await cog._tick_guild(make_guild(channel), datetime.now(timezone.utc))
+    await cog._tick_guild(make_guild(channel), datetime.now(UTC))
 
     channel.partial.edit.assert_awaited_once()
     assert isinstance(channel.partial.edit.call_args.kwargs["view"], ps.PremiumShopView)
@@ -429,12 +429,12 @@ async def test_announcement_is_only_edited_when_the_stock_changes(monkeypatch, c
     shop_col = FakePremiumCol({"1": open_shop_doc([{"key": "premium_pet_duck", "stock": 3}])})
     monkeypatch.setattr(state, "premium_shop_col", shop_col)
 
-    await cog._tick_guild(guild, datetime.now(timezone.utc))
-    await cog._tick_guild(guild, datetime.now(timezone.utc))
+    await cog._tick_guild(guild, datetime.now(UTC))
+    await cog._tick_guild(guild, datetime.now(UTC))
     assert channel.partial.edit.await_count == 1  # nothing changed between the two ticks
 
     shop_col.docs["1"]["items"][0]["stock"] = 2
-    await cog._tick_guild(guild, datetime.now(timezone.utc))
+    await cog._tick_guild(guild, datetime.now(UTC))
     assert channel.partial.edit.await_count == 2
     assert stock_lines(edited_embed(channel)) == ["**2 left**"]
 
@@ -446,7 +446,7 @@ async def test_shop_that_expired_while_offline_is_closed_on_startup(monkeypatch,
     shop_col = FakePremiumCol({"1": doc})
     monkeypatch.setattr(state, "premium_shop_col", shop_col)
 
-    await cog._tick_guild(make_guild(channel), datetime.now(timezone.utc))
+    await cog._tick_guild(make_guild(channel), datetime.now(UTC))
 
     assert shop_col.docs["1"]["is_open"] is False
     assert channel.partial.edit.call_args.kwargs["view"] is None
@@ -462,12 +462,12 @@ async def test_deleted_announcement_is_reposted_for_a_still_open_shop(monkeypatc
     monkeypatch.setattr(state, "premium_shop_col", shop_col)
     guild = make_guild(channel)
 
-    await cog._tick_guild(guild, datetime.now(timezone.utc))
+    await cog._tick_guild(guild, datetime.now(UTC))
 
     channel.send.assert_awaited_once()
     assert isinstance(channel.send.call_args.kwargs["view"], ps.PremiumShopView)
     assert shop_col.docs["1"]["message_id"] == 777
-    await cog._tick_guild(guild, datetime.now(timezone.utc))
+    await cog._tick_guild(guild, datetime.now(UTC))
     channel.send.assert_awaited_once()  # the new message is tracked, no second repost
 
 
@@ -492,8 +492,8 @@ async def test_closing_twice_only_edits_once(monkeypatch):
     monkeypatch.setattr(state, "premium_shop_col", shop_col)
     guild = make_guild(channel)
 
-    await ps.close_shop(guild, doc, datetime.now(timezone.utc))
-    await ps.close_shop(guild, doc, datetime.now(timezone.utc))
+    await ps.close_shop(guild, doc, datetime.now(UTC))
+    await ps.close_shop(guild, doc, datetime.now(UTC))
 
     channel.partial.edit.assert_awaited_once()
 

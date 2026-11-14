@@ -18,7 +18,7 @@
 
 import random
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import discord
 from dateutil import parser
@@ -58,7 +58,7 @@ class JobPicker(ui.View):
             {
                 "$set": {
                     "job": job_name,
-                    "job_start": datetime.now(timezone.utc).isoformat(),
+                    "job_start": datetime.now(UTC).isoformat(),
                     "promotion_level": 0,
                     "promotion_chance": 20.0,
                     "last_promo_check": None,
@@ -123,7 +123,7 @@ class JobsGathering(commands.Cog):
             if cooldown_data:
                 last_work = cooldown_data.get("timestamp")
                 if last_work:
-                    time_since = datetime.now(timezone.utc) - parser.isoparse(last_work)
+                    time_since = datetime.now(UTC) - parser.isoparse(last_work)
                     cooldown_duration = 43200
                     if energy_drink_in_inv:
                         cooldown_duration = int(cooldown_duration * 0.5)
@@ -187,7 +187,7 @@ class JobsGathering(commands.Cog):
             high = int(high * multiplier)
             earned = random.randint(low, high)
             await econ.add_balance(ctx.author.id, ctx.guild.id, earned)
-            effective_ts = datetime.now(timezone.utc) - timedelta(
+            effective_ts = datetime.now(UTC) - timedelta(
                 seconds=int(3600 * (1 - cooldown_reduction)) + nitro_reduction_seconds
             )
             await state.economy_col.update_one(
@@ -250,12 +250,12 @@ class JobsGathering(commands.Cog):
             try:
                 job_start = datetime.fromisoformat(job_start_str)
                 if job_start.tzinfo is None:
-                    job_start = job_start.replace(tzinfo=timezone.utc)
+                    job_start = job_start.replace(tzinfo=UTC)
             except Exception as e:
                 print(f"[ERROR] jobstatus date parse: {type(e).__name__}: {e}")
                 traceback.print_exc()
                 return await ctx.send("⚠️ An unexpected error occurred. Please contact " + cfg.BOT_ADMIN_NAME + ".")
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             delta = now - job_start
             days = delta.days
             hours = delta.seconds // 3600
@@ -264,7 +264,7 @@ class JobsGathering(commands.Cog):
             if days >= 7:
                 if last_check_str:
                     try:
-                        last_check = datetime.fromisoformat(last_check_str).replace(tzinfo=timezone.utc)
+                        last_check = datetime.fromisoformat(last_check_str).replace(tzinfo=UTC)
                     except (ValueError, TypeError):
                         last_check = now
                 else:
@@ -275,7 +275,7 @@ class JobsGathering(commands.Cog):
                     try:
                         last_roll = datetime.fromisoformat(last_roll_str)
                         if last_roll.tzinfo is None:
-                            last_roll = last_roll.replace(tzinfo=timezone.utc)
+                            last_roll = last_roll.replace(tzinfo=UTC)
                     except (ValueError, TypeError):
                         last_roll = None
                     if last_roll:
@@ -351,7 +351,7 @@ class JobsGathering(commands.Cog):
         try:
             user_id = f"{ctx.guild.id}-{ctx.author.id}"
             data = await econ.get_user(ctx, ctx.guild.id, ctx.author.id)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             inventory = data.get("inventory", [])
             consumed, rod_broke, _ = econ.consume_tool_use(inventory, "fishing rod")
             if not consumed:
@@ -422,7 +422,7 @@ class JobsGathering(commands.Cog):
         try:
             user_id = f"{ctx.guild.id}-{ctx.author.id}"
             data = await econ.get_user(ctx, ctx.guild.id, ctx.author.id)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             inventory = data.get("inventory", [])
             consumed, gear_broke, _ = econ.consume_tool_use(inventory, "scuba gear")
             if not consumed:
@@ -495,7 +495,7 @@ class JobsGathering(commands.Cog):
             return
         if member == ctx.author:
             return await ctx.send("❌ You can't attack yourself!")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         robber_id = f"{ctx.guild.id}-{ctx.author.id}"
         victim_id = f"{ctx.guild.id}-{member.id}"
         r_doc = await state.economy_col.find_one({"_id": robber_id}) or {}
@@ -504,7 +504,7 @@ class JobsGathering(commands.Cog):
         if cooldown:
             cooldown_dt = datetime.fromisoformat(cooldown)
             if cooldown_dt.tzinfo is None:
-                cooldown_dt = cooldown_dt.replace(tzinfo=timezone.utc)
+                cooldown_dt = cooldown_dt.replace(tzinfo=UTC)
             if now < cooldown_dt:
                 remaining = cooldown_dt - now
                 mins = int(remaining.total_seconds() // 60)
@@ -512,13 +512,13 @@ class JobsGathering(commands.Cog):
         if r_doc.get("passive_until"):
             until = datetime.fromisoformat(r_doc["passive_until"])
             if until.tzinfo is None:
-                until = until.replace(tzinfo=timezone.utc)
+                until = until.replace(tzinfo=UTC)
             if until > now:
                 return await ctx.send("🔒 You have passive mode enabled, disable it to attack others.")
         if v_doc.get("passive_until"):
             until = datetime.fromisoformat(v_doc["passive_until"])
             if until.tzinfo is None:
-                until = until.replace(tzinfo=timezone.utc)
+                until = until.replace(tzinfo=UTC)
             if until > now:
                 return await ctx.send("🔒 That user has passive mode enabled, you can't attack them.")
         last_robbed = v_doc.get("last_robbed")
@@ -526,7 +526,7 @@ class JobsGathering(commands.Cog):
             if isinstance(last_robbed, str):
                 last_robbed = datetime.fromisoformat(last_robbed)
                 if last_robbed.tzinfo is None:
-                    last_robbed = last_robbed.replace(tzinfo=timezone.utc)
+                    last_robbed = last_robbed.replace(tzinfo=UTC)
             if now - last_robbed < timedelta(hours=1):
                 rem = timedelta(hours=1) - (now - last_robbed)
                 minutes = round(rem.total_seconds() / 60)
@@ -576,12 +576,12 @@ class JobsGathering(commands.Cog):
             data = await econ.get_user(ctx, ctx.guild.id, ctx.author.id)
             wallet = data.get("wallet", 0)
             inventory = data.get("inventory", [])
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             last_crime = data.get("last_crime")
             if last_crime:
                 last_dt = datetime.fromisoformat(last_crime)
                 if last_dt.tzinfo is None:
-                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                    last_dt = last_dt.replace(tzinfo=UTC)
                 if now - last_dt < timedelta(days=1):
                     remaining = timedelta(days=1) - (now - last_dt)
                     hours, remainder = divmod(int(remaining.total_seconds()), 3600)
