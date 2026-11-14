@@ -20,8 +20,19 @@ times for a short while, selling boosted single-use versions of a few regular sh
 Per guild, ``state.premium_shop_col`` holds one document (``_id`` = guild id) with the schedule
 (``is_open``, ``next_open_at``, ``closes_at``), the announcement message and the live ``items``
 stock. Stock is shared by the whole guild and decremented atomically, so it can run out.
+
+Restarts: everything needed to run an open shop lives in that document, so a shop that is open when
+the bot goes down simply carries on when it comes back. The buy button is a persistent view
+registered in ``cog_load`` (before the gateway connects), and the first scheduler tick after startup
+re-renders every open shop from the database, closes any that expired or sold out while the bot was
+offline and re-posts the announcement if it was deleted in the meantime.
+
+Live updates: ``sync_shop`` brings the announcement in line with the database. It runs after every
+purchase attempt, whenever someone opens the menu of a shop that just closed and on every tick, so the
+remaining stock is always current and the shop closes the moment the last item sells.
 """
 
+import asyncio
 import random
 import re
 import traceback
@@ -100,9 +111,22 @@ def economy_channel_id(config: dict) -> int | None:
     return None
 
 
+def render_signature(doc: dict) -> tuple:
+    """What the open announcement currently shows: the message plus every item's stock. Two docs with the
+    same signature render the same embed, so the message only needs editing when this changes."""
+    items = tuple((item.get("key"), int(item.get("stock", 0))) for item in doc.get("items", []))
+    return doc.get("message_id"), items
+
+
 def build_embed(items: list[dict], closes_at: datetime, *, closed: bool = False) -> discord.Embed:
     """The announcement embed, showing each item's price and remaining stock."""
-    if closed:
+    if closed and items and is_sold_out(items):
+        embed = discord.Embed(
+            title="💎 Premium Shop SOLD OUT!",
+            description="Every item was snapped up! Watch this channel, the shop will be back at a random time.",
+            color=discord.Color.dark_grey(),
+        )
+    elif closed:
         embed = discord.Embed(
             title="💎 Premium Shop Closed",
             description="The premium shop has packed up. Watch this channel, it will be back at a random time!",
@@ -179,18 +203,111 @@ async def purchase_premium_item(guild_id, user_id, key: str) -> dict:
 # ============================================================
 
 
-async def refresh_message(guild: discord.Guild, doc: dict, *, closed: bool = False) -> None:
-    """Render the announcement message from the current stock again. Missing message or channel is ignored."""
+# ============================================================
+# Announcement message syncing
+# ============================================================
+
+# Both of these are deliberately in memory only. After a restart ``_rendered`` is empty, so the first
+# tick re-renders every open shop from the database (picking up purchases whose edit never landed
+# before the bot went down); the locks are simply recreated on demand.
+_render_locks: dict[str, asyncio.Lock] = {}
+_rendered: dict[str, tuple] = {}
+
+EDITED, MISSING, SKIPPED = "edited", "missing", "skipped"
+
+
+def _lock_for(guild_id: str) -> asyncio.Lock:
+    """One lock per guild so concurrent purchases can't race their message edits (an older stock count
+    landing after a newer one)."""
+    lock = _render_locks.get(guild_id)
+    if lock is None:
+        lock = _render_locks[guild_id] = asyncio.Lock()
+    return lock
+
+
+def reset_render_cache() -> None:
+    """Forget what every announcement shows, forcing the next sync to re-render it."""
+    _rendered.clear()
+
+
+async def refresh_message(guild: discord.Guild, doc: dict, *, closed: bool = False) -> str:
+    """Render the announcement message from the given doc. Returns ``EDITED`` on success, ``MISSING``
+    when the message was deleted and ``SKIPPED`` when there was nothing to edit or Discord refused."""
     channel = guild.get_channel(doc.get("channel_id") or 0)
     message_id = doc.get("message_id")
     closes_at = parse_time(doc.get("closes_at"))
     if channel is None or not message_id or closes_at is None:
-        return
+        return SKIPPED
     embed = build_embed(doc.get("items", []), closes_at, closed=closed)
     try:
         await channel.get_partial_message(message_id).edit(embed=embed, view=None if closed else PremiumShopView())
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-        pass
+    except discord.NotFound:
+        return MISSING
+    except (discord.Forbidden, discord.HTTPException):
+        return SKIPPED
+    return EDITED
+
+
+async def _repost(guild: discord.Guild, doc: dict) -> None:
+    """Post a fresh announcement for a still open shop whose message was deleted (for example while
+    the bot was offline) and point the shop at it."""
+    guild_id = str(guild.id)
+    channel = guild.get_channel(doc.get("channel_id") or 0)
+    closes_at = parse_time(doc.get("closes_at"))
+    if channel is None or not hasattr(channel, "send") or closes_at is None:
+        return
+    try:
+        message = await channel.send(embed=build_embed(doc.get("items", []), closes_at), view=PremiumShopView())
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"[PremiumShop] Couldn't re-post the announcement in guild {guild_id}: {e}")
+        return
+    await state.premium_shop_col.update_one({"_id": guild_id, "is_open": True}, {"$set": {"message_id": message.id}})
+    _rendered[guild_id] = render_signature({**doc, "message_id": message.id})
+
+
+async def close_shop(guild: discord.Guild, doc: dict, now: datetime) -> None:
+    """Close the guild's open shop, schedule the next opening and mark the announcement closed. The
+    update only matches the shop that is still open on this message, so closing twice is harmless."""
+    guild_id = str(guild.id)
+    closed = await state.premium_shop_col.update_one(
+        {"_id": guild_id, "is_open": True, "message_id": doc.get("message_id")},
+        {"$set": {"guild": guild_id, "is_open": False, "next_open_at": (now + roll_gap()).isoformat()}},
+    )
+    _rendered.pop(guild_id, None)
+    if closed.modified_count:
+        await refresh_message(guild, doc, closed=True)
+
+
+async def sync_shop(guild: discord.Guild, now: datetime | None = None) -> None:
+    """Bring the guild's announcement in line with the database: close the shop if it expired or sold
+    out, otherwise re-render the stock if it changed since the last edit (or since startup). Cheap and
+    safe to call as often as needed: it does nothing when the message is already up to date."""
+    guild_id = str(guild.id)
+    async with _lock_for(guild_id):
+        now = now or datetime.now(timezone.utc)
+        doc = await state.premium_shop_col.find_one({"_id": guild_id})
+        if not doc or not doc.get("is_open"):
+            return
+        if not is_open_now(doc, now):
+            await close_shop(guild, doc, now)
+            return
+        signature = render_signature(doc)
+        if _rendered.get(guild_id) == signature:
+            return
+        result = await refresh_message(guild, doc)
+        if result == EDITED:
+            _rendered[guild_id] = signature
+        elif result == MISSING:
+            await _repost(guild, doc)
+
+
+async def _sync_quietly(guild: discord.Guild) -> None:
+    """sync_shop for interaction handlers: the user already got their answer, so a failure to update
+    the announcement is only logged (the next scheduler tick retries it)."""
+    try:
+        await sync_shop(guild)
+    except Exception as e:
+        print(f"[PremiumShop] Couldn't update the announcement in guild {guild.id}: {type(e).__name__}: {e}")
 
 
 class PremiumShopView(discord.ui.View):
@@ -205,6 +322,9 @@ class PremiumShopView(discord.ui.View):
         doc = await state.premium_shop_col.find_one({"_id": str(interaction.guild.id)})
         if not is_open_now(doc, datetime.now(timezone.utc)) or doc.get("message_id") != interaction.message.id:
             await interaction.response.send_message("⌛ This premium shop has closed.", ephemeral=True)
+            # The shop may have only just expired or sold out: close the announcement now rather than
+            # leaving the button up until the next scheduler tick.
+            await _sync_quietly(interaction.guild)
             return
         options = []
         for item in doc.get("items", []):
@@ -249,6 +369,8 @@ class PremiumShopDropdown(discord.ui.View):
             result = await purchase_premium_item(interaction.guild.id, interaction.user.id, self.dropdown.values[0])
             if not result["ok"]:
                 await interaction.response.send_message(result["message"], ephemeral=True)
+                # A failed attempt can still mean the stock changed under us (sold out, shop closed).
+                await _sync_quietly(interaction.guild)
                 return
             guild_id = str(interaction.guild.id)
             await xp.increment_badge_counter(guild_id, str(interaction.user.id), "shop_purchases")
@@ -271,9 +393,8 @@ class PremiumShopDropdown(discord.ui.View):
                 await interaction.followup.edit_message(interaction.message.id, view=self)
             except (discord.NotFound, discord.HTTPException):
                 pass
-            doc = await state.premium_shop_col.find_one({"_id": guild_id})
-            if doc:
-                await refresh_message(interaction.guild, doc)
+            # Show the new stock on the announcement straight away (and close it if that was the last one).
+            await _sync_quietly(interaction.guild)
         except Exception as e:
             print(f"[ERROR] PremiumShopDropdown purchase: {type(e).__name__}: {e}")
             traceback.print_exc()
@@ -326,17 +447,15 @@ class PremiumShop(commands.Cog):
             },
             upsert=True,
         )
-
-    async def _close_shop(self, guild: discord.Guild, doc: dict, now: datetime) -> None:
-        await self._schedule_next(str(guild.id), now)
-        await refresh_message(guild, doc, closed=True)
+        _rendered[guild_id] = render_signature({"message_id": message.id, "items": items})
 
     async def _tick_guild(self, guild: discord.Guild, now: datetime) -> None:
         guild_id = str(guild.id)
         doc = await state.premium_shop_col.find_one({"_id": guild_id})
         if doc and doc.get("is_open"):
-            if not is_open_now(doc, now):
-                await self._close_shop(guild, doc, now)
+            # Closes it if it expired or sold out (including while the bot was offline), otherwise
+            # re-renders the stock when it changed, e.g. on the first tick after a restart.
+            await sync_shop(guild, now)
             return
         config = await state.config_col.find_one({"guild": guild_id}) or {}
         channel_id = economy_channel_id(config) if isinstance(config, dict) else None
@@ -363,15 +482,27 @@ class PremiumShop(commands.Cog):
     async def before_premium_shop_loop(self):
         await self.bot.wait_until_ready()
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        """Register the persistent buy button and start the scheduler once (on_ready can refire)."""
-        if self._ready_done:
-            return
-        self._ready_done = True
+    async def cog_load(self):
+        """Register the persistent buy button as soon as the cog loads, before the gateway connects,
+        so the button on an announcement that was open when the bot restarted works again from the
+        very first interaction. If the cog is (re)loaded while the bot is already running, on_ready
+        won't fire again, so the scheduler is started here instead."""
         self.bot.add_view(PremiumShopView())
+        if self.bot.is_ready():
+            self._start_scheduler()
+
+    def _start_scheduler(self) -> None:
+        self._ready_done = True
+        # The first iteration runs immediately, so open shops are re-synced right after startup.
         if not self.premium_shop_loop.is_running():
             self.premium_shop_loop.start()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Start the scheduler once (on_ready can refire after every reconnect)."""
+        if self._ready_done:
+            return
+        self._start_scheduler()
 
     def cog_unload(self):
         if self.premium_shop_loop.is_running():

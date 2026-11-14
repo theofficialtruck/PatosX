@@ -177,16 +177,128 @@ def format_roles(member: discord.Member):
     return ", ".join(roles)
 
 
+# ============================================================
+# Discord badges (modview)
+# ============================================================
+#
+# What a bot can see: the user's ``public_flags`` plus the profile data Discord sends with every member
+# (server boost, server tag, avatar decoration, nameplate, avatars/banners). Badges that only exist on
+# the user-only profile endpoint (Nitro tenure tiers, Quest, Orbs, "Originally known as", the legacy
+# username badge) and the app-only ones (Supports Commands, Uses AutoMod, Premium App) are not exposed
+# to bots, so they can't be shown here.
+
+# Every public user flag discord.py knows about, in the order Discord shows them on a profile.
+PUBLIC_FLAG_BADGES = {
+    "staff": "🛡️ Discord Staff",
+    "partner": "🤝 Partnered Server Owner",
+    "discord_certified_moderator": "🎓 Moderator Programs Alumni",
+    "hypesquad": "🎉 HypeSquad Events",
+    "hypesquad_bravery": "🟣 HypeSquad Bravery",
+    "hypesquad_brilliance": "🟠 HypeSquad Brilliance",
+    "hypesquad_balance": "🟢 HypeSquad Balance",
+    "bug_hunter": "🐛 Bug Hunter (Level 1)",
+    "bug_hunter_level_2": "🐞 Bug Hunter (Level 2)",
+    "active_developer": "🧑‍💻 Active Developer",
+    "verified_bot_developer": "🛠️ Early Verified Bot Developer",
+    "early_supporter": "💎 Early Supporter",
+    "verified_bot": "✅ Verified Bot",
+    "bot_http_interactions": "🌐 HTTP Interactions Bot",
+    "team_user": "👥 Team User",
+    "system": "⚙️ Official Discord System",
+    "spammer": "🚩 Flagged as Likely Spammer",
+}
+
+# Account state flags discord.py also knows about that aren't badges (never shown on a profile).
+INTERNAL_FLAGS = {"mfa_sms", "premium_promo_dismissed", "has_unread_urgent_messages"}
+
+# Flags Discord sends in public_flags that discord.py has no name for yet (bits above 1 << 30).
+RAW_FLAG_BADGES = {
+    1 << 44: "⛔ Quarantined Account",
+    1 << 50: "🤝 Discord Collaborator",
+    1 << 51: "🤝 Discord Collaborator (Restricted)",
+}
+
+# Discord's boost badge evolves with how long someone has been boosting: (months, badge level).
+BOOST_BADGE_LEVELS = ((24, 9), (18, 8), (15, 7), (12, 6), (9, 5), (6, 4), (3, 3), (2, 2), (1, 1))
+
+
+def boost_badge_level(premium_since: datetime, now: datetime) -> int:
+    """The level of Discord's evolving booster badge for someone boosting since ``premium_since``
+    (1 under two months, then 2/3/6/9/12/15/18/24 months for levels 2 to 9)."""
+    months = (now.year - premium_since.year) * 12 + (now.month - premium_since.month)
+    if now.day < premium_since.day:
+        months -= 1
+    return next((level for min_months, level in BOOST_BADGE_LEVELS if months >= min_months), 1)
+
+
+def _asset_is_animated(asset) -> bool:
+    return isinstance(asset, discord.Asset) and asset.is_animated()
+
+
+def collect_badges(member: discord.Member, now: datetime | None = None) -> list[str]:
+    """Every Discord badge and profile perk a bot can detect on ``member``, one display line each."""
+    now = now or datetime.now(timezone.utc)
+    badges = []
+
+    flags = getattr(member, "public_flags", None)
+    if isinstance(flags, discord.PublicUserFlags):
+        set_flags = {flag.name for flag in flags.all()} - INTERNAL_FLAGS
+        badges.extend(label for name, label in PUBLIC_FLAG_BADGES.items() if name in set_flags)
+        # Any flag a newer discord.py adds before this table is updated still shows up, just unstyled.
+        badges.extend("🏅 " + name.replace("_", " ").title() for name in sorted(set_flags - PUBLIC_FLAG_BADGES.keys()))
+        badges.extend(label for bit, label in RAW_FLAG_BADGES.items() if flags.value & bit)
+
+    premium_since = getattr(member, "premium_since", None)
+    if isinstance(premium_since, datetime):
+        level = boost_badge_level(premium_since, now)
+        badges.append(f"🚀 Server Booster (Level {level}, boosting since <t:{int(premium_since.timestamp())}:D>)")
+
+    # Nitro isn't exposed to bots, but these perks need it, so any of them means the user has Nitro.
+    nitro_perks = (
+        _asset_is_animated(getattr(member, "avatar", None))
+        or isinstance(getattr(member, "guild_avatar", None), discord.Asset)
+        or isinstance(getattr(member, "guild_banner", None), discord.Asset)
+        or isinstance(getattr(member, "banner", None), discord.Asset)
+    )
+    if nitro_perks:
+        badges.append("💠 Nitro (detected from profile perks)")
+
+    primary_guild = getattr(member, "primary_guild", None)
+    if isinstance(primary_guild, discord.PrimaryGuild) and primary_guild.identity_enabled and primary_guild.tag:
+        badges.append(f"🏷️ Server Tag: `{primary_guild.tag}`")
+
+    if isinstance(getattr(member, "avatar_decoration", None), discord.Asset):
+        badges.append("🖼️ Avatar Decoration")
+
+    collectibles = getattr(member, "collectibles", None)
+    for collectible in collectibles if isinstance(collectibles, list) else []:
+        if not isinstance(collectible, discord.Collectible):
+            continue
+        name = str(getattr(collectible.type, "name", "collectible")).replace("_", " ").title()
+        palette = getattr(collectible.palette, "name", None)
+        suffix = f" ({str(palette).replace('_', ' ').title()})" if palette else ""
+        badges.append(f"✨ {name}{suffix}")
+
+    return badges
+
+
 def format_flags(member: discord.Member):
     try:
-        flags = [flag.name.replace("_", " ").title() for flag in member.public_flags.all()]
-    except Exception:
-        flags = []
-    if not flags:
+        badges = collect_badges(member)
+    except Exception as e:
+        print(f"[modview] Couldn't read the badges of {getattr(member, 'id', '?')}: {type(e).__name__}: {e}")
+        badges = []
+    if not badges:
         return "None"
-    if len(flags) > 10:
-        return ", ".join(flags[:10]) + f"… (+{len(flags) - 10} more)"
-    return ", ".join(flags)
+    result = "\n".join(badges)
+    if len(result) <= 1024:
+        return result
+    shown = []
+    for badge in badges:
+        if len("\n".join([*shown, badge])) > 1000:
+            break
+        shown.append(badge)
+    return "\n".join(shown) + f"\n… (+{len(badges) - len(shown)} more)"
 
 
 def format_activity(member: discord.Member):

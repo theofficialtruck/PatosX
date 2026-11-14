@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import asyncio
 import random
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -377,3 +378,197 @@ async def test_inventory_lists_premium_items(monkeypatch, shop_cog):
     assert "🦆 Premium Pet Duck x1" in names
     assert "☕ Premium Coffee Cup x2" in names
     assert not any("no longer sold" in field.value for field in embed.fields)
+
+
+# === restarts and live announcement updates =====================================================
+
+
+@pytest.fixture(autouse=True)
+def fresh_render_cache():
+    """The announcement cache is module level (like a fresh process after a restart): start every
+    test from an empty one."""
+    ps.reset_render_cache()
+    yield
+    ps.reset_render_cache()
+
+
+def open_shop_doc(items, closes_in=timedelta(minutes=30)):
+    doc = open_doc(items, closes_in)
+    doc.update({"channel_id": 99, "message_id": 555})
+    return doc
+
+
+def edited_embed(channel):
+    return channel.partial.edit.call_args.kwargs["embed"]
+
+
+def stock_lines(embed):
+    return [field.value.splitlines()[-1] for field in embed.fields]
+
+
+@pytest.mark.asyncio
+async def test_open_shop_is_resynced_on_the_first_tick_after_a_restart(monkeypatch, cog):
+    """A purchase landed in the database but the bot died before editing the message: after the
+    restart the first tick re-renders the real stock and keeps the buy button."""
+    channel = make_channel()
+    shop_col = FakePremiumCol({"1": open_shop_doc([{"key": "premium_pet_duck", "stock": 1}])})
+    monkeypatch.setattr(state, "premium_shop_col", shop_col)
+
+    await cog._tick_guild(make_guild(channel), datetime.now(timezone.utc))
+
+    channel.partial.edit.assert_awaited_once()
+    assert isinstance(channel.partial.edit.call_args.kwargs["view"], ps.PremiumShopView)
+    assert stock_lines(edited_embed(channel)) == ["**1 left**"]
+    assert shop_col.docs["1"]["is_open"] is True
+
+
+@pytest.mark.asyncio
+async def test_announcement_is_only_edited_when_the_stock_changes(monkeypatch, cog):
+    channel = make_channel()
+    guild = make_guild(channel)
+    shop_col = FakePremiumCol({"1": open_shop_doc([{"key": "premium_pet_duck", "stock": 3}])})
+    monkeypatch.setattr(state, "premium_shop_col", shop_col)
+
+    await cog._tick_guild(guild, datetime.now(timezone.utc))
+    await cog._tick_guild(guild, datetime.now(timezone.utc))
+    assert channel.partial.edit.await_count == 1  # nothing changed between the two ticks
+
+    shop_col.docs["1"]["items"][0]["stock"] = 2
+    await cog._tick_guild(guild, datetime.now(timezone.utc))
+    assert channel.partial.edit.await_count == 2
+    assert stock_lines(edited_embed(channel)) == ["**2 left**"]
+
+
+@pytest.mark.asyncio
+async def test_shop_that_expired_while_offline_is_closed_on_startup(monkeypatch, cog):
+    channel = make_channel()
+    doc = open_shop_doc([{"key": "premium_pet_duck", "stock": 2}], closes_in=timedelta(hours=-1))
+    shop_col = FakePremiumCol({"1": doc})
+    monkeypatch.setattr(state, "premium_shop_col", shop_col)
+
+    await cog._tick_guild(make_guild(channel), datetime.now(timezone.utc))
+
+    assert shop_col.docs["1"]["is_open"] is False
+    assert channel.partial.edit.call_args.kwargs["view"] is None
+    assert edited_embed(channel).title == "💎 Premium Shop Closed"
+
+
+@pytest.mark.asyncio
+async def test_deleted_announcement_is_reposted_for_a_still_open_shop(monkeypatch, cog):
+    channel = make_channel()
+    channel.partial.edit = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404), "Unknown Message"))
+    channel.send = AsyncMock(return_value=SimpleNamespace(id=777))
+    shop_col = FakePremiumCol({"1": open_shop_doc([{"key": "premium_pet_duck", "stock": 2}])})
+    monkeypatch.setattr(state, "premium_shop_col", shop_col)
+    guild = make_guild(channel)
+
+    await cog._tick_guild(guild, datetime.now(timezone.utc))
+
+    channel.send.assert_awaited_once()
+    assert isinstance(channel.send.call_args.kwargs["view"], ps.PremiumShopView)
+    assert shop_col.docs["1"]["message_id"] == 777
+    await cog._tick_guild(guild, datetime.now(timezone.utc))
+    channel.send.assert_awaited_once()  # the new message is tracked, no second repost
+
+
+@pytest.mark.asyncio
+async def test_sold_out_shop_shows_sold_out(monkeypatch):
+    channel = make_channel()
+    shop_col = FakePremiumCol({"1": open_shop_doc([{"key": "premium_pet_duck", "stock": 0}])})
+    monkeypatch.setattr(state, "premium_shop_col", shop_col)
+
+    await ps.sync_shop(make_guild(channel))
+
+    assert shop_col.docs["1"]["is_open"] is False
+    assert edited_embed(channel).title == "💎 Premium Shop SOLD OUT!"
+    assert channel.partial.edit.call_args.kwargs["view"] is None
+
+
+@pytest.mark.asyncio
+async def test_closing_twice_only_edits_once(monkeypatch):
+    channel = make_channel()
+    doc = open_shop_doc([{"key": "premium_pet_duck", "stock": 0}])
+    shop_col = FakePremiumCol({"1": doc})
+    monkeypatch.setattr(state, "premium_shop_col", shop_col)
+    guild = make_guild(channel)
+
+    await ps.close_shop(guild, doc, datetime.now(timezone.utc))
+    await ps.close_shop(guild, doc, datetime.now(timezone.utc))
+
+    channel.partial.edit.assert_awaited_once()
+
+
+def make_purchase_interaction(channel, guild):
+    interaction = MagicMock()
+    interaction.guild = guild
+    interaction.user.id = 2
+    interaction.channel = channel
+    interaction.message.id = 4242
+    interaction.response.send_message = AsyncMock()
+    interaction.followup.edit_message = AsyncMock()
+    return interaction
+
+
+async def buy(key, interaction):
+    dropdown = ps.PremiumShopDropdown(2, [discord.SelectOption(label="x", value=key)])
+    dropdown.dropdown._values = [key]
+    await dropdown.dropdown_callback(interaction)
+
+
+@pytest.mark.asyncio
+async def test_each_purchase_updates_the_announcement_and_the_last_one_closes_it(monkeypatch):
+    channel = make_channel()
+    guild = make_guild(channel)
+    shop_col = FakePremiumCol(
+        {"1": open_shop_doc([{"key": "premium_pet_duck", "stock": 2}, {"key": "premium_coffee_cup", "stock": 1}])}
+    )
+    monkeypatch.setattr(state, "premium_shop_col", shop_col)
+    monkeypatch.setattr(state, "economy_col", FakeEconomyCol(wallet=100_000))
+    monkeypatch.setattr(ps.xp, "increment_badge_counter", AsyncMock())
+    monkeypatch.setattr(ps.xp, "check_and_award_badges", AsyncMock())
+    interaction = make_purchase_interaction(channel, guild)
+
+    await buy("premium_pet_duck", interaction)
+    assert stock_lines(edited_embed(channel)) == ["**1 left**", "**1 left**"]
+
+    await buy("premium_coffee_cup", interaction)
+    assert stock_lines(edited_embed(channel)) == ["**1 left**", "**SOLD OUT**"]
+    assert shop_col.docs["1"]["is_open"] is True
+
+    await buy("premium_pet_duck", interaction)  # the last item: the shop closes right away, no tick needed
+    assert shop_col.docs["1"]["is_open"] is False
+    assert edited_embed(channel).title == "💎 Premium Shop SOLD OUT!"
+    assert channel.partial.edit.call_args.kwargs["view"] is None
+    assert channel.partial.edit.await_count == 3
+    sent = [call.kwargs.get("embed") for call in interaction.response.send_message.call_args_list]
+    assert all(embed is not None and embed.title == "✅ Purchase Successful!" for embed in sent)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_syncs_never_leave_stale_stock(monkeypatch):
+    """Two purchases finishing at once: the per guild lock makes the later sync read the newer stock,
+    so the announcement can't end up showing an older count."""
+    channel = make_channel()
+    guild = make_guild(channel)
+    shop_col = FakePremiumCol({"1": open_shop_doc([{"key": "premium_pet_duck", "stock": 5}])})
+    monkeypatch.setattr(state, "premium_shop_col", shop_col)
+    shown = []
+
+    async def edit_while_another_purchase_lands(**kwargs):
+        shown.append(stock_lines(kwargs["embed"]))
+        shop_col.docs["1"]["items"][0]["stock"] -= 1
+        await asyncio.sleep(0)
+
+    channel.partial.edit = AsyncMock(side_effect=edit_while_another_purchase_lands)
+    await asyncio.gather(ps.sync_shop(guild), ps.sync_shop(guild))
+
+    assert shown == [["**5 left**"], ["**4 left**"]]
+
+
+@pytest.mark.asyncio
+async def test_persistent_button_is_registered_on_load_and_scheduler_waits_for_ready(bot):
+    cog = ps.PremiumShop(bot)
+    await bot.add_cog(cog)
+    assert any(isinstance(view, ps.PremiumShopView) and view.is_persistent() for view in bot.persistent_views)
+    assert not cog.premium_shop_loop.is_running()  # not connected yet: on_ready starts it
+    await bot.remove_cog(cog.qualified_name)
