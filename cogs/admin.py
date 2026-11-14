@@ -21,7 +21,7 @@ import ast
 import asyncio
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import discord
@@ -41,7 +41,7 @@ HEARTBEAT_FILE = str(Path(__file__).resolve().parent.parent / "heartbeat.txt")
 
 def _write_heartbeat_file() -> None:
     with open(HEARTBEAT_FILE, "w") as f:
-        f.write(datetime.now(timezone.utc).isoformat())
+        f.write(datetime.now(UTC).isoformat())
 
 
 HEARTBEAT_ERROR_LOG_INTERVAL = timedelta(minutes=5)
@@ -65,7 +65,7 @@ async def run_flake8_lint(base_dir):
         )
         try:
             stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             process.kill()
             await process.communicate()
             return ["⚠️ `flake8` lint check timed out (30s)."]
@@ -100,7 +100,7 @@ class Admin(commands.Cog):
         try:
             await asyncio.to_thread(_write_heartbeat_file)
         except OSError as e:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if (
                 self._last_heartbeat_error_log is None
                 or now - self._last_heartbeat_error_log >= HEARTBEAT_ERROR_LOG_INTERVAL
@@ -340,7 +340,7 @@ class Admin(commands.Cog):
             ):
                 user_id = str(message.author.id)
                 if user_id not in onetime_channels[guild_id][channel_id]:
-                    now = datetime.now(timezone.utc)
+                    now = datetime.now(UTC)
                     onetime_channels[guild_id][channel_id][user_id] = now
                     await state.settings_col.update_one(
                         {"guild": guild_id}, {"$set": {f"onetime_channels.{channel_id}.{user_id}": now}}, upsert=True

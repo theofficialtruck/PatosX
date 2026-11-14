@@ -16,7 +16,7 @@
 
 """The Discord badges shown in the modview "Badges / Flags" field."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -25,7 +25,7 @@ import pytest
 
 from cogs import moderation as mod
 
-NOW = datetime(2026, 11, 14, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 14, 12, 0, tzinfo=UTC)
 
 
 def asset(animated=False):
@@ -98,17 +98,17 @@ def test_flags_newer_than_discord_py_are_read_from_the_raw_bits():
 @pytest.mark.parametrize(
     "since,level",
     [
-        (datetime(2026, 11, 1, tzinfo=timezone.utc), 1),
-        (datetime(2026, 9, 14, tzinfo=timezone.utc), 2),
-        (datetime(2026, 9, 15, tzinfo=timezone.utc), 1),  # one day short of two months
-        (datetime(2026, 8, 1, tzinfo=timezone.utc), 3),
-        (datetime(2026, 5, 1, tzinfo=timezone.utc), 4),
-        (datetime(2026, 2, 1, tzinfo=timezone.utc), 5),
-        (datetime(2025, 11, 14, tzinfo=timezone.utc), 6),
-        (datetime(2025, 8, 1, tzinfo=timezone.utc), 7),
-        (datetime(2025, 5, 1, tzinfo=timezone.utc), 8),
-        (datetime(2024, 11, 1, tzinfo=timezone.utc), 9),
-        (datetime(2020, 1, 1, tzinfo=timezone.utc), 9),
+        (datetime(2026, 11, 1, tzinfo=UTC), 1),
+        (datetime(2026, 9, 14, tzinfo=UTC), 2),
+        (datetime(2026, 9, 15, tzinfo=UTC), 1),  # one day short of two months
+        (datetime(2026, 8, 1, tzinfo=UTC), 3),
+        (datetime(2026, 5, 1, tzinfo=UTC), 4),
+        (datetime(2026, 2, 1, tzinfo=UTC), 5),
+        (datetime(2025, 11, 14, tzinfo=UTC), 6),
+        (datetime(2025, 8, 1, tzinfo=UTC), 7),
+        (datetime(2025, 5, 1, tzinfo=UTC), 8),
+        (datetime(2024, 11, 1, tzinfo=UTC), 9),
+        (datetime(2020, 1, 1, tzinfo=UTC), 9),
     ],
 )
 def test_boost_badge_level_follows_discords_evolving_badge(since, level):
@@ -116,7 +116,7 @@ def test_boost_badge_level_follows_discords_evolving_badge(since, level):
 
 
 def test_server_booster_badge():
-    since = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    since = datetime(2026, 1, 1, tzinfo=UTC)
     badges = mod.collect_badges(make_member(premium_since=since), NOW)
     assert badges == [f"🚀 Server Booster (Level 5, boosting since <t:{int(since.timestamp())}:D>)"]
 
@@ -153,7 +153,7 @@ def test_avatar_decoration_and_nameplate():
 
 def test_format_flags_lists_one_badge_per_line_and_fits_an_embed_field():
     every = (1 << 23) - 1
-    text = mod.format_flags(make_member(every, premium_since=datetime(2025, 1, 1, tzinfo=timezone.utc)))
+    text = mod.format_flags(make_member(every, premium_since=datetime(2025, 1, 1, tzinfo=UTC)))
     assert text.splitlines()[0] == "🛡️ Discord Staff"
     assert "🚀 Server Booster" in text
     assert len(text) <= 1024

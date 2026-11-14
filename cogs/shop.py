@@ -16,7 +16,6 @@
 
 """Shop browsing/purchasing/refunds, per-guild shop item management, inventory, and shop seeding."""
 
-import asyncio
 import traceback
 
 import discord
@@ -498,7 +497,7 @@ async def prompt_for_role(ctx):
         await ctx.send("📌 Please enter the **role ID** (or type `cancel` to skip):")
         try:
             msg = await ctx.bot.wait_for("message", check=check, timeout=60)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await ctx.send("⌛ Cancelled due to timeout.")
             return None
         if msg.content.lower() == "cancel":
@@ -640,13 +639,13 @@ class Shop(commands.Cog):
         try:
             desc_msg = await self.bot.wait_for("message", check=check, timeout=120)
             description = desc_msg.content.strip()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return await ctx.send("⌛ Item creation cancelled due to timeout.")
         await ctx.send(f"🔗 Do you want to link a role to **{name}**? (yes/no)")
         try:
             choice_msg = await self.bot.wait_for("message", check=check, timeout=60)
             choice = choice_msg.content.lower()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return await ctx.send("⌛ Item creation cancelled due to timeout.")
         role_id = None
         if choice in ["yes", "y"]:
@@ -691,7 +690,7 @@ class Shop(commands.Cog):
                 new_name = item["name"]
             elif econ.is_removed_shop_item(new_name):
                 return await ctx.send("❌ This item name is blocked and cannot be used.")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return await ctx.send("⌛ Edit cancelled due to timeout.")
         await ctx.send(f"💰 Enter a new price for **{new_name}** (or type `skip`):")
         try:
@@ -700,7 +699,7 @@ class Shop(commands.Cog):
                 new_price = item["price"]
             else:
                 new_price = int(price_msg.content)
-        except (asyncio.TimeoutError, ValueError):
+        except (TimeoutError, ValueError):
             return await ctx.send("❌ Invalid price or timeout. Edit cancelled.")
         await ctx.send(f"📝 Enter a new description for **{new_name}** (or type `skip`):")
         try:
@@ -709,13 +708,13 @@ class Shop(commands.Cog):
                 new_desc = item["description"]
             else:
                 new_desc = desc_msg.content.strip()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return await ctx.send("⌛ Edit cancelled due to timeout.")
         await ctx.send("🔗 Do you want to change the linked role? (yes/no)")
         try:
             choice_msg = await self.bot.wait_for("message", check=check, timeout=60)
             choice = choice_msg.content.lower()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return await ctx.send("⌛ Edit cancelled due to timeout.")
         role_id = item.get("role_id")
         if choice in ["yes", "y"]:

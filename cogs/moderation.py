@@ -20,7 +20,7 @@ the moderator panel views, mute expiry + Muted-role permission loops, and reacti
 import asyncio
 import contextlib
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import discord
 from dateutil import parser
@@ -54,13 +54,13 @@ def parse_mute_end(raw) -> datetime | None:
             mute_end = parser.isoparse(mute_end)
         except ValueError:
             try:
-                mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                mute_end = datetime.strptime(mute_end, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
             except ValueError:
                 return None
     if not isinstance(mute_end, datetime):
         return None
     if mute_end.tzinfo is None:
-        mute_end = mute_end.replace(tzinfo=timezone.utc)
+        mute_end = mute_end.replace(tzinfo=UTC)
     return mute_end
 
 
@@ -109,7 +109,7 @@ async def _reapply_or_clear_mute(guild: discord.Guild, member: discord.Member, d
         if mute_role and mute_role not in member.roles:
             await member.add_roles(mute_role, reason="Reapplying mute after restart")
         return
-    if mute_end <= datetime.now(timezone.utc):
+    if mute_end <= datetime.now(UTC):
         await state.mutes_col.delete_one({"_id": doc["_id"]})
         await remove_mute_role(guild, member, reason="Mute expired while bot was offline")
         return
@@ -237,7 +237,7 @@ def _asset_is_animated(asset) -> bool:
 
 def collect_badges(member: discord.Member, now: datetime | None = None) -> list[str]:
     """Every Discord badge and profile perk a bot can detect on ``member``, one display line each."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     badges = []
 
     flags = getattr(member, "public_flags", None)
@@ -381,7 +381,7 @@ class ModViewButtons(discord.ui.View):
                 await interaction.followup.send(f"❌ Expected a plain number, got `{content}`.", ephemeral=True)
                 return
             number = int(content) - 1
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await interaction.followup.send("⌛ Timed out. Please try again.", ephemeral=True)
             return
         guild_id = str(self.ctx.guild.id)
@@ -507,7 +507,7 @@ class NoteModal(discord.ui.Modal, title="Add Moderator Note"):
                     "notes": {
                         "by": str(ctx.author),
                         "note": note_content,
-                        "time": datetime.now(timezone.utc).isoformat(),
+                        "time": datetime.now(UTC).isoformat(),
                     }
                 }
             },
@@ -604,8 +604,8 @@ async def generate_performance_analytics(guild_id, staff_id, days=30):
             "active_this_week": False,
             "recent_activity": [],
         }
-        days_ago = datetime.now(timezone.utc) - timedelta(days=days)
-        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        days_ago = datetime.now(UTC) - timedelta(days=days)
+        seven_days_ago = datetime.now(UTC) - timedelta(days=7)
         mod_data = await state.mod_col.find({"guild": str(guild_id)}).to_list(length=None)
         for doc in mod_data:
             if "warnings" in doc:
@@ -783,7 +783,7 @@ class ModerationConfirmView(discord.ui.View):
                             "warnings": {
                                 "by": str(ctx.author),
                                 "reason": reason,
-                                "time": datetime.now(timezone.utc).isoformat(),
+                                "time": datetime.now(UTC).isoformat(),
                             }
                         }
                     },
@@ -811,7 +811,7 @@ class ModerationConfirmView(discord.ui.View):
                             "mutes": {
                                 "by": str(ctx.author),
                                 "reason": reason,
-                                "time": datetime.now(timezone.utc).isoformat(),
+                                "time": datetime.now(UTC).isoformat(),
                             }
                         }
                     },
@@ -820,7 +820,7 @@ class ModerationConfirmView(discord.ui.View):
                 if duration:
                     try:
                         seconds = econ.parse_time(duration)
-                        end_time = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+                        end_time = datetime.now(UTC) + timedelta(seconds=seconds)
                         await state.mutes_col.update_one(
                             {"guild_id": ctx.guild.id, "user_id": member.id},
                             {"$set": {"mute_end": end_time.isoformat()}},
@@ -843,7 +843,7 @@ class ModerationConfirmView(discord.ui.View):
                             "kicks": {
                                 "by": str(ctx.author),
                                 "reason": reason,
-                                "time": datetime.now(timezone.utc).isoformat(),
+                                "time": datetime.now(UTC).isoformat(),
                             }
                         }
                     },
@@ -862,7 +862,7 @@ class ModerationConfirmView(discord.ui.View):
                             "bans": {
                                 "by": str(ctx.author),
                                 "reason": reason,
-                                "time": datetime.now(timezone.utc).isoformat(),
+                                "time": datetime.now(UTC).isoformat(),
                             }
                         }
                     },
@@ -964,7 +964,7 @@ class Moderation(commands.Cog):
             mod_count = await state.mod_col.count_documents({"muted_until": {"$exists": True}})
             if mod_count == 0:
                 return
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async for doc in state.mutes_col.find({"mute_end": {"$exists": True}}):
             try:
                 mute_end = parse_mute_end(doc.get("mute_end"))
@@ -989,7 +989,7 @@ class Moderation(commands.Cog):
                 if isinstance(mute_until, str):
                     mute_until = datetime.fromisoformat(mute_until)
                 if mute_until.tzinfo is None:
-                    mute_until = mute_until.replace(tzinfo=timezone.utc)
+                    mute_until = mute_until.replace(tzinfo=UTC)
                 if mute_until <= now:
                     guild = self.bot.get_guild(int(doc["guild"]))
                     if not guild:
@@ -1084,7 +1084,7 @@ class Moderation(commands.Cog):
             if mute_role and mute_role not in member.roles:
                 await member.add_roles(mute_role, reason="Reapplying mute after rejoin")
             return
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         if now_utc >= mute_end:
             await state.mutes_col.delete_one({"guild_id": guild.id, "user_id": member.id})
             await remove_mute_role(guild, member, reason="Mute expired before rejoin")
@@ -1111,7 +1111,7 @@ class Moderation(commands.Cog):
                 "type": "kick",
                 "reason": reason,
                 "by": str(getattr(ctx.author, "id", "")),
-                "time": datetime.now(timezone.utc).isoformat(),
+                "time": datetime.now(UTC).isoformat(),
             }
         )
         try:
@@ -1165,7 +1165,7 @@ class Moderation(commands.Cog):
 
             try:
                 msg = await self.bot.wait_for("message", timeout=60.0, check=msg_check)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return await ctx.send("⌛ Timed out waiting for the message.")
             content = msg.content.strip()
             if content.lower() == "cancel":
@@ -1177,7 +1177,7 @@ class Moderation(commands.Cog):
             await ctx.send("📨 Mention the channel (e.g. #general). Type `cancel` to abort.")
             try:
                 ch_msg = await self.bot.wait_for("message", timeout=60.0, check=msg_check)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return await ctx.send("⌛ Timed out waiting for the channel.")
             ch_text = ch_msg.content.strip()
             if ch_text.lower() == "cancel":
@@ -1255,11 +1255,11 @@ class Moderation(commands.Cog):
                 "type": "mute",
                 "reason": reason,
                 "by": str(getattr(ctx.author, "id", "")),
-                "time": datetime.now(timezone.utc).isoformat(),
+                "time": datetime.now(UTC).isoformat(),
             }
         )
         if seconds:
-            mute_end = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+            mute_end = datetime.now(UTC) + timedelta(seconds=seconds)
             await state.mutes_col.update_one(
                 {"guild_id": ctx.guild.id, "user_id": member.id},
                 {"$set": {"guild_id": ctx.guild.id, "user_id": member.id, "mute_end": mute_end.isoformat()}},
@@ -1302,7 +1302,7 @@ class Moderation(commands.Cog):
         guild_id = str(ctx.guild.id)
         user_id = str(member.id)
         warnings_data.setdefault(guild_id, {}).setdefault(user_id, []).append(
-            {"reason": reason, "by": str(getattr(ctx.author, "id", "")), "time": datetime.now(timezone.utc).isoformat()}
+            {"reason": reason, "by": str(getattr(ctx.author, "id", "")), "time": datetime.now(UTC).isoformat()}
         )
         if not (cfg._running_under_pytest() and cfg._looks_like_motor_collection(state.mod_col)):
             try:
@@ -1313,7 +1313,7 @@ class Moderation(commands.Cog):
                             "warnings": {
                                 "by": str(ctx.author),
                                 "reason": reason,
-                                "time": datetime.now(timezone.utc).isoformat(),
+                                "time": datetime.now(UTC).isoformat(),
                             }
                         }
                     },
@@ -1458,7 +1458,7 @@ class Moderation(commands.Cog):
             ctx.guild.verification_level, str(ctx.guild.verification_level).title()
         )
         embed = discord.Embed(
-            title=f"🛠️ Moderator View: {member}", color=discord.Color.blurple(), timestamp=datetime.now(timezone.utc)
+            title=f"🛠️ Moderator View: {member}", color=discord.Color.blurple(), timestamp=datetime.now(UTC)
         )
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.add_field(name="👤 Username", value=f"{member} (`{member.name}`)", inline=False)

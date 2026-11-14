@@ -17,7 +17,7 @@
 """Regression tests for the defects found outside the giveaway system during the bug audit."""
 
 import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -245,9 +245,7 @@ async def test_log_action_with_ctx_uses_author_and_legacy_settings_fallback(monk
 @pytest.mark.asyncio
 async def test_serverinfo_works_for_a_guild_without_an_icon(info_cog):
     """`discord.Embed.Empty` no longer exists in discord.py 2.x, so servers without an icon crashed."""
-    guild = SimpleNamespace(
-        name="Pond", icon=None, member_count=12, id=1, created_at=datetime(2024, 1, 1, tzinfo=timezone.utc)
-    )
+    guild = SimpleNamespace(name="Pond", icon=None, member_count=12, id=1, created_at=datetime(2024, 1, 1, tzinfo=UTC))
     ctx = SimpleNamespace(
         guild=guild,
         author=SimpleNamespace(display_avatar=SimpleNamespace(url="https://x/a.png"), __str__=lambda self: "T"),

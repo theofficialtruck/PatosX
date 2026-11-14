@@ -23,7 +23,7 @@ import random
 import re
 import time
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import discord
 from discord import (
@@ -719,7 +719,7 @@ class QuizView(discord.ui.View):
         passed = pct >= cfg.PASS_PCT
         await state.quiz_col.update_one(
             {"_id": self.quiz_id},
-            {"$set": {"score": self.score, "completed": datetime.now(timezone.utc), "passed": passed}},
+            {"$set": {"score": self.score, "completed": datetime.now(UTC), "passed": passed}},
         )
         result = f"📊 You scored **{self.score}/{len(self.questions)}** = **{pct:.1f}%**"
         if passed:
@@ -857,12 +857,12 @@ class GamesGambling(commands.Cog):
             return
         user_id = f"{ctx.guild.id}-{ctx.author.id}"
         data = await econ.get_user(ctx, ctx.guild.id, ctx.author.id)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         last_time = data.get("last_lottery")
         if last_time:
             last_time = datetime.fromisoformat(last_time)
             if last_time.tzinfo is None:
-                last_time = last_time.replace(tzinfo=timezone.utc)
+                last_time = last_time.replace(tzinfo=UTC)
             if now - last_time < timedelta(hours=1):
                 rem = timedelta(hours=1) - (now - last_time)
                 return await ctx.send(f"🕒 You can try the lottery again in {rem.seconds // 60}m {rem.seconds % 60}s.")
@@ -925,7 +925,7 @@ class GamesGambling(commands.Cog):
 
             try:
                 msg = await self.bot.wait_for("message", check=check, timeout=30.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return await ctx.send("⌛ You took too long to respond. The game has been cancelled.")
             bet_str = msg.content.strip()
             try:
@@ -987,7 +987,7 @@ class GamesGambling(commands.Cog):
 
         try:
             bet_msg = await self.bot.wait_for("message", check=check_bet, timeout=60.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await ctx.send("⏱ You took too long to respond. Command cancelled.")
             return
         bet_input = bet_msg.content.strip()
@@ -1045,7 +1045,7 @@ class GamesGambling(commands.Cog):
             view = discord.ui.View()
             view.add_item(select)
             await ctx.send("🦆 Choose your difficulty:", view=view)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await ctx.send("⌛ You took too long to respond - game canceled.")
         except ValueError:
             await ctx.send("⚠️ Invalid bet amount. Try again using a number or 'all'.")
@@ -1099,7 +1099,7 @@ class GamesGambling(commands.Cog):
 
             try:
                 answer_msg = await self.bot.wait_for("message", timeout=time_limit, check=answer_check)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return await ctx.send(
                     f"⏰ Time's up! The answer was **{riddle_data['answers'][0]}**. No coins this time."
                 )
@@ -1158,7 +1158,7 @@ class GamesGambling(commands.Cog):
             mention = f"<#{quiz_channels[0]}>" if quiz_channels else "`a quiz channel`"
             return await ctx.send(f"❌ Please use this command in {mention}.")
         USER, GUILD = (str(ctx.author.id), str(ctx.guild.id))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         role_ids = cfg_raw.get("ROLE_ID", [])
         if isinstance(role_ids, int):
             role_ids = [role_ids]
@@ -1173,12 +1173,12 @@ class GamesGambling(commands.Cog):
                 )
                 if msg.content.strip().lower() != "yes":
                     return await ctx.send("✅ Quiz cancelled.")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return await ctx.send("⌛ Timed out - quiz cancelled.")
         user_doc = await state.quiz_col.find_one({"guild": GUILD, "user": USER})
         last_use = user_doc.get("last_quiz") if user_doc else None
         if last_use:
-            last_dt = datetime.fromisoformat(last_use).replace(tzinfo=timezone.utc)
+            last_dt = datetime.fromisoformat(last_use).replace(tzinfo=UTC)
             if now - last_dt < timedelta(hours=1):
                 remaining = timedelta(hours=1) - (now - last_dt)
                 mins = int(remaining.total_seconds() // 60)

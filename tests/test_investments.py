@@ -18,7 +18,7 @@
 flat for its first INVESTMENT_GRACE_DAYS days."""
 
 import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -47,7 +47,7 @@ def fresh_investment(amount=1000, bought="2026-05-10", inv_id="inv-1"):
 
 
 def at(day):
-    return datetime.fromisoformat(f"{day}T12:00:00+00:00").astimezone(timezone.utc)
+    return datetime.fromisoformat(f"{day}T12:00:00+00:00").astimezone(UTC)
 
 
 def test_gains_are_more_common_than_losses_but_not_dramatic():
