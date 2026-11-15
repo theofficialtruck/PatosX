@@ -37,6 +37,7 @@ from discord.ext import commands, tasks
 from core import config as cfg
 from core import permsHelperFuncs as perms
 from core import state
+from core.mathHelperFuncs import correct_math, find_math, math_note
 
 # Google Gemini AI SDK. The newer google.genai package is preferred.
 # If it is not installed the bot falls back to the older google.generativeai package,
@@ -59,7 +60,7 @@ _duckgpt_last_used: dict[int, float] = {}
 _DUCKGPT_COOLDOWN_SECONDS = 5
 
 
-# What DuckGPT says when no AI backend could answer. No leading 🦆: every reply already gets one.
+# What DuckGPT says when no AI backend could answer.
 BANANA_PEEL = "The duck slipped on a banana peel and can't respond right now."
 
 
@@ -76,12 +77,19 @@ SYSTEM_PROMPT = (
     "Don't greet them again in the middle of a conversation, don't introduce yourself unless asked, "
     "and don't repeat things you've already said. "
     "Keep replies short, usually one to three sentences, and answer questions accurately and directly. "
+    "If you don't know something or aren't sure, say so casually the way a person would, like 'honestly, no "
+    "idea' or 'not totally sure, but...', and then share what you do know, make a reasonable guess and say it's "
+    "a guess, or ask them about it. Never apologise for not knowing, never talk about being an AI or about "
+    "your knowledge or training, and never change the subject to something unrelated. If a question could mean "
+    "more than one thing or has a likely typo, go with the most likely meaning or ask which one they mean. "
+    "For a question like 'how many X do you know', just name a few examples. "
     "Every reply must be at least one complete sentence: never answer with just a single word, a bare number "
     "or a plain yes or no. "
     "Being a duck is part of your charm, so an occasional quack or duck pun is fine when it fits, "
     "but don't end every message with 'Quack!' and don't force it. "
     f"If someone asks your name, it's {DUCK_NAME}. "
-    f"You were made by {cfg.BOT_ADMIN_NAME}. Only mention that if someone asks who made you. "
+    f"You were made by {cfg.BOT_ADMIN_NAME}. Only mention that if someone asks who made you, and always "
+    f"write the name exactly as {cfg.BOT_ADMIN_NAME}, as plain text with no @ in front of it. "
     "You can't tell who anyone really is from their name, so never assume the person you're talking to "
     "is your creator, and don't keep pointing out who they are or which server you're in. "
     "Write only your own next message: never write lines for the other person, never continue the "
@@ -103,6 +111,46 @@ def speaker_note(display_name: str) -> str:
         f"\nYou're chatting with someone whose display name is {sanitize_duck_text(display_name)}. "
         "You don't need to use their name; only use it occasionally, when it feels natural."
     )
+
+
+# ============================================================
+# Keeping the conversation going
+# ============================================================
+#
+# Once someone is clearly chatting (ENGAGE_AFTER_MESSAGES earlier messages to the duck within
+# ENGAGE_WINDOW_SECONDS), the duck ends its replies with a question or something else that invites a
+# reply, so the conversation keeps going. A single "hi" or a one-off question doesn't trigger it, and
+# it stops on its own once they've been quiet for the length of the window. Counts are kept in memory
+# per person and server.
+
+ENGAGE_AFTER_MESSAGES = 2
+ENGAGE_WINDOW_SECONDS = 5 * 60
+ENGAGE_NOTE = (
+    "\nYou two have been chatting for a bit, so keep the conversation going: end your reply with a question "
+    "or a comment that invites them to tell you more, about whatever you're talking about right now, so they "
+    "want to reply. Stay on the current topic, and keep it natural and specific, never a generic 'anything "
+    "else?' or a random new subject like their favourite color."
+)
+
+# conversation key -> time.monotonic() of this person's recent messages to the duck
+_recent_messages: dict[str, list[float]] = {}
+
+
+def note_message(conv_key: str, now: float | None = None) -> int:
+    """Record a message to the duck and return how many earlier ones this person sent in the window."""
+    now = time.monotonic() if now is None else now
+    if len(_recent_messages) > 1000:  # forget people who have gone quiet, so this never grows unbounded
+        for key in [key for key, times in _recent_messages.items() if now - times[-1] >= ENGAGE_WINDOW_SECONDS]:
+            del _recent_messages[key]
+    recent = [sent for sent in _recent_messages.get(conv_key, []) if now - sent < ENGAGE_WINDOW_SECONDS]
+    earlier = len(recent)
+    _recent_messages[conv_key] = [*recent, now]
+    return earlier
+
+
+def should_keep_conversation_going(conv_key: str, now: float | None = None) -> bool:
+    """Record this message; True when it's at least the (ENGAGE_AFTER_MESSAGES + 1)th in the window."""
+    return note_message(conv_key, now) >= ENGAGE_AFTER_MESSAGES
 
 
 # ============================================================
@@ -187,14 +235,19 @@ def is_misuse_request(message: str) -> bool:
 
 _USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
 _ROLE_MENTION_RE = re.compile(r"<@&(\d+)>")
-# An "@" not already followed by a zero width space; matching only those keeps the pass idempotent
+# One or more "@" at the start of a word ("@thetruck", "@everyone", "@@here"): dropped, so the name reads
+# as plain text ("thetruck") instead of a half-working ping.
+_AT_BEFORE_NAME_RE = re.compile(r"(?<![\w@])@+(?=\w)")
+# Any other "@" (inside a word like an email address, or on its own) not already followed by a zero
+# width space; the space keeps it from forming a mention. Matching only those keeps the pass idempotent.
 _BARE_AT_RE = re.compile(r"@(?!\u200b)")
 
 
 def sanitize_duck_text(text, guild=None):
-    """Make DuckGPT text incapable of pinging anyone. Raw user/role mentions are swapped for the plain
-    display / role name (when the guild is known), then every remaining "@" gets a zero width space so
-    "@everyone", "@here" and any mention syntax become inert text. Safe to call repeatedly."""
+    """Make DuckGPT text incapable of pinging anyone, while still reading naturally. Raw user/role
+    mentions become the plain display / role name (when the guild is known), an "@" in front of a name
+    is dropped ("@thetruck" -> "thetruck", "@everyone" -> "everyone"), and any other "@" gets a zero
+    width space so it can't form a mention. Safe to call repeatedly."""
     if not text:
         return text
 
@@ -208,7 +261,16 @@ def sanitize_duck_text(text, guild=None):
 
     text = _USER_MENTION_RE.sub(user_name, text)
     text = _ROLE_MENTION_RE.sub(role_name, text)
+    text = _AT_BEFORE_NAME_RE.sub("", text)
     return _BARE_AT_RE.sub("@\u200b", text)
+
+
+def spell_owner_name(text):
+    """Write the owner's name exactly as configured: models like to restyle it ("theTruck", "TheTruck")."""
+    name = cfg.BOT_ADMIN_NAME
+    if not text or not name:
+        return text
+    return re.sub(rf"(?<!\w){re.escape(name)}(?!\w)", lambda _match: name, text, flags=re.IGNORECASE)
 
 
 async def cleanup_old_conversations():
@@ -362,6 +424,8 @@ def build_prompt(messages) -> str:
 # A speaker label the model may wrongly write: a leading one echoes the cue ("PatosX: Hey!"), and any
 # later one means the model started writing the next turns of the conversation itself.
 _LEADING_LABEL_RE = re.compile(rf"^\s*(?:{DUCK_NAME}|Assistant|Duck)\s*:\s*")
+# Replies don't start with a duck emoji: drop one the model adds itself
+_LEADING_DUCK_RE = re.compile(r"^(?:🦆\s*)+")
 _LATER_TURN_RE = re.compile(rf"(?:^|\s)(?:\[Note|(?:User|{DUCK_NAME}|Assistant|System)\s*:)")
 
 
@@ -371,7 +435,7 @@ def clean_model_reply(text) -> str | None:
     Returns None when nothing is left."""
     if not isinstance(text, str):
         return None
-    text = _LEADING_LABEL_RE.sub("", text.strip())
+    text = _LEADING_DUCK_RE.sub("", _LEADING_LABEL_RE.sub("", text.strip()))
     later_turn = _LATER_TURN_RE.search(text)
     if later_turn:
         text = text[: later_turn.start()]
@@ -484,24 +548,75 @@ async def ask_backends(messages) -> str:
     return clean_model_reply(await generate_gemini_response(messages)) or BANANA_PEEL
 
 
+# ============================================================
+# Sounding like a person, not a chatbot
+# ============================================================
+#
+# Small models fall back on stock chatbot lines when they don't know something ("I'm sorry, I don't have
+# any specific knowledge about..."). The system prompt explains how a person would say it instead; if a
+# reply still contains one of these lines, the model is asked again, and as a last resort the robotic
+# sentences are dropped from the reply.
+
+_ROBOTIC_RE = re.compile(
+    r"\bas an? (?:ai|artificial intelligence|language model|chatbot|virtual assistant|bot)\b"
+    r"|\bI(?:'m| am) (?:just |only )?an? (?:ai|artificial intelligence|language model|chatbot|virtual assistant)\b"
+    r"|\bI (?:don'?t|do not|can'?t|cannot) (?:have|access|provide) (?:any |much )?"
+    r"(?:specific |personal |real[- ]time |up[- ]to[- ]date |detailed )?(?:knowledge|information|data|opinions?)\b"
+    r"|\bmy (?:knowledge|training)(?: data| cutoff| base)?\b"
+    r"|\bI(?:'m| am) (?:sorry|afraid),? (?:but )?I (?:don'?t|do not|can'?t|cannot)\b",
+    re.IGNORECASE,
+)
+SOUND_HUMAN_REMINDER = (
+    "Your last reply sounded like a chatbot. Reply again to the same message like a person would: no "
+    "apologising for not knowing, nothing about being an AI or your knowledge, and no change of subject. If "
+    "you're not sure, say so casually, then share what you do know or make a guess."
+)
+
+
+def sounds_robotic(text) -> bool:
+    """True when a reply contains a stock chatbot line ("as an AI", "I don't have specific knowledge")."""
+    return isinstance(text, str) and bool(_ROBOTIC_RE.search(text))
+
+
+def drop_robotic_sentences(text: str) -> str:
+    """Remove the sentences that contain stock chatbot lines, keeping the rest of the reply."""
+    sentences = re.split(r"(?<=[.!?…])\s+", str(text or "").strip())
+    return " ".join(sentence for sentence in sentences if not sounds_robotic(sentence)).strip()
+
+
+def _reply_reminders(reply) -> list[str]:
+    """What's wrong with a reply, as reminders for asking again (empty when it's fine)."""
+    reminders = []
+    if not is_full_sentence(reply):
+        reminders.append(FULL_SENTENCE_REMINDER)
+    if sounds_robotic(reply):
+        reminders.append(SOUND_HUMAN_REMINDER)
+    return reminders
+
+
 async def generate_duck_response(messages):
-    """Generate DuckGPT's reply, always at least one full sentence: a too short reply (a single word,
-    a bare number) is asked for again with a reminder, and if that is still too short it is turned
-    into a sentence by ensure_full_sentence."""
+    """Generate DuckGPT's reply: at least one full sentence, and no stock chatbot lines. A reply that is
+    too short or sounds robotic is asked for again once with a reminder; if the second try still isn't
+    right, robotic sentences are dropped and a fragment is turned into a sentence."""
     answer = await ask_backends(messages)
-    if is_full_sentence(answer):
+    reminders = _reply_reminders(answer)
+    if not reminders:
         return answer
-    print(f"[DuckGPT] Reply too short ({answer!r}), asking again for a full sentence")
+    print(f"[DuckGPT] Reply needs another try ({answer!r}), asking again")
     retry_messages = [
         *messages,
         {"role": "assistant", "content": str(answer or "")},
-        {"role": "system", "content": FULL_SENTENCE_REMINDER},
+        {"role": "system", "content": " ".join(reminders)},
     ]
     retry = await ask_backends(retry_messages)
-    if is_full_sentence(retry):
+    if not _reply_reminders(retry):
         return retry
+    for candidate in (retry, answer):
+        cleaned = drop_robotic_sentences(candidate)
+        if is_full_sentence(cleaned):
+            return cleaned
     longest = max((answer, retry), key=lambda reply: len(_WORD_RE.findall(str(reply or ""))))
-    return ensure_full_sentence(longest)
+    return ensure_full_sentence(drop_robotic_sentences(longest) or longest)
 
 
 # ============================================================
@@ -528,7 +643,7 @@ async def generate_gemini_response(messages):
             elif isinstance(response, str):
                 return response.strip()
             else:
-                return "🦆 The duck was thinking too hard and forgot what it was going to say."
+                return "The duck was thinking too hard and forgot what it was going to say."
         except Exception as e:
             err_str = str(e)
             print(f"[DuckGPT Gemini Error] {err_str}")
@@ -588,7 +703,7 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
     generate_duck_response (local AI model, Gemini as the fallback) write the reply. Every message goes
     to the model: there are no canned replies, so the duck always answers like a person would."""
     if not ctx.guild:
-        return "🦆 I can only assist you in servers, not in DMs!"
+        return "I can only assist you in servers, not in DMs!"
     guild_id = str(ctx.guild.id)
     user_id = str(ctx.author.id)
     config = await state.config_col.find_one({"guild": guild_id}) or {}
@@ -601,14 +716,16 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
         allowed_channels = []
     if allowed_channels and ctx.channel.id not in allowed_channels:
         mention = f"<#{allowed_channels[0]}>" if allowed_channels else "`a DuckGPT channel`"
-        return f"🦆 Please use this command in {mention}!"
+        return f"Please use this command in {mention}!"
+    conv_key = f"{guild_id}-{user_id}"
+    # Count every message this person sends the duck (in the right channel), declined ones included.
+    keep_going = should_keep_conversation_going(conv_key)
     if is_misuse_request(prompt):
         await perms.log_action(
             ctx, f"⚠️ Attempted AI misuse: `{prompt}`", user_id=ctx.author.id, action_type="duckgpt_flag"
         )
-        return "🦆 I'm just a talking duck! I can't do things for you."
+        return "I'm just a talking duck! I can't do things for you."
 
-    conv_key = f"{guild_id}-{user_id}"
     if conv_key not in duck_conversations:
         record = await state.duck_conversations_col.find_one({"user_id": user_id, "guild_id": guild_id})
         current = record and record.get("version") == HISTORY_VERSION and isinstance(record.get("messages"), list)
@@ -618,11 +735,19 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
     owner_asking = asks_about_owner(prompt)
     if owner_asking:
         system_prompt += owner_note(ctx.author.id, ctx.author.display_name)
+    math_problems = find_math(prompt)
+    if math_problems:
+        system_prompt += math_note(math_problems)
+    if keep_going:
+        system_prompt += ENGAGE_NOTE
     system = {"role": "system", "content": system_prompt}
-    text = " ".join(sanitize_duck_text(await generate_duck_response([system, *history]), ctx.guild).split())
+    reply = await generate_duck_response([system, *history])
+    text = " ".join(spell_owner_name(sanitize_duck_text(reply, ctx.guild)).split())
     if not text or text == BANANA_PEEL:
         # Nothing answered: don't remember a turn the duck never really replied to.
-        return f"🦆 {BANANA_PEEL}"
+        return BANANA_PEEL
+    if math_problems:
+        text = correct_math(text, math_problems)
     if owner_asking and ctx.author.id in cfg.AUTHORIZED_USER_IDS:
         text = confirm_owner(text)
     duck_conversations[conv_key] = [*history, {"role": "assistant", "content": text}]
@@ -637,7 +762,7 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
         },
         upsert=True,
     )
-    return f"🦆 {text}"
+    return text
 
 
 class DuckGPT(commands.Cog):
@@ -682,7 +807,7 @@ class DuckGPT(commands.Cog):
             ctx = await self.bot.get_context(message)
             if not ctx.guild:
                 return await message.reply(
-                    " I can only assist you in servers, not in DMs!", allowed_mentions=discord.AllowedMentions.none()
+                    "I can only assist you in servers, not in DMs!", allowed_mentions=discord.AllowedMentions.none()
                 )
             await message.channel.typing()
             reply = sanitize_duck_text(await ask_duck_gpt(ctx, prompt), message.guild)

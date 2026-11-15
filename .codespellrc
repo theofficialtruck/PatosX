@@ -5,5 +5,6 @@
 [codespell]
 # "ore" is a legitimate in game item name (iron ore, gold ore), not a misspelling of "or"
 # "panting" is the act of breathing rapidly (ducks pant to cool down), not "painting"
-# "whos" is how people type "who's" in chat; DuckGPT's owner question tests use it on purpose
-ignore-words-list = ore,panting,whos
+# "whos" / "whats" are how people type "who's" / "what's" in chat; DuckGPT matches them on purpose
+# "nd" is the ordinal suffix in "2nd", which DuckGPT's math reads ("the 2nd root of ...")
+ignore-words-list = ore,panting,whos,whats,nd

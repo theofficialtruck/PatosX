@@ -76,6 +76,28 @@ def test_sanitiser_turns_mentions_into_plain_names():
     assert out == "hi Alice and Alice, welcome Moderators!"
 
 
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Yes, I'm PatosX, and @theTruck is my creator!", "Yes, I'm PatosX, and theTruck is my creator!"),
+        ("say hi to @Alice and @@Bob", "say hi to Alice and Bob"),
+        ("(@here) quack", "(here) quack"),
+        ("hey <@123>!", "hey Alice!"),
+    ],
+)
+def test_names_written_with_an_at_read_as_plain_names(text, expected):
+    """The bug from the screenshot: "@theTruck" showed up as a broken half-ping instead of a name."""
+    out = duckgpt.sanitize_duck_text(text, make_guild())
+    assert out == expected
+    assert ZWSP not in out
+
+
+def test_owner_name_is_spelled_exactly_as_configured(monkeypatch):
+    monkeypatch.setattr(duckgpt.cfg, "BOT_ADMIN_NAME", "thetruck")
+    assert duckgpt.spell_owner_name("TheTruck made me, theTruck rocks!") == "thetruck made me, thetruck rocks!"
+    assert duckgpt.spell_owner_name("thetrucks and mythetruck stay") == "thetrucks and mythetruck stay"
+
+
 def test_sanitiser_falls_back_for_unknown_ids():
     out = duckgpt.sanitize_duck_text("<@999999999999999999> and <@&888888888888888888>", make_guild())
     assert out == "someone and a role"
@@ -89,8 +111,11 @@ def test_sanitiser_neutralises_a_nickname_that_looks_like_a_ping():
 
 def test_sanitiser_is_idempotent_and_leaves_normal_text_alone():
     once = duckgpt.sanitize_duck_text("@everyone quack")
-    assert once == f"@{ZWSP}everyone quack"
+    assert once == "everyone quack"
     assert duckgpt.sanitize_duck_text(once) == once
+    odd = duckgpt.sanitize_duck_text("mail me at duck@pond.test or just @ me")
+    assert odd == f"mail me at duck@{ZWSP}pond.test or just @{ZWSP} me"  # any other @ is still defused
+    assert duckgpt.sanitize_duck_text(odd) == odd
     assert duckgpt.sanitize_duck_text("Just a duck. Quack!") == "Just a duck. Quack!"
     assert duckgpt.sanitize_duck_text("") == ""
     assert duckgpt.sanitize_duck_text(None) is None
@@ -144,7 +169,7 @@ async def test_nickname_that_looks_like_a_ping_is_never_echoed_live(monkeypatch,
 
     reply = await duckgpt.ask_duck_gpt(make_ctx(display_name="@everyone"), "hello there")
 
-    assert reply == "🦆 Nice to meet you! Quack!"  # no forced "Hello <name>!" greeting any more
+    assert reply == "Nice to meet you! Quack!"  # no forced greeting, no duck emoji in front
     assert_inert(reply)
 
 
@@ -160,7 +185,7 @@ async def test_a_ping_shaped_nickname_is_inert_when_the_model_repeats_it(monkeyp
     assert "Your name is" in reply
     assert_inert(reply)
     speaker_line = model.await_args.args[0][0]["content"].removeprefix(duckgpt.SYSTEM_PROMPT)
-    assert "display name is @\u200bhere" in speaker_line
+    assert "display name is here." in speaker_line
     assert_inert(speaker_line)
 
 

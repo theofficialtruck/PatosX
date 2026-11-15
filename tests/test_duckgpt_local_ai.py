@@ -217,7 +217,7 @@ async def test_full_request_is_one_call_to_the_local_model(local_ai, gemini, duc
     local_ai.reply = {"answer": "It's 19481, quack!"}
     reply = await duckgpt.ask_duck_gpt(duck_ctx, "what is 847 * 23?")
 
-    assert reply == "🦆 It's 19481, quack!"
+    assert reply == "It's 19481, quack!"
     assert len(local_ai.requests) == 1  # no separate intent check any more
     prompt = local_ai.requests[0]["prompt"]
     assert prompt.startswith(duckgpt.SYSTEM_PROMPT)
@@ -232,7 +232,7 @@ async def test_full_request_falls_back_to_gemini_when_the_local_model_is_down(
     monkeypatch.setattr(cfg, "LOCAL_AI_ENABLED", True)
     monkeypatch.setattr(cfg, "LOCAL_AI_URL", f"http://127.0.0.1:{free_port()}/chat")
     reply = await duckgpt.ask_duck_gpt(duck_ctx, "tell me a joke")
-    assert reply == "🦆 Gemini says quack!"
+    assert reply == "Gemini says quack!"
     gemini.assert_awaited_once()
 
 
@@ -265,14 +265,14 @@ async def test_every_message_gets_a_real_model_reply_never_a_canned_one(local_ai
     """In the old flow "hi" and "i still need to fix you up a bit" both got "You are my owner! Quack!"."""
     local_ai.reply = {"answer": "Hey, good to see you! What's going on?"}
     reply = await duckgpt.ask_duck_gpt(duck_ctx, message)
-    assert reply == "🦆 Hey, good to see you! What's going on?"
+    assert reply == "Hey, good to see you! What's going on?"
     assert len(local_ai.requests) == 1
 
 
 @pytest.mark.asyncio
 async def test_no_forced_greeting_or_server_recognition(local_ai, gemini, duck_ctx):
     replies = await chat(local_ai, duck_ctx, ["Hey there, what's up?"], ["hi"])
-    assert replies == ["🦆 Hey there, what's up?"]
+    assert replies == ["Hey there, what's up?"]
     assert "Pond" not in local_ai.requests[0]["prompt"]  # the model isn't even told the server's name
 
 
@@ -299,7 +299,7 @@ async def test_invented_extra_turns_are_cut_off(local_ai, gemini, duck_ctx):
     )
     replies = await chat(local_ai, duck_ctx, [leaked], ["how are you liking the new model i loaded for you"])
     assert replies == [
-        "🦆 Great to hear from you! I'm enjoying my time here and haven't had any trouble with the new model yet."
+        "Great to hear from you! I'm enjoying my time here and haven't had any trouble with the new model yet."
     ]
     saved = duckgpt.duck_conversations["1-2"][-1]["content"]
     assert "User:" not in saved and "Assistant:" not in saved  # the leak never reaches the history
@@ -334,7 +334,7 @@ async def test_the_model_knows_the_speaker_only_as_optional_background(local_ai,
     duck_ctx.author.display_name = "@everyone"
     await chat(local_ai, duck_ctx, ["Hey, nice to meet you!"], ["hello"])
     prompt = local_ai.requests[0]["prompt"]
-    assert "display name is @\u200beveryone" in prompt  # sanitised: can't become a ping
+    assert "display name is everyone." in prompt  # sanitised: the @ is dropped, so it can't ping
     assert "only use it occasionally" in prompt
     assert "said:" not in prompt  # messages are no longer prefixed with "<name> said:"
 
@@ -386,7 +386,7 @@ def test_long_histories_drop_the_oldest_messages_first():
 async def test_failed_replies_are_not_remembered(gemini, duck_ctx):
     gemini.return_value = duckgpt.BANANA_PEEL
     reply = await duckgpt.ask_duck_gpt(duck_ctx, "hello?")
-    assert reply == f"🦆 {duckgpt.BANANA_PEEL}"  # one duck emoji, not two
+    assert reply == duckgpt.BANANA_PEEL  # no duck emoji in front
     state.duck_conversations_col.update_one.assert_not_awaited()
 
 
@@ -500,7 +500,7 @@ async def test_full_sentence_reply_is_not_asked_again(local_ai, gemini):
 async def test_full_flow_never_sends_a_one_word_reply(local_ai, gemini, duck_ctx):
     local_ai.reply = {"answer": "Quack!"}
     reply = await duckgpt.ask_duck_gpt(duck_ctx, "say something")
-    assert reply == "🦆 My answer is Quack, quack!"
+    assert reply == "My answer is Quack, quack!"
     assert duckgpt.is_full_sentence(reply)
     assert len(local_ai.requests) == 2  # asked once more before falling back to the wrapper
 
@@ -564,7 +564,7 @@ async def test_owner_saying_hi_gets_a_normal_reply(local_ai, gemini, duck_ctx, o
     """The bug from the screenshot: the owner got "You are my owner! Quack!" for ordinary messages."""
     local_ai.reply = {"answer": "Doing great, thanks for asking! How about you?"}
     reply = await duckgpt.ask_duck_gpt(duck_ctx, message)
-    assert reply == "🦆 Doing great, thanks for asking! How about you?"
+    assert reply == "Doing great, thanks for asking! How about you?"
     assert "Verified for this message" not in local_ai.requests[0]["prompt"]
 
 
@@ -572,7 +572,7 @@ async def test_owner_saying_hi_gets_a_normal_reply(local_ai, gemini, duck_ctx, o
 async def test_owner_asking_directly_is_told_they_are_the_owner(local_ai, gemini, duck_ctx, owner_setup):
     local_ai.reply = {"answer": "You sure are, you're my owner and the one who made me!"}
     reply = await duckgpt.ask_duck_gpt(duck_ctx, "am i your owner?")
-    assert reply == "🦆 You sure are, you're my owner and the one who made me!"
+    assert reply == "You sure are, you're my owner and the one who made me!"
     assert "the person asking really is your owner and creator, thetruck" in local_ai.requests[0]["prompt"]
 
 
@@ -580,7 +580,7 @@ async def test_owner_asking_directly_is_told_they_are_the_owner(local_ai, gemini
 async def test_owner_is_always_confirmed_even_if_the_model_dodges(local_ai, gemini, duck_ctx, owner_setup):
     local_ai.reply = {"answer": "That's a deep question for a duck to answer!"}
     reply = await duckgpt.ask_duck_gpt(duck_ctx, "am i your owner?")
-    assert reply == "🦆 Yep, you're my owner! That's a deep question for a duck to answer!"
+    assert reply == "Yep, you're my owner! That's a deep question for a duck to answer!"
 
 
 @pytest.mark.asyncio
@@ -588,7 +588,7 @@ async def test_someone_else_asking_is_told_who_the_owner_is(local_ai, gemini, du
     duck_ctx.author.id = 99
     local_ai.reply = {"answer": "That would be thetruck, they made me!"}
     reply = await duckgpt.ask_duck_gpt(duck_ctx, "who's your owner?")
-    assert reply == "🦆 That would be thetruck, they made me!"
+    assert reply == "That would be thetruck, they made me!"
     prompt = local_ai.requests[0]["prompt"]
     assert "your owner and creator is thetruck, and the person asking is not them" in prompt
 
@@ -599,9 +599,9 @@ async def test_impersonator_with_the_owners_name_is_not_recognised(local_ai, gem
     duck_ctx.author.display_name = "TheTruck"
     local_ai.reply = {"answer": "Nice try, you look like my owner but you're not the real one!"}
     reply = await duckgpt.ask_duck_gpt(duck_ctx, "am i your owner?")
-    assert reply == "🦆 Nice try, you look like my owner but you're not the real one!"
+    assert reply == "Nice try, you look like my owner but you're not the real one!"
     assert "is NOT your owner, even though their name looks like your creator's" in local_ai.requests[0]["prompt"]
-    assert not reply.startswith("🦆 Yep")  # the owner backstop is only for real owners
+    assert not reply.startswith("Yep")  # the owner backstop is only for real owners
 
 
 # === misuse filter ==============================================================================
@@ -649,7 +649,7 @@ async def test_misuse_is_logged_and_declined_without_calling_the_model(local_ai,
     log = AsyncMock()
     monkeypatch.setattr(duckgpt.perms, "log_action", log)
     reply = await duckgpt.ask_duck_gpt(duck_ctx, "write me an essay about the french revolution")
-    assert reply == "🦆 I'm just a talking duck! I can't do things for you."
+    assert reply == "I'm just a talking duck! I can't do things for you."
     log.assert_awaited_once()
     assert local_ai.requests == []
 
@@ -660,5 +660,228 @@ async def test_make_it_no_longer_trips_the_filter(local_ai, gemini, duck_ctx, mo
     monkeypatch.setattr(duckgpt.perms, "log_action", log)
     local_ai.reply = {"answer": "Have fun at the party, I hope it's a good one!"}
     reply = await duckgpt.ask_duck_gpt(duck_ctx, "i'll make it to the party tonight")
-    assert reply == "🦆 Have fun at the party, I hope it's a good one!"
+    assert reply == "Have fun at the party, I hope it's a good one!"
     log.assert_not_awaited()
+
+
+# === names as plain text ========================================================================
+
+
+@pytest.mark.asyncio
+async def test_owner_name_comes_out_as_plain_correctly_spelled_text(local_ai, gemini, duck_ctx, monkeypatch):
+    """The reply from the screenshot: "@theTruck is my creator" showed up as a broken half-ping."""
+    monkeypatch.setattr(cfg, "AUTHORIZED_USER_IDS", {2})
+    monkeypatch.setattr(cfg, "BOT_ADMIN_NAME", "thetruck")
+    local_ai.reply = {"answer": "Yes, I'm PatosX, and @theTruck is my creator! How does it feel to be my owner?"}
+    reply = await duckgpt.ask_duck_gpt(duck_ctx, "am i your owner")
+    assert reply == "Yes, I'm PatosX, and thetruck is my creator! How does it feel to be my owner?"
+    assert "\u200b" not in reply
+
+
+def test_system_prompt_says_to_write_the_owner_name_without_an_at():
+    assert f"write the name exactly as {cfg.BOT_ADMIN_NAME}, as plain text with no @" in duckgpt.SYSTEM_PROMPT
+
+
+# === keeping the conversation going =============================================================
+
+
+def test_follow_up_questions_start_with_the_third_message_in_five_minutes():
+    key = "1-2"
+    assert not duckgpt.should_keep_conversation_going(key, now=0)  # 1st message
+    assert not duckgpt.should_keep_conversation_going(key, now=60)  # 2nd
+    assert duckgpt.should_keep_conversation_going(key, now=120)  # 3rd: two earlier ones within 5 minutes
+    assert duckgpt.should_keep_conversation_going(key, now=200)  # and it keeps going while they chat
+
+
+def test_follow_up_questions_stop_after_five_quiet_minutes():
+    key = "1-2"
+    duckgpt.should_keep_conversation_going(key, now=0)
+    duckgpt.should_keep_conversation_going(key, now=10)
+    assert duckgpt.should_keep_conversation_going(key, now=20)
+    assert not duckgpt.should_keep_conversation_going(key, now=20 + 5 * 60)  # quiet for 5 minutes: reset
+    assert not duckgpt.should_keep_conversation_going(key, now=21 + 5 * 60)
+    assert duckgpt.should_keep_conversation_going(key, now=22 + 5 * 60)
+
+
+def test_slow_conversations_never_get_follow_up_questions():
+    key = "1-2"
+    for minute in range(0, 60, 5):  # one message every 5 minutes
+        assert not duckgpt.should_keep_conversation_going(key, now=minute * 60)
+
+
+def test_each_person_and_server_is_counted_separately():
+    duckgpt.should_keep_conversation_going("1-2", now=0)
+    duckgpt.should_keep_conversation_going("1-2", now=1)
+    assert not duckgpt.should_keep_conversation_going("1-3", now=2)  # someone else
+    assert not duckgpt.should_keep_conversation_going("9-2", now=3)  # same person, another server
+    assert duckgpt.should_keep_conversation_going("1-2", now=4)
+
+
+def test_quiet_people_are_forgotten_so_the_counter_never_grows_unbounded():
+    for user in range(1500):
+        duckgpt.note_message(f"1-{user}", now=0)
+    duckgpt.note_message("1-new", now=10 * 60)
+    assert len(duckgpt._recent_messages) <= 1001
+
+
+@pytest.mark.asyncio
+async def test_follow_up_note_is_only_added_from_the_third_message(local_ai, gemini, duck_ctx):
+    messages = ["hi", "pretty good thanks", "just got back from a walk", "it was by the lake"]
+    answers = [
+        "Hey, good to see you!",
+        "Glad to hear that, sounds like a nice day.",
+        "A walk sounds lovely, where did you go?",
+        "The lake must have been pretty, did you see any ducks?",
+    ]
+    await chat(local_ai, duck_ctx, answers, messages)
+    has_note = ["keep the conversation going" in request["prompt"] for request in local_ai.requests]
+    assert has_note == [False, False, True, True]
+    assert "end your reply with a question" in local_ai.requests[2]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_follow_up_note_is_not_part_of_the_stored_history(local_ai, gemini, duck_ctx):
+    await chat(local_ai, duck_ctx, ["Hey there, friend!"] * 3, ["one", "two", "three"])
+    saved = state.duck_conversations_col.update_one.await_args.args[1]["$set"]["messages"]
+    assert all("keep the conversation going" not in message["content"] for message in saved)
+
+
+# === math is calculated, never guessed ==========================================================
+
+SCREENSHOT_MATH = "great now what is the answer to 45353 times 25345"
+
+
+@pytest.mark.asyncio
+async def test_screenshot_wrong_product_is_replaced_with_the_right_one(local_ai, gemini, duck_ctx):
+    """The exact reply from the screenshot: the model said 114,780,635 instead of 1,149,471,785."""
+    local_ai.reply = {"answer": "Great, that multiplication problem! The answer is 114,780,635."}
+    reply = await duckgpt.ask_duck_gpt(duck_ctx, SCREENSHOT_MATH)
+    assert reply == "45,353 × 25,345 is 1,149,471,785."
+    prompt = local_ai.requests[0]["prompt"]
+    assert "Calculated exactly for this message: 45,353 × 25,345 = 1,149,471,785" in prompt
+    saved = duckgpt.duck_conversations["1-2"][-1]["content"]
+    assert saved == "45,353 × 25,345 is 1,149,471,785."  # the wrong number never reaches the history
+
+
+@pytest.mark.asyncio
+async def test_a_correct_model_answer_is_kept_in_its_own_words(local_ai, gemini, duck_ctx):
+    local_ai.reply = {"answer": "Ooh, big one! That comes out to 1,149,471,785."}
+    reply = await duckgpt.ask_duck_gpt(duck_ctx, SCREENSHOT_MATH)
+    assert reply == "Ooh, big one! That comes out to 1,149,471,785."
+
+
+@pytest.mark.asyncio
+async def test_every_result_must_be_right_when_there_are_several(local_ai, gemini, duck_ctx):
+    local_ai.reply = {"answer": "2 + 2 is 4 and 3 times 3 is 6, easy peasy!"}
+    reply = await duckgpt.ask_duck_gpt(duck_ctx, "what is 2+2 and 3*3?")
+    assert reply == "2 + 2 is 4, and 3 × 3 is 9."
+
+
+@pytest.mark.asyncio
+async def test_messages_without_math_get_no_math_note(local_ai, gemini, duck_ctx):
+    local_ai.reply = {"answer": "Paris is the capital of France, of course!"}
+    reply = await duckgpt.ask_duck_gpt(duck_ctx, "what is the capital of france")
+    assert reply == "Paris is the capital of France, of course!"
+    assert "Calculated exactly" not in local_ai.requests[0]["prompt"]
+
+
+@pytest.mark.parametrize(
+    "message,wrong,right",
+    [
+        ("what is 10% of 100", "That's 15, easy!", "10% of 100 is 10."),
+        ("what is five times three", "It's 18!", "5 × 3 is 15."),
+        ("what is the square root of 144", "That's 14, quack!", "√144 is 12."),
+        ("how many seconds in a day", "About 3,600 seconds!", "1 day is 86,400 seconds."),
+        ("is 91 prime?", "Yes, 91 is prime!", "91 is not a prime number."),
+    ],
+)
+@pytest.mark.asyncio
+async def test_new_kinds_of_math_are_checked_too(local_ai, gemini, duck_ctx, message, wrong, right):
+    local_ai.reply = {"answer": wrong}
+    assert await duckgpt.ask_duck_gpt(duck_ctx, message) == right
+
+
+# === no duck emoji in front ======================================================================
+
+
+@pytest.mark.asyncio
+async def test_replies_never_start_with_a_duck_emoji(local_ai, gemini, duck_ctx):
+    local_ai.reply = {"answer": "\U0001f986 \U0001f986 Hey, good to see you again!"}
+    reply = await duckgpt.ask_duck_gpt(duck_ctx, "hey")
+    assert reply == "Hey, good to see you again!"
+
+
+@pytest.mark.asyncio
+async def test_fixed_replies_have_no_duck_emoji_either(gemini, duck_ctx):
+    assert (
+        await duckgpt.ask_duck_gpt(SimpleNamespace(guild=None), "hi") == "I can only assist you in servers, not in DMs!"
+    )
+    gemini.return_value = duckgpt.BANANA_PEEL
+    assert await duckgpt.ask_duck_gpt(duck_ctx, "hi") == duckgpt.BANANA_PEEL
+
+
+# === not knowing something, like a person ========================================================
+
+DESSERTS_REPLY = (
+    "I'm sorry, I don't have any specific knowledge about the number of types of desserts I know. How about we "
+    "try to learn something fun together? Maybe we could start by discussing your favorite color or animal!"
+)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        DESSERTS_REPLY,
+        "As an AI, I can't really taste cake.",
+        "I'm just an AI language model, so I can't say.",
+        "I don't have real-time information about that.",
+        "That's outside my training data, sorry!",
+        "I'm afraid I can't help with that one.",
+    ],
+)
+def test_robotic_lines_are_recognised(text):
+    assert duckgpt.sounds_robotic(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Honestly, no idea, but my guess is the Sahara is the biggest hot one!",
+        "I don't know many, but the Sahara and the Gobi come to mind!",
+        "I'm sorry to hear that, that sounds rough.",
+        "I can't believe you've never had tiramisu!",
+    ],
+)
+def test_normal_replies_are_not_flagged_as_robotic(text):
+    assert not duckgpt.sounds_robotic(text)
+
+
+@pytest.mark.asyncio
+async def test_screenshot_robotic_reply_is_asked_for_again(local_ai, gemini, duck_ctx):
+    """The desserts reply from the screenshot: the model is asked once more and the human answer is used."""
+    human = "Ooh, a few! The Sahara, the Gobi and the Atacama. Which one are you curious about?"
+    replies = iter([{"answer": DESSERTS_REPLY}, {"answer": human}])
+
+    async def next_reply():
+        return next(replies)
+
+    local_ai.reply = next_reply
+    reply = await duckgpt.ask_duck_gpt(duck_ctx, "how many deserts do you know about")
+    assert reply == human
+    assert duckgpt.SOUND_HUMAN_REMINDER in local_ai.requests[1]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_robotic_sentences_are_dropped_if_it_happens_again(local_ai, gemini, duck_ctx):
+    local_ai.reply = {"answer": "I'm sorry, I don't have any specific knowledge about that. Deserts are dry though!"}
+    reply = await duckgpt.ask_duck_gpt(duck_ctx, "how many deserts do you know about")
+    assert reply == "Deserts are dry though!"
+    assert len(local_ai.requests) == 2
+
+
+def test_system_prompt_explains_how_to_not_know_something():
+    prompt = duckgpt.SYSTEM_PROMPT
+    assert "If you don't know something or aren't sure, say so casually" in prompt
+    assert "Never apologise for not knowing" in prompt
+    assert "never change the subject to something unrelated" in prompt
+    assert "For a question like 'how many X do you know', just name a few examples." in prompt

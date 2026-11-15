@@ -62,6 +62,7 @@ def no_local_ai(monkeypatch):
 
     monkeypatch.setattr(cfg, "LOCAL_AI_ENABLED", False)
     monkeypatch.setattr(duckgpt, "_local_ai_skip_until", 0.0)
+    monkeypatch.setattr(duckgpt, "_recent_messages", {})  # each test starts a fresh conversation
 
 
 @pytest.fixture

@@ -105,7 +105,43 @@ case the model is told the verified answer for that one message: whoever is in `
 is confirmed as the owner, and anyone else, including someone who sets their name to look like the
 owner, is told who the real owner is. Requests for the duck to do someone's work ("do my homework",
 "write me an essay", "draw me a duck") are declined and logged, but ordinary phrases like "make it" or
-"can you code?" are not flagged. These patterns are in `cogs/duckgpt.py`. DuckGPT remembers the recent
+"can you code?" are not flagged. These patterns are in `cogs/duckgpt.py`.
+
+Once someone is clearly chatting, the duck keeps the conversation going: from their third message within
+5 minutes, it ends replies with a question or something else that invites them to say more. A single
+"hi" or a one-off question doesn't trigger this, and it stops after 5 quiet minutes. Change it with
+`ENGAGE_AFTER_MESSAGES` and `ENGAGE_WINDOW_SECONDS` in `cogs/duckgpt.py`.
+
+Math is never left to the model, since language models guess digits instead of calculating. When a
+message asks for math, the bot calculates it itself (`core/mathHelperFuncs.py`) and gives the model the
+exact result. If the reply still has a wrong number, it is replaced with the calculated answer.
+Numbers can be digits or words ("45,353", "two thousand and five"), and it understands:
+
+- arithmetic: `+ - × ÷ %`, "times", "divided by", "mod", powers ("^", "squared", "to the power of"),
+  brackets, and fractions of a number ("half of 50", "two thirds of 90", "double 21")
+- square, cube and nth roots (also `√` `∛`), factorials (`5!`), absolute value, rounding
+  ("round 3.14159 to 2 decimal places", "to the nearest hundred"), log / ln / log base n, and
+  sin / cos / tan in degrees
+- lists: average, median, sum, product, largest, smallest, GCD and LCM ("lcm of 4, 6 and 10")
+- percentages: "10% of 100", "25 is what percent of 200", "increase 50 by 10%", "80 minus 20%",
+  "20% off $80", "a 15% tip on 60", "percent change from 50 to 75"
+- yes/no questions: "is 97 prime", "is 12 even", "is 91 divisible by 7"
+- unit conversions for length, weight, volume, time, speed and temperature ("5 km to miles",
+  "100 f in c", "how many seconds in a day")
+
+The calculator only accepts numbers, operators and its own list of functions, and never uses `eval`.
+It refuses huge powers, factorials and results. Math is only picked up when a message asks for a result
+("what is…", "how many…", "is 97 prime", "convert…") or is nothing but the math, so dates, phone
+numbers, scores and percentages mentioned in normal chat are left alone.
+
+When the duck doesn't know something, it says so the way a person would ("honestly, no idea, but…")
+instead of "I'm sorry, I don't have any specific knowledge…", and it doesn't jump to an unrelated topic.
+If a reply still contains a stock chatbot line like that or "as an AI", DuckGPT asks the model once
+more, and drops those sentences if they come back.
+
+Names in replies are always plain text. If the model writes `@someone`, the `@` is dropped so it reads
+as a name instead of a broken ping, and the owner's name is always spelled exactly as `BOT_ADMIN_NAME`.
+Replies are also sent with every mention disabled, so DuckGPT can never ping anyone. DuckGPT remembers the recent
 conversation per person and server, dropping the oldest messages once it gets long. The personality
 lives in `SYSTEM_PROMPT` in `cogs/duckgpt.py`, so edit that to change how the duck talks.
 
@@ -171,6 +207,7 @@ core/                       Shared services. No Discord commands live here.
   permsHelperFuncs.py       staff/permission checks, blacklist & maintenance barriers, global bot checks
   economyHelperFuncs.py     wallet/bank/inventory helpers, amount & duration parsing, monthly rewards
   xpHelperFuncs.py          xp_earn decorator, on_command_completion body, badge definitions/awarding
+  mathHelperFuncs.py        DuckGPT's exact math: finds the math in a message and calculates it safely
   errors.py                 error unwrapping, global error-handler bodies, send_hybrid_error/is_prefix
 cogs/                       One file per feature domain (see the table below)
   _base_cog.py              Copy-paste template for a new cog; skipped by the loader
@@ -232,6 +269,7 @@ feature domain rather than a file-size bucket.
 | `permsHelperFuncs.py` | `staff_only`, `staffperm`/`check_staff_perm`, `is_staff_user`, `is_blacklisted`, `blacklist_barrier`, maintenance mode checks, the three global checks (`check_disabled` resolves command categories via `command_category`), `check_channel`, `check_target_permission`, `has_staff_role`, `log_action` (posts to the `log_channel` saved by `.configure`; accepts `ctx=None` plus `guild=` for automated actions such as mute expiry). |
 | `economyHelperFuncs.py` | `get_user`, inventory/tool/consumable normalisation, `get_balance`/`add_balance`/`subtract_balance`, `parse_amount`/`parse_time`/`add_suffix`, investment math, and the monthly-rewards helpers (`get_monthly_rewards_doc`, `increment_monthly_goal`, `check_and_award_monthly_rewards`). |
 | `xpHelperFuncs.py` | The `xp_earn` decorator (works on plain functions and on Cog methods), `on_command_completion`, `BADGES`, badge role management and `check_and_award_badges`. |
+| `mathHelperFuncs.py` | DuckGPT's exact math: `find_math` (arithmetic, word numbers, roots, logs, trig, lists, percentages, yes/no number questions, unit conversions), `math_note` for the prompt and `correct_math` to replace wrong answers. Pure functions, no Discord or database access. |
 | `errors.py` | `unwrap_command_error`, `is_discord_service_unavailable_error`, command-syntax / did-you-mean helpers, `handle_command_error` / `handle_app_command_error` (the old global handler bodies, taking `bot` as a parameter), `send_hybrid_error`, `is_prefix`. |
 
 Import order inside `core/` is a strict DAG and is enforced by `tests/test_cog_loading.py`:
