@@ -37,7 +37,7 @@ from discord.ext import commands, tasks
 from core import config as cfg
 from core import permsHelperFuncs as perms
 from core import state
-from core.mathHelperFuncs import correct_math, find_math, math_note
+from core.mathHelperFuncs import UNREADABLE_MATH_NOTE, correct_math, find_math, looks_like_math, math_note
 
 # Google Gemini AI SDK. The newer google.genai package is preferred.
 # If it is not installed the bot falls back to the older google.generativeai package,
@@ -77,12 +77,16 @@ SYSTEM_PROMPT = (
     "Don't greet them again in the middle of a conversation, don't introduce yourself unless asked, "
     "and don't repeat things you've already said. "
     "Keep replies short, usually one to three sentences, and answer questions accurately and directly. "
+    "Be honest: only say things you're confident are true. Never make up facts, numbers, dates, names, quotes, "
+    "links or statistics, and never invent memories, games, plans, scores or anything the person didn't "
+    "actually say; only refer back to things that are really in the conversation above. You can't browse the "
+    "internet, see images or check the news, so don't pretend to. "
     "If you don't know something or aren't sure, say so casually the way a person would, like 'honestly, no "
-    "idea' or 'not totally sure, but...', and then share what you do know, make a reasonable guess and say it's "
-    "a guess, or ask them about it. Never apologise for not knowing, never talk about being an AI or about "
-    "your knowledge or training, and never change the subject to something unrelated. If a question could mean "
-    "more than one thing or has a likely typo, go with the most likely meaning or ask which one they mean. "
-    "For a question like 'how many X do you know', just name a few examples. "
+    "idea' or 'not totally sure', and then share only what you do know for sure, or ask them about it. "
+    "Never apologise for not knowing, never talk about being an AI or about your knowledge or training, and "
+    "never change the subject to something unrelated. If a question could mean more than one thing or has a "
+    "likely typo, go with the most likely meaning or ask which one they mean. "
+    "For a question like 'how many X do you know', just name a few examples you're sure about. "
     "Every reply must be at least one complete sentence: never answer with just a single word, a bare number "
     "or a plain yes or no. "
     "Being a duck is part of your charm, so an occasional quack or duck pun is fine when it fits, "
@@ -128,8 +132,9 @@ ENGAGE_WINDOW_SECONDS = 5 * 60
 ENGAGE_NOTE = (
     "\nYou two have been chatting for a bit, so keep the conversation going: end your reply with a question "
     "or a comment that invites them to tell you more, about whatever you're talking about right now, so they "
-    "want to reply. Stay on the current topic, and keep it natural and specific, never a generic 'anything "
-    "else?' or a random new subject like their favourite color."
+    "want to reply. Ask about something they actually said and stay on the current topic. Keep it natural and "
+    "specific: never a generic 'anything else?', a random new subject like their favourite color, or anything "
+    "made up like a game or plan you two never had."
 )
 
 # conversation key -> time.monotonic() of this person's recent messages to the duck
@@ -553,9 +558,10 @@ async def ask_backends(messages) -> str:
 # ============================================================
 #
 # Small models fall back on stock chatbot lines when they don't know something ("I'm sorry, I don't have
-# any specific knowledge about..."). The system prompt explains how a person would say it instead; if a
-# reply still contains one of these lines, the model is asked again, and as a last resort the robotic
-# sentences are dropped from the reply.
+# any specific knowledge about..."), or try to steer away to a made up topic ("how about we switch gears
+# and talk about your favorite book or movie?"). The system prompt explains what to do instead; if a reply
+# still contains one of these lines, the model is asked again, and as a last resort those sentences are
+# dropped from the reply.
 
 _ROBOTIC_RE = re.compile(
     r"\bas an? (?:ai|artificial intelligence|language model|chatbot|virtual assistant|bot)\b"
@@ -563,13 +569,18 @@ _ROBOTIC_RE = re.compile(
     r"|\bI (?:don'?t|do not|can'?t|cannot) (?:have|access|provide) (?:any |much )?"
     r"(?:specific |personal |real[- ]time |up[- ]to[- ]date |detailed )?(?:knowledge|information|data|opinions?)\b"
     r"|\bmy (?:knowledge|training)(?: data| cutoff| base)?\b"
-    r"|\bI(?:'m| am) (?:sorry|afraid),? (?:but )?I (?:don'?t|do not|can'?t|cannot)\b",
+    r"|\bI(?:'m| am) (?:sorry|afraid),? (?:but )?I (?:don'?t|do not|can'?t|cannot)\b"
+    # steering the chat somewhere else
+    r"|\bswitch(?:ing)? gears\b|\bchange (?:the )?(?:subject|topics?)\b|\btalk about something (?:else|different)\b"
+    r"|\b(?:talk|chat|discuss(?:ing)?) about your favou?rite\b|\bdiscussing your favou?rite\b"
+    r"|\blearn something (?:fun|new) together\b",
     re.IGNORECASE,
 )
 SOUND_HUMAN_REMINDER = (
     "Your last reply sounded like a chatbot. Reply again to the same message like a person would: no "
-    "apologising for not knowing, nothing about being an AI or your knowledge, and no change of subject. If "
-    "you're not sure, say so casually, then share what you do know or make a guess."
+    "apologising for not knowing, nothing about being an AI or your knowledge, and don't change the subject "
+    "or suggest a new topic. Stick to what they actually said. If you're not sure about something, say so "
+    "casually and share only what you do know for sure, or ask them about it."
 )
 
 
@@ -674,18 +685,22 @@ async def generate_gemini_response(messages):
 # Conversation history
 # ============================================================
 
-# Stored histories carry this version. Older ones used a different message format ("<name> said: ...")
-# and contain the old canned replies, which would teach the model the robotic style again, so a history
-# with another version is ignored and the conversation simply starts fresh.
-HISTORY_VERSION = 2
-# Rough budget for the remembered conversation (about 4 tokens per word). When it is exceeded the
-# oldest messages are dropped first, so the duck keeps the recent context instead of forgetting it all.
+# Stored histories carry this version, and a history with another version is ignored so the conversation
+# simply starts fresh. Bump it whenever old conversations would steer the model wrong: version 2 dropped the
+# old "<name> said: ..." format and canned replies, version 3 dropped histories full of made up replies
+# (invented games, off-topic suggestions, guessed math) that a model would keep building on.
+HISTORY_VERSION = 3
+# Rough budget for the remembered conversation (about 4 tokens per word), and a cap on how many messages
+# are remembered. When either is exceeded the oldest messages are dropped first. Keeping it short also
+# keeps the model grounded: the longer the history, the more old mistakes it can repeat or build on.
 HISTORY_TOKEN_BUDGET = 1500
+HISTORY_MAX_MESSAGES = 12
 
 
 def trim_history(history: list[dict]) -> list[dict]:
-    """Drop the oldest messages until the history fits HISTORY_TOKEN_BUDGET, always keeping the newest."""
-    history = list(history)
+    """Drop the oldest messages until the history fits HISTORY_MAX_MESSAGES and HISTORY_TOKEN_BUDGET,
+    always keeping the newest."""
+    history = list(history)[-HISTORY_MAX_MESSAGES:]
     while len(history) > 1 and sum(len(m["content"].split()) * 4 for m in history) > HISTORY_TOKEN_BUDGET:
         history.pop(0)
     return history
@@ -738,6 +753,9 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
     math_problems = find_math(prompt)
     if math_problems:
         system_prompt += math_note(math_problems)
+    elif looks_like_math(prompt):
+        # The calculator couldn't read it: the model mustn't guess a number instead
+        system_prompt += UNREADABLE_MATH_NOTE
     if keep_going:
         system_prompt += ENGAGE_NOTE
     system = {"role": "system", "content": system_prompt}

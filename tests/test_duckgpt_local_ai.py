@@ -884,4 +884,83 @@ def test_system_prompt_explains_how_to_not_know_something():
     assert "If you don't know something or aren't sure, say so casually" in prompt
     assert "Never apologise for not knowing" in prompt
     assert "never change the subject to something unrelated" in prompt
-    assert "For a question like 'how many X do you know', just name a few examples." in prompt
+    assert "For a question like 'how many X do you know', just name a few examples you're sure about." in prompt
+    assert "make a reasonable guess" not in prompt  # guesses are where made up facts come from
+
+
+# === keeping the model grounded (less hallucination) =============================================
+
+
+def test_system_prompt_forbids_making_things_up():
+    prompt = duckgpt.SYSTEM_PROMPT
+    assert "only say things you're confident are true" in prompt
+    assert "Never make up facts, numbers, dates, names, quotes, links or statistics" in prompt
+    assert "never invent memories, games, plans, scores or anything the person didn't actually say" in prompt
+    assert "only refer back to things that are really in the conversation above" in prompt
+    assert "You can't browse the internet, see images or check the news" in prompt
+
+
+def test_follow_up_questions_must_be_about_what_they_said():
+    assert "Ask about something they actually said" in duckgpt.ENGAGE_NOTE
+    assert "anything made up like a game or plan you two never had" in duckgpt.ENGAGE_NOTE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "How about we switch gears and talk about your favorite book or movie?",
+        "Maybe we could start by discussing your favorite color or animal!",
+        "You're right, it's fun to learn something fun together.",
+        "Let's change the subject!",
+        "Wanna talk about something else?",
+    ],
+)
+def test_steering_to_a_made_up_topic_is_caught(text):
+    assert duckgpt.sounds_robotic(text)
+
+
+@pytest.mark.asyncio
+async def test_screenshot_off_topic_reply_is_asked_for_again(local_ai, gemini, duck_ctx):
+    """From the screenshot: a vegetables / favourite movie tangent in reply to a math question."""
+    tangent = (
+        "Sure, let's see how many types of vegetables I know! You're right, it's fun to learn together. "
+        "How about we switch gears and talk about your favorite book or movie?"
+    )
+    on_topic = "Hmm, I'm not sure how to read that one. Could you write it with symbols like + or -?"
+    replies = iter([{"answer": tangent}, {"answer": on_topic}])
+
+    async def next_reply():
+        return next(replies)
+
+    local_ai.reply = next_reply
+    reply = await duckgpt.ask_duck_gpt(duck_ctx, "what is 3 groups of 4 plus some")
+    assert reply == on_topic
+    assert "Don't guess or make up a number" in local_ai.requests[0]["prompt"]
+    assert "don't change the subject or suggest a new topic" in local_ai.requests[1]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_unreadable_math_gets_a_no_guessing_note(local_ai, gemini, duck_ctx):
+    local_ai.reply = {"answer": "Hmm, not sure what you mean there, could you write it with + or -?"}
+    await duckgpt.ask_duck_gpt(duck_ctx, "what is 3 groups of 4 plus some")
+    prompt = local_ai.requests[0]["prompt"]
+    assert "couldn't be calculated exactly" in prompt
+    assert "Calculated exactly for this message" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_screenshot_reversed_subtraction_is_calculated(local_ai, gemini, duck_ctx):
+    """From the screenshot: these got a reply about programming languages instead of an answer."""
+    local_ai.reply = {"answer": "Thanks for sharing those numbers! What programming languages do you like?"}
+    assert await duckgpt.ask_duck_gpt(duck_ctx, "what is 2342 taken away from 25347") == "25,347 - 2,342 is 23,005."
+    assert await duckgpt.ask_duck_gpt(duck_ctx, "what is 32674 removed from 784359") == "784,359 - 32,674 is 751,685."
+
+
+def test_history_is_capped_so_old_mistakes_fade_out():
+    history = [{"role": "user", "content": f"short message {i}"} for i in range(30)]
+    trimmed = duckgpt.trim_history(history)
+    assert trimmed == history[-duckgpt.HISTORY_MAX_MESSAGES :]
+
+
+def test_old_histories_with_made_up_replies_are_dropped():
+    assert duckgpt.HISTORY_VERSION >= 3  # version 2 histories hold the hallucinated replies from before

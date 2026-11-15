@@ -117,22 +117,36 @@ message asks for math, the bot calculates it itself (`core/mathHelperFuncs.py`) 
 exact result. If the reply still has a wrong number, it is replaced with the calculated answer.
 Numbers can be digits or words ("45,353", "two thousand and five"), and it understands:
 
-- arithmetic: `+ - × ÷ %`, "times", "divided by", "mod", powers ("^", "squared", "to the power of"),
-  brackets, and fractions of a number ("half of 50", "two thirds of 90", "double 21")
+- arithmetic: `+ - × ÷ %`, "times", "divided by", "mod", powers ("^", "squared", "to the power of",
+  "to the 10th"), brackets, and fractions of a number ("half of 50", "two thirds of 90", "double 21")
+- math said in words, including reversed order: "2342 taken away from 25347", "subtract 7 from 50",
+  "5 less than 20", "add 5 to 20", "multiply 6 by 7", "how many times does 7 go into 56",
+  "12 apples split between 4 friends", "the difference between 50 and 80", "the remainder when 17 is
+  divided by 5", "the square of 12", "the reciprocal of 4"
 - square, cube and nth roots (also `√` `∛`), factorials (`5!`), absolute value, rounding
   ("round 3.14159 to 2 decimal places", "to the nearest hundred"), log / ln / log base n, and
   sin / cos / tan in degrees
 - lists: average, median, sum, product, largest, smallest, GCD and LCM ("lcm of 4, 6 and 10")
 - percentages: "10% of 100", "25 is what percent of 200", "increase 50 by 10%", "80 minus 20%",
   "20% off $80", "a 15% tip on 60", "percent change from 50 to 75"
-- yes/no questions: "is 97 prime", "is 12 even", "is 91 divisible by 7"
+- yes/no questions and comparisons: "is 97 prime", "is 12 even", "is 91 divisible by 7",
+  "is 5 bigger than 3", "which is bigger, 7 or 9"
 - unit conversions for length, weight, volume, time, speed and temperature ("5 km to miles",
   "100 f in c", "how many seconds in a day")
 
 The calculator only accepts numbers, operators and its own list of functions, and never uses `eval`.
 It refuses huge powers, factorials and results. Math is only picked up when a message asks for a result
 ("what is…", "how many…", "is 97 prime", "convert…") or is nothing but the math, so dates, phone
-numbers, scores and percentages mentioned in normal chat are left alone.
+numbers, scores and percentages mentioned in normal chat are left alone. If a message clearly asks for
+math that the calculator can't read, the model is told not to guess a number and to ask the person to
+write it with symbols instead.
+
+DuckGPT is built to keep the model from making things up. The prompt tells it to say only what it's
+confident is true; never to invent facts, numbers, dates, names, quotes, links, statistics, memories,
+games or plans; to refer only to what's really in the conversation; and to admit when it doesn't know.
+Replies that steer to a made-up topic ("let's switch gears and talk about your favorite movie") are
+asked for again and dropped if they come back. Only the most recent 12 messages are remembered, so old
+mistakes fade out instead of being built on.
 
 When the duck doesn't know something, it says so the way a person would ("honestly, no idea, but…")
 instead of "I'm sorry, I don't have any specific knowledge…", and it doesn't jump to an unrelated topic.

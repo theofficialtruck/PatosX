@@ -268,6 +268,7 @@ _FUNCTIONS = {
     "product": (2, 50, lambda *v: math.prod(v)),
     "max": (2, 50, max),
     "min": (2, 50, min),
+    "diff": (2, 2, lambda a, b: abs(a - b)),
 }
 _BINARY_OPERATORS = {
     ast.Add: operator.add,
@@ -394,6 +395,8 @@ def _render(node, minimum: int = 0) -> str:
             text = f"log base {_render(args[1])} of {_render(args[0])}"
         elif name in ("sin", "cos", "tan"):
             text = f"{name}({_render(args[0])}°)"
+        elif name == "diff":
+            text = f"the difference between {_render(args[0])} and {_render(args[1])}"
         else:
             items = [_render(a) for a in args]
             text = f"{_LIST_NAMES[name]} {', '.join(items[:-1])} and {items[-1]}"
@@ -460,6 +463,56 @@ _FUNCTION_PHRASES = (
 _FRACTION_OF_RE = re.compile(
     rf"\b(?:(a|an|\d+)\s+)?({'|'.join(_FRACTIONS)})\s+of\s+(?:a\s+|an\s+)?{_OPERAND}", re.IGNORECASE
 )
+
+# A number, something in brackets, or a function call the rules above already wrote ("sqrt(16)")
+_TERM = r"((?:[a-z]+\d*)?\([^()]*\)|-?\d+(?:\.\d+)?)"
+_ORDINAL_WORDS = {"second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8}
+_ORDINAL_WORDS |= {"ninth": 9, "tenth": 10, "eleventh": 11, "twelfth": 12}
+_POWER_ORDINAL = r"(\d+)(?:st|nd|rd|th)|(" + "|".join(_ORDINAL_WORDS) + ")"
+
+
+def _to_the_power(match: re.Match) -> str:
+    """ "2 to the 10th power" / "3 to the fourth" -> (2 ** 10) / (3 ** 4)"""
+    exponent = match.group(2) or _ORDINAL_WORDS[match.group(3).lower()]
+    return f"({match.group(1)} ** {exponent})"
+
+
+# Math said in words, often with the numbers in reverse order ("2342 taken away from 25347" is
+# 25347 - 2342). Rewritten to plain arithmetic, with brackets so the order of operations stays right.
+_WORD_PHRASES = (
+    (rf"{_TERM}\s+(?:taken\s+away|taken|removed|subtracted|deducted|minused)\s+from\s+{_TERM}", r"(\2 - \1)"),
+    (rf"\b(?:subtract|deduct|remove|minus)\s+{_TERM}\s+from\s+{_TERM}", r"(\2 - \1)"),
+    (rf"\btake\s+(?:away\s+)?{_TERM}\s+(?:away\s+)?from\s+{_TERM}", r"(\2 - \1)"),
+    (rf"{_TERM}\s+(?:less|fewer)\s+than\s+{_TERM}", r"(\2 - \1)"),
+    (rf"{_TERM}\s+more\s+than\s+{_TERM}", r"(\2 + \1)"),
+    (rf"\badd\s+{_TERM}\s+(?:to|and|plus|with)\s+{_TERM}", r"(\1 + \2)"),
+    (rf"{_TERM}\s+and\s+{_TERM}\s+(?:added|summed)(?:\s+together|\s+up)?\b", r"(\1 + \2)"),
+    (rf"{_TERM}\s+and\s+{_TERM}\s+multiplied(?:\s+together)?\b", r"(\1 * \2)"),
+    (rf"\bmultiply\s+{_TERM}\s+(?:by|and|with|times)\s+{_TERM}", r"(\1 * \2)"),
+    (rf"\bdivide\s+{_TERM}\s+(?:by|over)\s+{_TERM}", r"(\1 / \2)"),
+    (rf"\bdivide\s+{_TERM}\s+into\s+{_TERM}", r"(\2 / \1)"),  # "divide 4 into 20" is 20 / 4
+    (rf"\bhow\s+many\s+times\s+(?:does|do|will|can|would)\s+{_TERM}\s+(?:go|fit)\s+into\s+{_TERM}", r"(\2 / \1)"),
+    (rf"{_TERM}\s+(?:goes|go|fits|fit)\s+into\s+{_TERM}(?:\s+how\s+many\s+times)?", r"(\2 / \1)"),
+    (rf"\b(?:the\s+)?difference\s+(?:between|of)\s+{_TERM}\s+and\s+{_TERM}", r"diff(\1, \2)"),
+    (rf"\b(?:the\s+)?remainder\s+(?:when|of|if|after)\s+{_TERM}\s+(?:is\s+)?divided\s+by\s+{_TERM}", r"(\1 % \2)"),
+    (rf"\b(?:the\s+)?quotient\s+of\s+{_TERM}\s+and\s+{_TERM}", r"(\1 / \2)"),
+    # "12 apples split between 4 friends" / "100 shared equally among 5" (after the remainder rule, so
+    # "the remainder when 17 is divided by 5" stays a remainder; plain "divided by" is an operator below)
+    (
+        (
+            rf"{_TERM}\s+(?:[a-z]+\s+)?(?:(?:split|shared)\s+(?:up\s+)?(?:equally\s+|evenly\s+)?"
+            rf"(?:between|among|amongst|by)|divided\s+(?:up\s+)?(?:equally\s+|evenly\s+)?(?:between|among|amongst))"
+            rf"\s+{_TERM}"
+        ),
+        r"(\1 / \2)",
+    ),
+    (rf"\b(?:the\s+)?square\s+of\s+{_TERM}", r"(\1) ** 2"),
+    (rf"\b(?:the\s+)?cube\s+of\s+{_TERM}", r"(\1) ** 3"),
+    (rf"\b(?:the\s+)?reciprocal\s+of\s+{_TERM}", r"(1 / \1)"),
+    (rf"{_TERM}\s+to\s+the\s+(?:{_POWER_ORDINAL})(?:\s+power)?\b", _to_the_power),
+    (rf"{_TERM}\s+(?:increased|raised)\s+by\s+{_TERM}(?!\s*(?:%|per))", r"(\1 + \2)"),
+    (rf"{_TERM}\s+(?:decreased|reduced|lowered)\s+by\s+{_TERM}(?!\s*(?:%|per))", r"(\1 - \2)"),
+)
 _FACTORIAL_RE = re.compile(r"(?<![\d.])(\d+)\s*!(?!=)")
 # Word and symbol operators, rewritten to Python operators before parsing
 _OPERATORS = (
@@ -479,7 +532,22 @@ _MATH_RUN_RE = re.compile(rf"(?:[\d.+\-*/%(),\s]|(?<![a-z])(?:{_FUNCTION_NAMES})
 # The message asks for a result: "what's", "calculate", "how many", "convert", "is 97 prime", ends with "?"
 _MATH_CUE_RE = re.compile(
     r"\b(?:what(?:'?s|\s+is|\s+are|\s+would)|whats|calculate|compute|work\s+out|how\s+(?:much|many)|answer\s+to|"
-    r"equals?|convert|solve|find|tell\s+me|give\s+me|figure\s+out)\b|^\s*(?:so\s+|and\s+|but\s+|hey\s+)?is\b|=|\?\s*$",
+    r"equals?|convert|solve|find|tell\s+me|give\s+me|figure\s+out)\b|^\s*(?:so\s+|and\s+|but\s+|hey\s+)?(?:is|does)\b|=",
+    re.IGNORECASE,
+)
+# Math words and symbols, for spotting a math question the calculator couldn't read
+_MATH_WORDS_RE = re.compile(
+    r"\b(?:plus|minus|times|multiply|multiplied|multiplication|divide|divided|division|subtract|subtracted|"
+    r"subtraction|add(?:ed)?|sum|product|difference|take|taken|takes|removed|"
+    r"deducted|less|more|percent\w*|squared?|cubed?|root|power|remainder|quotient|average|mean|half|double|triple|"
+    r"split|shared?|each|per|groups?\s+of)\b"
+    r"|\d\s*[-+*/×÷^%x]\s*\d",
+    re.IGNORECASE,
+)
+# A clear request for an answer (unlike the cue above, "is ..." questions don't count here)
+_ASKS_FOR_ANSWER_RE = re.compile(
+    r"\b(?:what(?:'?s|\s+is|\s+are|\s+would)|whats|calculate|compute|work\s+out|how\s+(?:much|many)|answer\s+to|"
+    r"solve|figure\s+out)\b|=",
     re.IGNORECASE,
 )
 
@@ -610,6 +678,44 @@ def _yes_no_problems(text: str) -> tuple[str, list[MathProblem]]:
         rf"\bis\s+{_NUM}\s+(?:evenly\s+)?divisible\s+by\s+{_NUM}", divisible("divisible by"), text, flags=re.IGNORECASE
     )
     text = re.sub(rf"\bis\s+{_NUM}\s+a\s+multiple\s+of\s+{_NUM}", divisible("a multiple of"), text, flags=re.IGNORECASE)
+
+    def compare(wording: str, test):
+        def check(match: re.Match) -> str:
+            # "what is 5 more than 3" is addition, not a yes/no question
+            if re.search(r"\b(?:what|whats|what's|how\s+much)\s*$", match.string[: match.start()], re.IGNORECASE):
+                return match.group()
+            a, b = _number(match.group(1)), _number(match.group(2))
+            found.append(
+                MathProblem(f"{f(a)} is {wording} {f(b)}", test(a, b), negative=f"{f(a)} is not {wording} {f(b)}")
+            )
+            return " "
+
+        return check
+
+    bigger, smaller = r"(?:more|greater|bigger|larger|higher)", r"(?:less|smaller|fewer|lower)"
+    text = re.sub(
+        rf"\bis\s+{_NUM}\s+{bigger}\s+than\s+{_NUM}", compare("greater than", operator.gt), text, flags=re.IGNORECASE
+    )
+    text = re.sub(
+        rf"\bis\s+{_NUM}\s+{smaller}\s+than\s+{_NUM}", compare("less than", operator.lt), text, flags=re.IGNORECASE
+    )
+    text = re.sub(
+        rf"\b(?:is|does)\s+{_NUM}\s+(?:equal(?:s)?(?:\s+to)?|the\s+same\s+as)\s+{_NUM}",
+        compare("equal to", operator.eq),
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    def which(kind: str):
+        def pick(match: re.Match) -> str:
+            a, b = _number(match.group(1)), _number(match.group(2))
+            found.append(MathProblem(f"the {kind} of {f(a)} and {f(b)}", max(a, b) if kind == "bigger" else min(a, b)))
+            return " "
+
+        return pick
+
+    text = re.sub(rf"\bwhich\s+is\s+{bigger}[,:]?\s+{_NUM}\s+or\s+{_NUM}", which("bigger"), text, flags=re.IGNORECASE)
+    text = re.sub(rf"\bwhich\s+is\s+{smaller}[,:]?\s+{_NUM}\s+or\s+{_NUM}", which("smaller"), text, flags=re.IGNORECASE)
     return text, found
 
 
@@ -801,6 +907,8 @@ def find_math(message: str) -> list[MathProblem]:
     for pattern, replacement in _FUNCTION_PHRASES:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     text = _FRACTION_OF_RE.sub(_fraction_of, text)
+    for pattern, replacement in _WORD_PHRASES:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     for pattern, replacement in _OPERATORS:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
 
@@ -823,6 +931,21 @@ def find_math(message: str) -> list[MathProblem]:
 # ============================================================
 # Using the results
 # ============================================================
+
+
+def looks_like_math(message: str) -> bool:
+    """True when a message clearly asks for a calculation (an answer request, two or more numbers and a
+    math word or symbol) even though find_math couldn't read it, so the model can be told not to guess."""
+    text = words_to_numbers(message or "")
+    numbers = re.findall(r"\d+(?:[.,]\d+)*", text)
+    return len(numbers) >= 2 and bool(_ASKS_FOR_ANSWER_RE.search(text)) and bool(_MATH_WORDS_RE.search(text))
+
+
+UNREADABLE_MATH_NOTE = (
+    "\nThis message looks like a math question, but it couldn't be calculated exactly. Don't guess or make up "
+    "a number. Say casually that you're not sure what they mean, and ask them to write it out with symbols "
+    "like + - × ÷. Stay on this topic."
+)
 
 
 def math_note(problems: list[MathProblem]) -> str:

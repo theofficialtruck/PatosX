@@ -149,6 +149,86 @@ def test_math_questions(message, expected):
     assert statements(message) == [expected]
 
 
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        # from the screenshot: these went unanswered before
+        ("what is 2342 taken away from 25347", "25,347 - 2,342 is 23,005"),
+        ("what is 32674 removed from 784359", "784,359 - 32,674 is 751,685"),
+        # other ways of saying it in words
+        ("what is 5 subtracted from 20", "20 - 5 is 15"),
+        ("what is 5 deducted from 20", "20 - 5 is 15"),
+        ("subtract 7 from 50", "50 - 7 is 43"),
+        ("take 3 away from 10", "10 - 3 is 7"),
+        ("what is 5 less than 20", "20 - 5 is 15"),
+        ("what is 5 more than 20", "20 + 5 is 25"),
+        ("add 5 to 20", "5 + 20 is 25"),
+        ("what is 5 and 3 added together", "5 + 3 is 8"),
+        ("what is 6 and 7 multiplied together", "6 × 7 is 42"),
+        ("multiply 6 by 7", "6 × 7 is 42"),
+        ("divide 20 by 4", "20 ÷ 4 is 5"),
+        ("divide 4 into 20", "20 ÷ 4 is 5"),
+        ("how many times does 7 go into 56", "56 ÷ 7 is 8"),
+        ("what is 12 apples split between 4 friends", "12 ÷ 4 is 3"),
+        ("what is 100 shared equally among 5", "100 ÷ 5 is 20"),
+        ("what is the difference between 50 and 80", "the difference between 50 and 80 is 30"),
+        ("what is the remainder when 17 is divided by 5", "17 % 5 is 2"),
+        ("what is the quotient of 20 and 4", "20 ÷ 4 is 5"),
+        ("what is the square of 12", "12^2 is 144"),
+        ("what is the cube of 3", "3^3 is 27"),
+        ("what is the reciprocal of 4", "1 ÷ 4 is 0.25"),
+        ("what is 2 to the 10th power", "2^10 is 1,024"),
+        ("what is 3 to the fourth", "3^4 is 81"),
+        ("what is 50 increased by 7", "50 + 7 is 57"),
+        ("what is 50 decreased by 7", "50 - 7 is 43"),
+        ("subtract the square root of 16 from 20", "20 - √16 is 16"),
+        # comparisons
+        ("is 5 bigger than 3", "5 is greater than 3"),
+        ("is 2 greater than 9?", "2 is not greater than 9"),
+        ("is 3 less than 10", "3 is less than 10"),
+        ("is 4 equal to 4", "4 is equal to 4"),
+        ("which is bigger, 7 or 9", "the bigger of 7 and 9 is 9"),
+        ("which is smaller: 0.5 or 0.25", "the smaller of 0.5 and 0.25 is 0.25"),
+    ],
+)
+def test_math_said_in_words(message, expected):
+    assert statements(message) == [expected]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "we won 3-1?",  # a "?" alone isn't a request for a calculation
+        "i have more than 3 cats",
+        "i want 2 more than you",
+        "i added 5 friends to the group",
+        "i took 2 away from the 5 kids",
+        "is it more than 5 miles away",
+        "she left 2 days ago and came back 3 days later",
+    ],
+)
+def test_wordy_chat_is_not_math(message):
+    assert m.find_math(message) == []
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("what is 3 groups of 4 plus some", True),
+        ("what is 2 + two halves of 6 minus x", True),
+        ("hi", False),
+        ("what is the capital of france", False),
+        ("what is 42", False),
+        ("we won 3-1?", False),
+        ("i have 2 cats and 3 dogs", False),
+        ("what year is it 2024 or 2025", False),
+        ("what is the best number between 1 and 10", False),
+    ],
+)
+def test_looks_like_math(message, expected):
+    assert m.looks_like_math(message) is expected
+
+
 def test_several_questions_in_one_message():
     assert statements("what is 2+2 and 3*3?") == ["2 + 2 is 4", "3 × 3 is 9"]
     assert statements("what is 2+2, 3*3") == ["2 + 2 is 4", "3 × 3 is 9"]
