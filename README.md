@@ -93,8 +93,21 @@ For every message DuckGPT:
    After a local failure DuckGPT goes straight to Gemini for 60 seconds before trying the local model
    again, so a model that is down doesn't slow every reply.
 
-Both backends get exactly the same text: DuckGPT's system prompt (personality and the no-pings rule)
-followed by the conversation, one `Role: content` line per message.
+Both backends get exactly the same text: DuckGPT's system prompt (its personality, the no-pings rule
+and the display name of the person it's talking to), then the recent conversation as `User:` /
+`PatosX:` lines, ending with `PatosX:` so the model writes exactly one reply. If a model writes extra
+turns anyway (for example `... User: can you help me? PatosX: sure`), everything from the first
+invented turn on is cut off before the reply is sent.
+
+Every message is answered by the model; there are no canned replies. The duck only talks about its
+owner when someone asks directly ("am I your owner?", "who made you?", "who's your creator?"). In that
+case the model is told the verified answer for that one message: whoever is in `AUTHORIZED_USER_IDS`
+is confirmed as the owner, and anyone else, including someone who sets their name to look like the
+owner, is told who the real owner is. Requests for the duck to do someone's work ("do my homework",
+"write me an essay", "draw me a duck") are declined and logged, but ordinary phrases like "make it" or
+"can you code?" are not flagged. These patterns are in `cogs/duckgpt.py`. DuckGPT remembers the recent
+conversation per person and server, dropping the oldest messages once it gets long. The personality
+lives in `SYSTEM_PROMPT` in `cogs/duckgpt.py`, so edit that to change how the duck talks.
 
 DuckGPT never sends a one word answer. Every reply must be at least one full sentence: at least 3
 words, ending with `.`, `!`, `?` or `…`. The system prompt asks for this, and if a reply is still too

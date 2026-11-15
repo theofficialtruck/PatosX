@@ -144,20 +144,24 @@ async def test_nickname_that_looks_like_a_ping_is_never_echoed_live(monkeypatch,
 
     reply = await duckgpt.ask_duck_gpt(make_ctx(display_name="@everyone"), "hello there")
 
-    assert "Hello" in reply  # the greeting still names the member
+    assert reply == "🦆 Nice to meet you! Quack!"  # no forced "Hello <name>!" greeting any more
     assert_inert(reply)
 
 
 @pytest.mark.asyncio
-async def test_canned_replies_are_sanitised_too(monkeypatch, duck_env):
+async def test_a_ping_shaped_nickname_is_inert_when_the_model_repeats_it(monkeypatch, duck_env):
+    """The display name reaches the model as background; even if the model echoes it back, it can't ping."""
     ctx = make_ctx(display_name="@here")
-    monkeypatch.setattr(duckgpt, "get_gemini_client", AsyncMock(return_value={"mode": "new"}))
-    monkeypatch.setattr(duckgpt, "gemini_generate_once", lambda client_info, prompt: SimpleNamespace(text="name"))
+    model = AsyncMock(return_value="Your name is @here, as far as I can tell!")
+    monkeypatch.setattr(duckgpt, "generate_gemini_response", model)
 
     reply = await duckgpt.ask_duck_gpt(ctx, "what is my name?")
 
     assert "Your name is" in reply
     assert_inert(reply)
+    speaker_line = model.await_args.args[0][0]["content"].removeprefix(duckgpt.SYSTEM_PROMPT)
+    assert "display name is @\u200bhere" in speaker_line
+    assert_inert(speaker_line)
 
 
 # --- on_message ---------------------------------------------------------------------------------
