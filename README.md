@@ -7,7 +7,7 @@ PatosX is a multipurpose Discord bot built for moderation, economy gameplay, AI-
 
 - Moderation tools for keeping servers organized and safe.
 - Economy + game-style commands (shop, drops, fishing/mining-style activities, etc.).
-- AI-powered chat/commands via Google Gemini (and OpenRouter).
+- AI-powered chat (DuckGPT) via a self-hosted AI model, with Google Gemini as the fallback option (and OpenRouter).
 - Fun and utility commands for everyday server use.
 
 ## Installation
@@ -61,9 +61,8 @@ Required:
 ```env
 DISCORD_TOKEN=
 MONGO_URI=
-TENOR_API_KEY=
+GIPHY_API_KEY=
 OPENROUTER_API_KEY=
-GEMINI_API_KEYS=key1,key2
 ```
 
 Common optional values:
@@ -75,7 +74,142 @@ BEG_DONORS=user1,user2
 QUOTE_API_KEY=
 ```
 
+DuckGPT's AI settings (`LOCAL_AI_*` and `GEMINI_API_KEYS`) are explained in
+[DuckGPT AI backends](#duckgpt-ai-backends) below.
+
 NEVER commit your real `.env` file.
+
+### DuckGPT AI backends
+
+DuckGPT (the bot's @mention chat) answers with a **self-hosted AI model running on the same server as
+the bot**, and uses **Google Gemini as a fallback option** for when that model isn't available.
+
+For every message DuckGPT:
+
+1. Sends the prompt to the local model's HTTP endpoint (`LOCAL_AI_URL`).
+2. Uses the model's `answer` if it replies in time.
+3. Otherwise (the model is turned off, not running, slower than `LOCAL_AI_TIMEOUT_SECONDS`, returns an
+   HTTP error or no `answer`), sends the **same prompt** to Gemini, rotating through `GEMINI_API_KEYS`.
+   After a local failure DuckGPT goes straight to Gemini for 60 seconds before trying the local model
+   again, so a model that is down doesn't slow every reply.
+
+Both backends get exactly the same text: DuckGPT's system prompt (its personality, the no-pings rule
+and the display name of the person it's talking to), then the recent conversation as `User:` /
+`PatosX:` lines, ending with `PatosX:` so the model writes exactly one reply. If a model writes extra
+turns anyway (for example `... User: can you help me? PatosX: sure`), everything from the first
+invented turn on is cut off before the reply is sent.
+
+Every message is answered by the model; there are no canned replies. The duck only talks about its
+owner when someone asks directly ("am I your owner?", "who made you?", "who's your creator?"). In that
+case the model is told the verified answer for that one message: whoever is in `AUTHORIZED_USER_IDS`
+is confirmed as the owner, and anyone else, including someone who sets their name to look like the
+owner, is told who the real owner is. Requests for the duck to do someone's work ("do my homework",
+"write me an essay", "draw me a duck") are declined and logged, but ordinary phrases like "make it" or
+"can you code?" are not flagged. These patterns are in `cogs/duckgpt.py`.
+
+Once someone is clearly chatting, the duck keeps the conversation going: from their third message within
+5 minutes, it ends replies with a question or something else that invites them to say more. A single
+"hi" or a one-off question doesn't trigger this, and it stops after 5 quiet minutes. Change it with
+`ENGAGE_AFTER_MESSAGES` and `ENGAGE_WINDOW_SECONDS` in `cogs/duckgpt.py`.
+
+Math is never left to the model, since language models guess digits instead of calculating. When a
+message asks for math, the bot calculates it itself (`core/mathHelperFuncs.py`) and gives the model the
+exact result. If the reply still has a wrong number, it is replaced with the calculated answer.
+Numbers can be digits or words ("45,353", "two thousand and five"), and it understands:
+
+- arithmetic: `+ - × ÷ %`, "times", "divided by", "mod", powers ("^", "squared", "to the power of",
+  "to the 10th"), brackets, and fractions of a number ("half of 50", "two thirds of 90", "double 21")
+- math said in words, including reversed order: "2342 taken away from 25347", "subtract 7 from 50",
+  "5 less than 20", "add 5 to 20", "multiply 6 by 7", "how many times does 7 go into 56",
+  "12 apples split between 4 friends", "the difference between 50 and 80", "the remainder when 17 is
+  divided by 5", "the square of 12", "the reciprocal of 4"
+- square, cube and nth roots (also `√` `∛`), factorials (`5!`), absolute value, rounding
+  ("round 3.14159 to 2 decimal places", "to the nearest hundred"), log / ln / log base n, and
+  sin / cos / tan in degrees
+- lists: average, median, sum, product, largest, smallest, GCD and LCM ("lcm of 4, 6 and 10")
+- percentages: "10% of 100", "25 is what percent of 200", "increase 50 by 10%", "80 minus 20%",
+  "20% off $80", "a 15% tip on 60", "percent change from 50 to 75"
+- yes/no questions and comparisons: "is 97 prime", "is 12 even", "is 91 divisible by 7",
+  "is 5 bigger than 3", "which is bigger, 7 or 9"
+- unit conversions for length, weight, volume, time, speed and temperature ("5 km to miles",
+  "100 f in c", "how many seconds in a day")
+
+The calculator only accepts numbers, operators and its own list of functions, and never uses `eval`.
+It refuses huge powers, factorials and results. Math is only picked up when a message asks for a result
+("what is…", "how many…", "is 97 prime", "convert…") or is nothing but the math, so dates, phone
+numbers, scores and percentages mentioned in normal chat are left alone. If a message clearly asks for
+math that the calculator can't read, the model is told not to guess a number and to ask the person to
+write it with symbols instead.
+
+DuckGPT is built to keep the model from making things up. The prompt tells it to say only what it's
+confident is true; never to invent facts, numbers, dates, names, quotes, links, statistics, memories,
+games or plans; to refer only to what's really in the conversation; and to admit when it doesn't know.
+Replies that steer to a made-up topic ("let's switch gears and talk about your favorite movie") are
+asked for again and dropped if they come back. Only the most recent 12 messages are remembered, so old
+mistakes fade out instead of being built on.
+
+When the duck doesn't know something, it says so the way a person would ("honestly, no idea, but…")
+instead of "I'm sorry, I don't have any specific knowledge…", and it doesn't jump to an unrelated topic.
+If a reply still contains a stock chatbot line like that or "as an AI", DuckGPT asks the model once
+more, and drops those sentences if they come back.
+
+Names in replies are always plain text. If the model writes `@someone`, the `@` is dropped so it reads
+as a name instead of a broken ping, and the owner's name is always spelled exactly as `BOT_ADMIN_NAME`.
+Replies are also sent with every mention disabled, so DuckGPT can never ping anyone. DuckGPT remembers the recent
+conversation per person and server, dropping the oldest messages once it gets long. The personality
+lives in `SYSTEM_PROMPT` in `cogs/duckgpt.py`, so edit that to change how the duck talks.
+
+DuckGPT never sends a one word answer. Every reply must be at least one full sentence: at least 3
+words, ending with `.`, `!`, `?` or `…`. The system prompt asks for this, and if a reply is still too
+short (for example just `19481`), DuckGPT asks once more with a reminder. If that reply is also too
+short, it is turned into a sentence ("My answer is 19481, quack!"). The rule lives in
+`is_full_sentence` / `MIN_REPLY_WORDS` in `cogs/duckgpt.py` if you want to change it.
+
+```env
+# Use the local model (default true). false = Gemini only.
+LOCAL_AI_ENABLED=true
+# Full URL of the endpoint (default http://localhost:8000/chat)
+LOCAL_AI_URL=http://localhost:8000/chat
+# Seconds to wait for the local model before falling back to Gemini (default 30)
+LOCAL_AI_TIMEOUT_SECONDS=30
+# Fallback option. Optional while the local model is on (without it there is no fallback),
+# required when LOCAL_AI_ENABLED=false.
+GEMINI_API_KEYS=key1,key2
+```
+
+**The local endpoint's API.** DuckGPT works with any server that accepts a JSON `POST` with the prompt
+and replies with JSON containing the reply in `answer`. Other fields are ignored.
+
+```http
+POST http://localhost:8000/chat
+Content-Type: application/json
+
+{"prompt": "What is 847 * 23?"}
+```
+
+```json
+{"answer": "...", "ms": 1234, "model": "chatbot-fast", "source": "llm"}
+```
+
+You can check that your endpoint works before starting the bot:
+
+```bash
+curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"prompt": "What is 847 * 23?"}'
+```
+
+**Using your own server or model:**
+
+- *Different host, port or path* (another machine, a container, port 11434, `/v1/ask`, ...): change only
+  `LOCAL_AI_URL` in `.env`.
+- *A different request or response shape*: edit `local_ai_generate` in `cogs/duckgpt.py`. The request
+  body (`json={"prompt": prompt}`) and the `data.get("answer")` lookup are the only two places that
+  depend on the API, and the comments there mark them.
+- *No local model at all*: set `LOCAL_AI_ENABLED=false` and provide `GEMINI_API_KEYS`.
+- *No Gemini fallback*: leave `GEMINI_API_KEYS` empty. If the local model is unavailable DuckGPT then
+  replies with its "slipped on a banana peel" message instead.
+
+On startup the bot logs which backends it will use, and each fallback is logged with
+`[DuckGPT Local AI]` and the reason.
 
 ## Project structure
 
@@ -87,6 +221,7 @@ core/                       Shared services. No Discord commands live here.
   permsHelperFuncs.py       staff/permission checks, blacklist & maintenance barriers, global bot checks
   economyHelperFuncs.py     wallet/bank/inventory helpers, amount & duration parsing, monthly rewards
   xpHelperFuncs.py          xp_earn decorator, on_command_completion body, badge definitions/awarding
+  mathHelperFuncs.py        DuckGPT's exact math: finds the math in a message and calculates it safely
   errors.py                 error unwrapping, global error-handler bodies, send_hybrid_error/is_prefix
 cogs/                       One file per feature domain (see the table below)
   _base_cog.py              Copy-paste template for a new cog; skipped by the loader
@@ -148,6 +283,7 @@ feature domain rather than a file-size bucket.
 | `permsHelperFuncs.py` | `staff_only`, `staffperm`/`check_staff_perm`, `is_staff_user`, `is_blacklisted`, `blacklist_barrier`, maintenance mode checks, the three global checks (`check_disabled` resolves command categories via `command_category`), `check_channel`, `check_target_permission`, `has_staff_role`, `log_action` (posts to the `log_channel` saved by `.configure`; accepts `ctx=None` plus `guild=` for automated actions such as mute expiry). |
 | `economyHelperFuncs.py` | `get_user`, inventory/tool/consumable normalisation, `get_balance`/`add_balance`/`subtract_balance`, `parse_amount`/`parse_time`/`add_suffix`, investment math, and the monthly-rewards helpers (`get_monthly_rewards_doc`, `increment_monthly_goal`, `check_and_award_monthly_rewards`). |
 | `xpHelperFuncs.py` | The `xp_earn` decorator (works on plain functions and on Cog methods), `on_command_completion`, `BADGES`, badge role management and `check_and_award_badges`. |
+| `mathHelperFuncs.py` | DuckGPT's exact math: `find_math` (arithmetic, word numbers, roots, logs, trig, lists, percentages, yes/no number questions, unit conversions), `math_note` for the prompt and `correct_math` to replace wrong answers. Pure functions, no Discord or database access. |
 | `errors.py` | `unwrap_command_error`, `is_discord_service_unavailable_error`, command-syntax / did-you-mean helpers, `handle_command_error` / `handle_app_command_error` (the old global handler bodies, taking `bot` as a parameter), `send_hybrid_error`, `is_prefix`. |
 
 Import order inside `core/` is a strict DAG and is enforced by `tests/test_cog_loading.py`:
@@ -179,7 +315,7 @@ and (where it owns background loops) an `on_ready` listener that starts them onc
 | `jobs_gathering.py` (`JobsGathering`) | `choosejob`, `work`, `jobstatus`, `fish`, `swim`, `hunt`, `mine`, `dig`, `bugcatch`, `crime`, `attack`/`rob`/`steal`. |
 | `games_gambling.py` (`GamesGambling`) | `coinflip`, `duckroll`, `lottery`, `doorgame`, `mines`, `ducktowers`, `riddle`, `duckquiz` (+ all game views). |
 | `fun.py` (`Fun`) | `slap`, `duckfact`, `duck`, `quote`, `afk`, `quackcount`, `quacktop`; AFK detection/removal and quack counting in `on_message`. |
-| `duckgpt.py` (`DuckGPT`) | Gemini client rotation and generation, the @mention trigger in `on_message`, per-user conversation history, the daily history cleanup loop. |
+| `duckgpt.py` (`DuckGPT`) | Local AI model calls with Gemini fallback (client rotation and generation), the @mention trigger in `on_message`, per-user conversation history, the daily history cleanup loop. |
 | `stickynotes.py` (`StickyNotes`) | `stickynote`, `unstickynote`, repost-on-new-message, initial repost on `on_ready`, the repost-if-deleted loop. |
 | `info.py` (`Info`) | `serverinfo`, `tutorial`, `help`. |
 | `admin.py` (`Admin`) | `stop`, `override`, `onetime`, `restore`, `disableonetime`, `debug`; one-time channel enforcement in `on_message`; the watchdog `write_heartbeat` loop. |
