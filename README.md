@@ -7,7 +7,7 @@ PatosX is a multipurpose Discord bot built for moderation, economy gameplay, AI-
 
 - Moderation tools for keeping servers organized and safe.
 - Economy + game-style commands (shop, drops, fishing/mining-style activities, etc.).
-- AI-powered chat/commands via Google Gemini (and OpenRouter).
+- AI-powered chat (DuckGPT) via a self-hosted AI model, with Google Gemini as the fallback option (and OpenRouter).
 - Fun and utility commands for everyday server use.
 
 ## Installation
@@ -61,9 +61,8 @@ Required:
 ```env
 DISCORD_TOKEN=
 MONGO_URI=
-TENOR_API_KEY=
+GIPHY_API_KEY=
 OPENROUTER_API_KEY=
-GEMINI_API_KEYS=key1,key2
 ```
 
 Common optional values:
@@ -75,7 +74,79 @@ BEG_DONORS=user1,user2
 QUOTE_API_KEY=
 ```
 
+DuckGPT's AI settings (`LOCAL_AI_*` and `GEMINI_API_KEYS`) are explained in
+[DuckGPT AI backends](#duckgpt-ai-backends) below.
+
 NEVER commit your real `.env` file.
+
+### DuckGPT AI backends
+
+DuckGPT (the bot's @mention chat) answers with a **self-hosted AI model running on the same server as
+the bot**, and uses **Google Gemini as a fallback option** for when that model isn't available.
+
+For every message DuckGPT:
+
+1. Sends the prompt to the local model's HTTP endpoint (`LOCAL_AI_URL`).
+2. Uses the model's `answer` if it replies in time.
+3. Otherwise (the model is turned off, not running, slower than `LOCAL_AI_TIMEOUT_SECONDS`, returns an
+   HTTP error or no `answer`), sends the **same prompt** to Gemini, rotating through `GEMINI_API_KEYS`.
+   After a local failure DuckGPT goes straight to Gemini for 60 seconds before trying the local model
+   again, so a model that is down doesn't slow every reply.
+
+Both backends get exactly the same text: DuckGPT's system prompt (personality and the no-pings rule)
+followed by the conversation, one `Role: content` line per message.
+
+DuckGPT never sends a one word answer. Every reply must be at least one full sentence: at least 3
+words, ending with `.`, `!`, `?` or `…`. The system prompt asks for this, and if a reply is still too
+short (for example just `19481`), DuckGPT asks once more with a reminder. If that reply is also too
+short, it is turned into a sentence ("My answer is 19481, quack!"). The rule lives in
+`is_full_sentence` / `MIN_REPLY_WORDS` in `cogs/duckgpt.py` if you want to change it.
+
+```env
+# Use the local model (default true). false = Gemini only.
+LOCAL_AI_ENABLED=true
+# Full URL of the endpoint (default http://localhost:8000/chat)
+LOCAL_AI_URL=http://localhost:8000/chat
+# Seconds to wait for the local model before falling back to Gemini (default 30)
+LOCAL_AI_TIMEOUT_SECONDS=30
+# Fallback option. Optional while the local model is on (without it there is no fallback),
+# required when LOCAL_AI_ENABLED=false.
+GEMINI_API_KEYS=key1,key2
+```
+
+**The local endpoint's API.** DuckGPT works with any server that accepts a JSON `POST` with the prompt
+and replies with JSON containing the reply in `answer`. Other fields are ignored.
+
+```http
+POST http://localhost:8000/chat
+Content-Type: application/json
+
+{"prompt": "What is 847 * 23?"}
+```
+
+```json
+{"answer": "...", "ms": 1234, "model": "chatbot-fast", "source": "llm"}
+```
+
+You can check that your endpoint works before starting the bot:
+
+```bash
+curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"prompt": "What is 847 * 23?"}'
+```
+
+**Using your own server or model:**
+
+- *Different host, port or path* (another machine, a container, port 11434, `/v1/ask`, ...): change only
+  `LOCAL_AI_URL` in `.env`.
+- *A different request or response shape*: edit `local_ai_generate` in `cogs/duckgpt.py`. The request
+  body (`json={"prompt": prompt}`) and the `data.get("answer")` lookup are the only two places that
+  depend on the API, and the comments there mark them.
+- *No local model at all*: set `LOCAL_AI_ENABLED=false` and provide `GEMINI_API_KEYS`.
+- *No Gemini fallback*: leave `GEMINI_API_KEYS` empty. If the local model is unavailable DuckGPT then
+  replies with its "slipped on a banana peel" message instead.
+
+On startup the bot logs which backends it will use, and each fallback is logged with
+`[DuckGPT Local AI]` and the reason.
 
 ## Project structure
 
@@ -179,7 +250,7 @@ and (where it owns background loops) an `on_ready` listener that starts them onc
 | `jobs_gathering.py` (`JobsGathering`) | `choosejob`, `work`, `jobstatus`, `fish`, `swim`, `hunt`, `mine`, `dig`, `bugcatch`, `crime`, `attack`/`rob`/`steal`. |
 | `games_gambling.py` (`GamesGambling`) | `coinflip`, `duckroll`, `lottery`, `doorgame`, `mines`, `ducktowers`, `riddle`, `duckquiz` (+ all game views). |
 | `fun.py` (`Fun`) | `slap`, `duckfact`, `duck`, `quote`, `afk`, `quackcount`, `quacktop`; AFK detection/removal and quack counting in `on_message`. |
-| `duckgpt.py` (`DuckGPT`) | Gemini client rotation and generation, the @mention trigger in `on_message`, per-user conversation history, the daily history cleanup loop. |
+| `duckgpt.py` (`DuckGPT`) | Local AI model calls with Gemini fallback (client rotation and generation), the @mention trigger in `on_message`, per-user conversation history, the daily history cleanup loop. |
 | `stickynotes.py` (`StickyNotes`) | `stickynote`, `unstickynote`, repost-on-new-message, initial repost on `on_ready`, the repost-if-deleted loop. |
 | `info.py` (`Info`) | `serverinfo`, `tutorial`, `help`. |
 | `admin.py` (`Admin`) | `stop`, `override`, `onetime`, `restore`, `disableonetime`, `debug`; one-time channel enforcement in `on_message`; the watchdog `write_heartbeat` loop. |

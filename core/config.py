@@ -67,8 +67,9 @@ def _looks_like_motor_collection(obj) -> bool:
 # Environment variable loading and configuration
 # ============================================================
 
-# These five keys must all be present or the bot refuses to start
-required_keys = ["DISCORD_TOKEN", "MONGO_URI", "GIPHY_API_KEY", "OPENROUTER_API_KEY", "GEMINI_API_KEYS"]
+# These keys must all be present or the bot refuses to start. GEMINI_API_KEYS is not in this list: it
+# is only required when the local AI model is turned off (see the DuckGPT AI backends section below).
+required_keys = ["DISCORD_TOKEN", "MONGO_URI", "GIPHY_API_KEY", "OPENROUTER_API_KEY"]
 env_vars = {key: os.getenv(key) for key in required_keys}
 missing = [key for key, value in env_vars.items() if not value]
 if missing and (not _running_under_pytest()):
@@ -87,20 +88,61 @@ GIPHY_API_KEY = env_vars.get("GIPHY_API_KEY", "")
 OPENROUTER_API_KEY = env_vars.get("OPENROUTER_API_KEY", "")
 
 
+# ============================================================
+# DuckGPT AI backends
+# ============================================================
+#
+# DuckGPT asks a self-hosted AI model first (the "local AI", an HTTP API running on the same server as
+# the bot) and only falls back to Google Gemini when that model is turned off, unreachable, too slow or
+# returns something unusable. Both get exactly the same prompt. To point DuckGPT at your own model,
+# change these values in your .env (see the "DuckGPT AI backends" section of the README):
+#
+#   LOCAL_AI_ENABLED=true                     false = skip the local model and use Gemini only
+#   LOCAL_AI_URL=http://localhost:8000/chat   full URL of the endpoint (POST {"prompt"} -> {"answer"})
+#   LOCAL_AI_TIMEOUT_SECONDS=30               how long to wait for one answer before falling back
+#   GEMINI_API_KEYS=key1,key2                 fallback option; required only if LOCAL_AI_ENABLED=false
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a positive number from the environment, falling back to default when absent or invalid."""
+    try:
+        value = float(os.getenv(name, "").strip() or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# The local AI model (primary). It must accept POST {"prompt": "..."} and reply {"answer": "..."}.
+LOCAL_AI_ENABLED = _env_flag("LOCAL_AI_ENABLED", default=True)
+LOCAL_AI_URL = (os.getenv("LOCAL_AI_URL") or "").strip() or "http://localhost:8000/chat"
+LOCAL_AI_TIMEOUT_SECONDS = _env_float("LOCAL_AI_TIMEOUT_SECONDS", 30.0)
+# After the local model fails, DuckGPT goes straight to Gemini for this many seconds instead of
+# waiting on a model that is down for every message, then tries the local model again.
+LOCAL_AI_RETRY_AFTER_SECONDS = 60
+
+
 def parse_gemini_keys(raw: str | None) -> list[str]:
     """Split the comma separated GEMINI_API_KEYS value into non-empty, stripped keys."""
     return [key.strip() for key in (raw or "").split(",") if key.strip()]
 
 
-# Multiple Gemini keys can be provided as a comma separated list so that the bot
-# can round robin between them and stay within per key rate limits
+# Google Gemini (fallback option). Multiple keys can be provided as a comma separated list so that
+# the bot can round robin between them and stay within per key rate limits.
 GEMINI_API_KEYS = parse_gemini_keys(os.getenv("GEMINI_API_KEYS", ""))
-# A value made only of commas/whitespace passes the "is it set" check above but would leave
-# DuckGPT with no key to use; refuse to start rather than fail on the first AI request.
-if not GEMINI_API_KEYS and not _running_under_pytest():
-    raise ValueError("GEMINI_API_KEYS is set but contains no usable keys (expected a comma separated list of keys)")
-if not missing:
-    print(f"[INIT] Loaded {len(GEMINI_API_KEYS)} Gemini API key(s) for rotation")
+# With the local model turned off Gemini is DuckGPT's only backend, so refuse to start without a usable
+# key rather than fail on the first AI request (this also catches a value made only of commas).
+if not GEMINI_API_KEYS and not LOCAL_AI_ENABLED and not _running_under_pytest():
+    raise ValueError(
+        "GEMINI_API_KEYS has no usable keys and LOCAL_AI_ENABLED is false, so DuckGPT has no AI backend. "
+        "Set GEMINI_API_KEYS (a comma separated list of keys) or turn the local AI model back on."
+    )
+if LOCAL_AI_ENABLED:
+    print(f"[INIT] DuckGPT local AI model: {LOCAL_AI_URL} (timeout {LOCAL_AI_TIMEOUT_SECONDS:g}s)")
+if GEMINI_API_KEYS:
+    role = "fallback" if LOCAL_AI_ENABLED else "primary"
+    print(f"[INIT] Loaded {len(GEMINI_API_KEYS)} Gemini API key(s) for rotation ({role})")
+elif LOCAL_AI_ENABLED:
+    print("[INIT] No GEMINI_API_KEYS set: DuckGPT has no fallback if the local AI model is unavailable")
 
 # Comma separated Discord user IDs that bypass staff role checks and can use
 # privileged commands such as addmoney and override

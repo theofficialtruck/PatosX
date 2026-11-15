@@ -52,6 +52,18 @@ from cogs.tickets import Tickets
 from cogs.vanity_invites import VanityInvites
 
 
+@pytest.fixture(autouse=True)
+def no_local_ai(monkeypatch):
+    """Keep tests off the network: DuckGPT's local AI model is turned off (so it goes straight to the
+    mocked Gemini path) and its "recently failed" timer is reset. Tests of the local model turn it back
+    on and point LOCAL_AI_URL at a throwaway test server."""
+    from cogs import duckgpt
+    from core import config as cfg
+
+    monkeypatch.setattr(cfg, "LOCAL_AI_ENABLED", False)
+    monkeypatch.setattr(duckgpt, "_local_ai_skip_until", 0.0)
+
+
 @pytest.fixture
 def bot():
     """A real (never connected) Bot, mirroring main.py's construction closely enough for cogs to
