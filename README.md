@@ -145,8 +145,56 @@ DuckGPT is built to keep the model from making things up. The prompt tells it to
 confident is true; never to invent facts, numbers, dates, names, quotes, links, statistics, memories,
 games or plans; to refer only to what's really in the conversation; and to admit when it doesn't know.
 Replies that steer to a made-up topic ("let's switch gears and talk about your favorite movie") are
-asked for again and dropped if they come back. Only the most recent 12 messages are remembered, so old
-mistakes fade out instead of being built on.
+asked for again and dropped if they come back. Only the most recent 12 messages from the last 10 minutes
+are remembered, so old mistakes fade out instead of being built on.
+
+**Memory.** DuckGPT has two kinds of memory, both kept per person and server:
+
+- *Immediate memory* is the conversation itself. Every message is stamped with the time it was sent and
+  only messages from the last 10 minutes (`IMMEDIATE_MEMORY_SECONDS`) reach the model, so once the
+  conversation has moved on the duck doesn't bring an old topic back up. Quiet conversations are swept
+  from memory and MongoDB (`duck_conversations`) every 10 minutes.
+- *Long term memory* only holds what someone clearly asks the duck to remember: what to call them
+  ("call me Bob", "my name is Bob", "I go by Bob") and facts about themselves in their own words
+  ("remember that my birthday is in May", "don't forget I play the trumpet"). It is stored in the
+  `duck_memories` collection, keyed by user ID (the display name is saved alongside for reference, but a
+  member who copies someone's display name can't see their memories). Each saved item is forgotten about
+  6 months after it was saved (`LONG_TERM_MEMORY_DAYS`), at most 15 facts are kept per person, and the
+  duck is told to bring them up only when they matter for what's being said. Personal info (emails,
+  phone numbers, addresses, passwords, links) and anything that isn't family friendly is never saved;
+  the duck kindly says no instead. People can ask the duck to forget ("forget my nickname", "forget that
+  I like cats", "forget everything about me"). What counts as a request is decided with fixed patterns in
+  `core/duckMemoryHelperFuncs.py`, never by the model.
+
+**Never stuck on one reply.** Small models like to copy a reply that is already in the conversation,
+and every stored copy makes the next one more likely, until the duck answers everything with the same
+few sentences. A reply that repeats (or nearly repeats) one of the duck's recent replies is asked for
+again without the earlier conversation, a repeat is never stored, and if the model still repeats itself
+that person's immediate memory starts over. Fixed fallback lines ("slipped on a banana peel") are never
+stored either, and the duck's own @mention is stripped from the message, so a bare ping reaches the
+model as "Quack!" rather than "@PatosX". If you run your own model, make sure its context window fits the
+whole prompt: a server that silently cuts off the end of a long prompt never sees the newest message.
+
+**Talking like a friend.** When someone asks what the duck thinks ("your thoughts on AI?", "do you like
+rain?", "idk, you tell me"), it's told to give its own opinion, and a reply that dodges ("I don't know much
+about that") or throws the question back ("what do you think?") is asked for again. A reply that brings up
+something they never mentioned (their favourite something, "your game", their plans) is asked for again
+too. The follow-up question that keeps a chat going is skipped right after the duck already asked one and
+when they just asked the duck something, and a short opener the duck just used ("Oh really?") is dropped
+so replies don't all start the same way.
+When someone asks to change the subject ("no more stories", "stop talking about math", "tell me about
+something else"), the conversation so far is cleared so the model can't drag the old topic back in, the
+duck is told to switch right away, and a reply that still mentions the dropped topic is asked for again.
+A message that is just a greeting ("hi", "whats good") after 3 quiet minutes starts a new conversation.
+If the model mixes up who's who and calls the person by the duck's own name ("That's great, PatosX!"),
+the name is removed, and a generic last question like "What do you think about that?" or "Anything
+else?" is dropped. Asked for a joke, a quote, a fun fact or a short story, the duck just gives one.
+
+**Family friendly.** The system prompt has the server's rules: no swearing, NSFW content, bullying,
+self-promo, impersonation, sharing personal info, piracy, cheats or anything illegal, no dodging
+punishments, no romance, politics or dangerous stuff, and the duck isn't staff and never claims staff
+powers. It never encourages breaking the rules and kindly says no when asked to. A reply with swearing
+or other unsuitable words is asked for again, and those sentences are dropped if they come back.
 
 When the duck doesn't know something, it says so the way a person would ("honestly, no idea, but…")
 instead of "I'm sorry, I don't have any specific knowledge…", and it doesn't jump to an unrelated topic.
@@ -222,6 +270,7 @@ core/                       Shared services. No Discord commands live here.
   economyHelperFuncs.py     wallet/bank/inventory helpers, amount & duration parsing, monthly rewards
   xpHelperFuncs.py          xp_earn decorator, on_command_completion body, badge definitions/awarding
   mathHelperFuncs.py        DuckGPT's exact math: finds the math in a message and calculates it safely
+  duckMemoryHelperFuncs.py  DuckGPT's long term memory requests ("remember that...", "call me ...", "forget ...")
   errors.py                 error unwrapping, global error-handler bodies, send_hybrid_error/is_prefix
 cogs/                       One file per feature domain (see the table below)
   _base_cog.py              Copy-paste template for a new cog; skipped by the loader
@@ -283,6 +332,7 @@ feature domain rather than a file-size bucket.
 | `permsHelperFuncs.py` | `staff_only`, `staffperm`/`check_staff_perm`, `is_staff_user`, `is_blacklisted`, `blacklist_barrier`, maintenance mode checks, the three global checks (`check_disabled` resolves command categories via `command_category`), `check_channel`, `check_target_permission`, `has_staff_role`, `log_action` (posts to the `log_channel` saved by `.configure`; accepts `ctx=None` plus `guild=` for automated actions such as mute expiry). |
 | `economyHelperFuncs.py` | `get_user`, inventory/tool/consumable normalisation, `get_balance`/`add_balance`/`subtract_balance`, `parse_amount`/`parse_time`/`add_suffix`, investment math, and the monthly-rewards helpers (`get_monthly_rewards_doc`, `increment_monthly_goal`, `check_and_award_monthly_rewards`). |
 | `xpHelperFuncs.py` | The `xp_earn` decorator (works on plain functions and on Cog methods), `on_command_completion`, `BADGES`, badge role management and `check_and_award_badges`. |
+| `duckMemoryHelperFuncs.py` | DuckGPT's long term memory: `parse_memory_request` spots "remember that ...", "call me ...", "forget ..." requests, `is_private_info` / `is_unsuitable` keep personal info and non family friendly words out of the duck's memory and replies. Pure functions, no Discord or database access. |
 | `mathHelperFuncs.py` | DuckGPT's exact math: `find_math` (arithmetic, word numbers, roots, logs, trig, lists, percentages, yes/no number questions, unit conversions), `math_note` for the prompt and `correct_math` to replace wrong answers. Pure functions, no Discord or database access. |
 | `errors.py` | `unwrap_command_error`, `is_discord_service_unavailable_error`, command-syntax / did-you-mean helpers, `handle_command_error` / `handle_app_command_error` (the old global handler bodies, taking `bot` as a parameter), `send_hybrid_error`, `is_prefix`. |
 
@@ -315,10 +365,10 @@ and (where it owns background loops) an `on_ready` listener that starts them onc
 | `jobs_gathering.py` (`JobsGathering`) | `choosejob`, `work`, `jobstatus`, `fish`, `swim`, `hunt`, `mine`, `dig`, `bugcatch`, `crime`, `attack`/`rob`/`steal`. |
 | `games_gambling.py` (`GamesGambling`) | `coinflip`, `duckroll`, `lottery`, `doorgame`, `mines`, `ducktowers`, `riddle`, `duckquiz` (+ all game views). |
 | `fun.py` (`Fun`) | `slap`, `duckfact`, `duck`, `quote`, `afk`, `quackcount`, `quacktop`; AFK detection/removal and quack counting in `on_message`. |
-| `duckgpt.py` (`DuckGPT`) | Local AI model calls with Gemini fallback (client rotation and generation), the @mention trigger in `on_message`, per-user conversation history, the daily history cleanup loop. |
+| `duckgpt.py` (`DuckGPT`) | Local AI model calls with Gemini fallback (client rotation and generation), the @mention trigger in `on_message`, immediate and long term memory, the memory cleanup loops (every 10 minutes and daily). |
 | `stickynotes.py` (`StickyNotes`) | `stickynote`, `unstickynote`, repost-on-new-message, initial repost on `on_ready`, the repost-if-deleted loop. |
 | `info.py` (`Info`) | `serverinfo`, `tutorial`, `help`. |
-| `admin.py` (`Admin`) | `stop`, `override`, `onetime`, `restore`, `disableonetime`, `debug`; one-time channel enforcement in `on_message`; the watchdog `write_heartbeat` loop. |
+| `admin.py` (`Admin`) | `stop`, `override`, `onetime`, `restore`, `disableonetime`, `debug`; one-time channel enforcement in `on_message` (no public announcement in the channel: each used one time message is logged to the log channel instead); the watchdog `write_heartbeat` loop. |
 
 ### Shared-state rules
 

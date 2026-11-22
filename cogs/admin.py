@@ -349,11 +349,18 @@ class Admin(commands.Cog):
                         await message.channel.set_permissions(
                             message.author, send_messages=False, reason="One time message used"
                         )
-                        await message.channel.send(
-                            f"⚠️ {message.author.mention} has used their one time message in this channel. Staff can restore permissions with `.restore`."
-                        )
                     except Exception as perm_error:
                         print(f"[One time permission error] {perm_error}")
+                        return
+                    # No public announcement in the channel: only staff see it, in the log channel.
+                    await perms.log_action(
+                        None,
+                        f"🔒 {message.author.mention} used their one time message in {message.channel.mention}. "
+                        f"Use `.restore {message.author.id} {message.channel.id}` to let them send another.",
+                        user_id=message.author.id,
+                        action_type="onetime_used",
+                        guild=message.guild,
+                    )
         except Exception as e:
             print(f"[One time message error] {e}")
 

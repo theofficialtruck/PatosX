@@ -19,7 +19,7 @@
 
 import re
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
@@ -205,7 +205,7 @@ def mention_message(monkeypatch, bot):
         guild=guild,
         mentions=[bot_user],
         clean_content="@DuckBot say @everyone",
-        channel=SimpleNamespace(typing=AsyncMock()),
+        channel=SimpleNamespace(typing=MagicMock()),
         reply=AsyncMock(),
     )
 
@@ -235,3 +235,32 @@ async def test_dm_notice_also_pings_nobody(monkeypatch, duckgpt_cog, mention_mes
 
     allowed = mention_message.reply.await_args.kwargs["allowed_mentions"]
     assert allowed.everyone is False and allowed.users is False and allowed.roles is False
+
+
+@pytest.mark.asyncio
+async def test_typing_dots_stay_on_until_the_reply_is_sent(monkeypatch, duckgpt_cog, mention_message):
+    """A single "await channel.typing()" only shows the dots for about 10 seconds, so with a slow model they
+    disappeared before the reply arrived. The dots must stay on for the whole wait, until the reply is sent."""
+    events = []
+
+    class Typing:
+        async def __aenter__(self):
+            events.append("typing on")
+
+        async def __aexit__(self, *exc):
+            events.append("typing off")
+
+    async def slow_model(ctx, prompt):
+        events.append("thinking")
+        return "Took me a while, but here I am!"
+
+    async def reply(*args, **kwargs):
+        events.append("reply sent")
+
+    mention_message.channel.typing = Typing
+    mention_message.reply = reply
+    monkeypatch.setattr(duckgpt, "ask_duck_gpt", slow_model)
+
+    await duckgpt_cog.on_message(mention_message)
+
+    assert events == ["typing on", "thinking", "reply sent", "typing off"]

@@ -361,11 +361,13 @@ async def test_old_format_histories_are_ignored(local_ai, gemini, duck_ctx, monk
 
 @pytest.mark.asyncio
 async def test_current_histories_are_remembered_after_a_restart(local_ai, gemini, duck_ctx, monkeypatch):
+    """A restart in the middle of a chat keeps the last few minutes (the immediate memory)."""
+    two_minutes_ago = duckgpt._wall_clock() - 120
     stored = {
         "version": duckgpt.HISTORY_VERSION,
         "messages": [
-            {"role": "user", "content": "my cat is called Biscuit"},
-            {"role": "assistant", "content": "Biscuit is a great name for a cat!"},
+            {"role": "user", "content": "my cat is called Biscuit", "at": two_minutes_ago},
+            {"role": "assistant", "content": "Biscuit is a great name for a cat!", "at": two_minutes_ago + 2},
         ],
     }
     monkeypatch.setattr(state.duck_conversations_col, "find_one", AsyncMock(return_value=stored))
@@ -726,16 +728,18 @@ def test_quiet_people_are_forgotten_so_the_counter_never_grows_unbounded():
 
 @pytest.mark.asyncio
 async def test_follow_up_note_is_only_added_from_the_third_message(local_ai, gemini, duck_ctx):
-    messages = ["hi", "pretty good thanks", "just got back from a walk", "it was by the lake"]
+    messages = ["hi", "pretty good thanks", "just got back from a walk", "it was by the lake", "saw some ducks too"]
     answers = [
         "Hey, good to see you!",
         "Glad to hear that, sounds like a nice day.",
         "A walk sounds lovely, where did you go?",
-        "The lake must have been pretty, did you see any ducks?",
+        "Lakes are the best spot for a walk.",
+        "Ducks by a lake, now that's my kind of day!",
     ]
     await chat(local_ai, duck_ctx, answers, messages)
     has_note = ["keep the conversation going" in request["prompt"] for request in local_ai.requests]
-    assert has_note == [False, False, True, True]
+    # Not after a reply that already ended with a question: a question every turn reads like an interview
+    assert has_note == [False, False, True, False, True]
     assert "end your reply with a question" in local_ai.requests[2]["prompt"]
 
 
@@ -894,7 +898,7 @@ def test_system_prompt_explains_how_to_not_know_something():
 def test_system_prompt_forbids_making_things_up():
     prompt = duckgpt.SYSTEM_PROMPT
     assert "only say things you're confident are true" in prompt
-    assert "Never make up facts, numbers, dates, names, quotes, links or statistics" in prompt
+    assert "Never make up facts, numbers, dates, names, links or statistics, or quotes from real people" in prompt
     assert "never invent memories, games, plans, scores or anything the person didn't actually say" in prompt
     assert "only refer back to things that are really in the conversation above" in prompt
     assert "You can't browse the internet, see images or check the news" in prompt
