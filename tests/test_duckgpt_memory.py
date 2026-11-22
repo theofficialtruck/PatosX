@@ -15,7 +15,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 """DuckGPT's two kinds of memory (immediate: the last few minutes; long term: what someone asked it to
-remember), the fix for the duck getting stuck sending the same reply, and the family friendly rules."""
+remember), the fix for the duck getting stuck sending the same reply, the family friendly rules, and the
+conversation fixes from a real chat (opinions, made up topics, a question every turn, repeated openers)."""
 
 from datetime import UTC, datetime, timedelta
 from itertools import count
@@ -597,3 +598,110 @@ async def test_a_reply_that_is_nothing_but_swearing_is_replaced(duck):
     reply = await say(duck, "say a swear")
     assert reply == duckgpt.KEEP_IT_CLEAN
     duck.saves.assert_not_awaited()  # canned lines are never stored
+
+
+# === the conversation from the screenshot after the update ======================================
+
+SPICE = (
+    "Oh really? Well, let's see if I can spice things up with a little chat. Do you have any favorite quotes or "
+    "sayings that always get you in the mood for an adventure?"
+)
+DODGE = "I don't know much about LLMS, but I'm excited to learn more! What kind of AI do you think is most advanced?"
+OPINION = "Honestly, I think they're pretty wild, they can chat, write and even help with code now."
+
+
+@pytest.mark.asyncio
+async def test_a_made_up_topic_is_asked_for_again(duck):
+    duck.replies = ["Hey there! What's up?", SPICE, "Bored, huh? Same here, it's a slow day at the pond."]
+    await say(duck, "yo")
+    reply = await say(duck, "nah im bored bro")
+    assert reply == "Bored, huh? Same here, it's a slow day at the pond."
+    assert duckgpt.OFF_TOPIC_REMINDER in duck.prompts[-1]
+
+
+@pytest.mark.asyncio
+async def test_an_invented_game_is_asked_for_again(duck):
+    duck.replies = ["Hey there! Need something from your game or just hanging out?", "Hey there, what's up?"]
+    assert await say(duck, "yo") == "Hey there, what's up?"
+
+
+@pytest.mark.asyncio
+async def test_things_they_brought_up_themselves_are_fine(duck):
+    duck.replies = ["Ooh, nice pick! What do you like most about your favourite game?"]
+    await say(duck, "my favourite game is minecraft")
+    assert len(duck.prompts) == 1  # not asked again
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "tell me about your thoughts about llms and ai",
+        "idk you tell me",
+        "what do you think about pineapple on pizza",
+        "do you like rainy days?",
+        "would you rather fly or swim",
+        "what's your favourite snack",
+    ],
+)
+def test_opinion_questions_are_recognised(message):
+    assert duckgpt.asks_for_opinion(message)
+
+
+@pytest.mark.parametrize("message", ["ur super advanced fr", "nah im bored bro", "what's the capital of france"])
+def test_other_messages_are_not_opinion_questions(message):
+    assert not duckgpt.asks_for_opinion(message)
+
+
+@pytest.mark.asyncio
+async def test_an_opinion_question_gets_an_opinion(duck):
+    duck.replies = [DODGE, OPINION]
+    reply = await say(duck, "tell me about your thoughts about llms and ai")
+    assert reply == OPINION
+    assert "They're asking what YOU think" in duck.prompts[0]
+    assert duckgpt.OPINION_REMINDER in duck.prompts[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_question_thrown_back_is_dropped_if_it_comes_back(duck):
+    duck.replies = ["Honestly, I think AI is pretty amazing these days! What do you think?"] * 2
+    assert await say(duck, "idk you tell me") == "Honestly, I think AI is pretty amazing these days!"
+
+
+@pytest.mark.asyncio
+async def test_not_knowing_a_fact_is_still_fine(duck):
+    """Only opinion questions treat "I don't know much about..." as a dodge."""
+    duck.replies = ["I don't know much about deserts, but the Sahara is a huge one!"]
+    await say(duck, "how big are deserts")
+    assert len(duck.prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_follow_up_question_right_after_asking_one(duck):
+    duck.replies = ["Hey, good to see you!", "Nice, a walk sounds lovely. Where did you go?", "Lakes are the best."]
+    await say(duck, "hi")
+    await say(duck, "just got back from a walk")
+    await say(duck, "it was by the lake")
+    assert "keep the conversation going" not in duck.prompts[-1]
+
+
+@pytest.mark.asyncio
+async def test_no_follow_up_question_when_they_asked_something(duck):
+    await say(duck, "hi")
+    await say(duck, "pretty good")
+    await say(duck, "what's the biggest duck?")
+    assert "keep the conversation going" not in duck.prompts[-1]
+
+
+@pytest.mark.asyncio
+async def test_the_same_opener_is_not_used_twice_in_a_row(duck):
+    duck.replies = ["Oh really? That sounds like a fun day.", "Oh really? I must be on the cutting edge then."]
+    await say(duck, "i went to the lake")
+    assert await say(duck, "ur super advanced fr") == "I must be on the cutting edge then."
+
+
+def test_system_prompt_asks_for_opinions_and_fewer_questions():
+    prompt = duckgpt.SYSTEM_PROMPT
+    assert "give a real opinion of your own" in prompt
+    assert "Don't end every reply with a question" in prompt
+    assert "Vary how you start your replies" in prompt
+    assert "don't assume what they're doing" in prompt

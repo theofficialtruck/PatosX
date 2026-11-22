@@ -84,6 +84,11 @@ SYSTEM_PROMPT = (
     "Actually respond to what the person just said and keep the conversation flowing naturally. "
     "Don't greet them again in the middle of a conversation, don't introduce yourself unless asked, "
     "and don't repeat things you've already said. "
+    "When someone asks what you think, like or prefer, give a real opinion of your own in a sentence or two, the "
+    "way a friend would. An opinion doesn't have to be a fact, so don't dodge with 'I don't know much about it', "
+    "and don't throw the same question back at them. Don't end every reply with a question: often it's better "
+    "to just react, share a thought of your own, or answer. Vary how you start your replies too, instead of "
+    "opening with the same words each time, and don't assume what they're doing or why they're messaging you. "
     "Always reply to their latest message. The conversation below only covers the last few minutes: only "
     "bring up something from earlier in it when their latest message is about it, and if they've moved on to "
     "something new, go with the new topic and don't drag the old one back in. "
@@ -160,7 +165,9 @@ def speaker_note(display_name: str, preferred_name: str | None = None) -> str:
 # ENGAGE_WINDOW_SECONDS), the duck ends its replies with a question or something else that invites a
 # reply, so the conversation keeps going. A single "hi" or a one-off question doesn't trigger it, and
 # it stops on its own once they've been quiet for the length of the window. Counts are kept in memory
-# per person and server.
+# per person and server. It is skipped when the duck's last reply already ended with a question (a
+# question every single turn reads like an interview) and when they just asked the duck something, since
+# then the duck should answer rather than ask (see wants_an_answer).
 
 ENGAGE_AFTER_MESSAGES = 2
 ENGAGE_WINDOW_SECONDS = 5 * 60
@@ -191,6 +198,126 @@ def note_message(conv_key: str, now: float | None = None) -> int:
 def should_keep_conversation_going(conv_key: str, now: float | None = None) -> bool:
     """Record this message; True when it's at least the (ENGAGE_AFTER_MESSAGES + 1)th in the window."""
     return note_message(conv_key, now) >= ENGAGE_AFTER_MESSAGES
+
+
+# ============================================================
+# Answering when they ask what the duck thinks
+# ============================================================
+#
+# Asked "what are your thoughts on AI?" or "idk, you tell me", small models dodge ("I don't know much about
+# that, but I'm excited to learn! What do you think?") because the prompt also tells them to admit when
+# they don't know something. An opinion isn't a fact, so for these messages the model is told to give its
+# own take, and a reply that still dodges or bounces the question back is asked for again.
+
+_OPINION_RE = re.compile(
+    r"\b(?:what\s+do\s+(?:you|u)\s+think|(?:your|ur)\s+(?:thoughts|opinions?|takes?|views?)"
+    r"|what'?s\s+(?:your|ur)\s+(?:opinion|take|favou?rite|fav)|(?:you|u)\s+tell\s+me|tell\s+me\s+(?:about\s+)?(?:your|ur)"
+    r"|how\s+do\s+(?:you|u)\s+feel|do\s+(?:you|u)\s+(?:like|love|prefer|enjoy|hate)|(?:you|u)\s+prefer"
+    r"|which\s+(?:one\s+)?(?:do\s+(?:you|u)\s+)?(?:like|prefer)|would\s+(?:you|u)\s+rather|are\s+(?:you|u)\s+a\s+fan)\b",
+    re.IGNORECASE,
+)
+OPINION_NOTE = (
+    "\nThey're asking what YOU think. Give your own friendly opinion or answer in a sentence or two, the way a "
+    "friend would. An opinion doesn't need to be a fact, so don't say you don't know much about it, and don't "
+    "turn the question back on them or ask what they think."
+)
+# Dodging an opinion question, and throwing it back at them
+_DODGE_RE = re.compile(
+    r"\bI\s+(?:don'?t|do\s+not)\s+(?:really\s+)?know\s+(?:much|a\s+lot|too\s+much|enough|anything)\s+about\b"
+    r"|\bI'?m\s+not\s+(?:really\s+|too\s+|so\s+)?sure\s+about\b|\bexcited\s+to\s+learn\b",
+    re.IGNORECASE,
+)
+_BOUNCE_RE = re.compile(
+    r"\b(?:what|how)\s+do\s+(?:you|u)\s+think\b|\bdo\s+(?:you|u)\s+think\b|\bwhat\s+about\s+(?:you|u)\b"
+    r"|\bwhat'?s\s+yours\b|\bhow\s+about\s+(?:you|u)\b|\bwhat\s+would\s+(?:you|u)\s+say\b"
+    r"|\bwhat'?s\s+your\s+(?:opinion|take)\b",
+    re.IGNORECASE,
+)
+OPINION_REMINDER = (
+    "They asked for your own opinion, and your last reply dodged it or turned the question back on them. Reply "
+    "again with your own friendly take in a sentence or two, without saying you don't know much about it and "
+    "without asking them what they think."
+)
+
+
+def asks_for_opinion(message) -> bool:
+    """True when the message asks what the duck itself thinks, likes or prefers ("your thoughts on AI?",
+    "do you like pizza", "idk you tell me")."""
+    return isinstance(message, str) and bool(_OPINION_RE.search(message))
+
+
+def wants_an_answer(message) -> bool:
+    """True when they asked the duck something, so its reply should answer rather than ask."""
+    return asks_for_opinion(message) or (isinstance(message, str) and message.rstrip().endswith("?"))
+
+
+def _is_question(sentence: str) -> bool:
+    return _TRAILING_DECORATION_RE.sub("", sentence.rstrip()).endswith("?")
+
+
+def dodges_opinion(reply) -> bool:
+    """True when a reply to an opinion question dodges it or asks the question back."""
+    if not isinstance(reply, str):
+        return False
+    if _DODGE_RE.search(reply):
+        return True
+    return any(_BOUNCE_RE.search(s) and _is_question(s) for s in re.split(r"(?<=[.!?…])\s+", reply))
+
+
+# ============================================================
+# Not bringing up things nobody mentioned
+# ============================================================
+#
+# Small models fill a quiet moment by inventing context ("need something from your game?") or a new topic
+# ("do you have any favorite quotes?"), then keep returning to it. A reply that brings up their favourite
+# something, their game, project, stream, plans or homework when they never mentioned it is asked for again.
+
+_OUT_OF_NOWHERE_RE = re.compile(
+    r"\b(?:any|your|ur)\s+(?:all[- ]time\s+|current\s+|new\s+|own\s+)?"
+    r"(?P<thing>favou?rites?|fav|game|project|stream|plans?|homework)\b",
+    re.IGNORECASE,
+)
+OFF_TOPIC_REMINDER = (
+    "Your last reply brought up something they never mentioned (like a favourite thing, a game or a plan). "
+    "Reply again to what they actually said, without assuming things about them or starting a new topic."
+)
+
+
+def brings_up_something_new(reply, user_text: str) -> bool:
+    """True when a reply asks about their favourite something / game / project / plans / homework that
+    never came up in what they said (user_text is everything they said in this conversation)."""
+    said = str(user_text or "").lower()
+    for match in _OUT_OF_NOWHERE_RE.finditer(str(reply or "")):
+        thing = match.group("thing").lower()
+        stem = "fav" if thing.startswith("fav") else thing[:4]
+        if stem not in said:
+            return True
+    return False
+
+
+# ============================================================
+# Not opening every reply the same way
+# ============================================================
+
+_OPENER_MAX_WORDS = 3
+
+
+def _first_sentence(text: str) -> tuple[str, str]:
+    """(first sentence, the rest) of a reply."""
+    parts = re.split(r"(?<=[.!?…])\s+", str(text or "").strip(), maxsplit=1)
+    return parts[0], parts[1] if len(parts) > 1 else ""
+
+
+def drop_repeated_opener(reply: str, earlier) -> str:
+    """Drop a short opening sentence ("Oh really?", "Hey there!") that one of the duck's last few replies
+    also opened with, as long as a full sentence is left."""
+    opener, rest = _first_sentence(reply)
+    opener_words = mem.comparable(opener)
+    if not opener_words or len(opener_words.split()) > _OPENER_MAX_WORDS or not is_full_sentence(rest):
+        return reply
+    if any(mem.comparable(_first_sentence(old)[0]) == opener_words for old in list(earlier)[-3:]):
+        return rest
+    return reply
 
 
 # ============================================================
@@ -835,7 +962,7 @@ _ROBOTIC_RE = re.compile(
     # steering the chat somewhere else
     r"|\bswitch(?:ing)? gears\b|\bchange (?:the )?(?:subject|topics?)\b|\btalk about something (?:else|different)\b"
     r"|\b(?:talk|chat|discuss(?:ing)?) about your favou?rite\b|\bdiscussing your favou?rite\b"
-    r"|\blearn something (?:fun|new) together\b",
+    r"|\blearn something (?:fun|new) together\b|\bspice (?:things|it) up\b",
     re.IGNORECASE,
 )
 SOUND_HUMAN_REMINDER = (
@@ -857,11 +984,20 @@ def drop_robotic_sentences(text: str) -> str:
     return " ".join(sentence for sentence in sentences if not sounds_robotic(sentence)).strip()
 
 
-def drop_unwanted_sentences(text: str) -> str:
-    """Remove the sentences that contain stock chatbot lines or anything that isn't family friendly."""
+def drop_unwanted_sentences(text: str, user_text: str | None = None, opinion: bool = False) -> str:
+    """Remove the sentences that contain stock chatbot lines or anything that isn't family friendly, and,
+    when the conversation is known, questions about things they never mentioned and (for an opinion
+    question) questions that throw it back at them."""
+
+    def unwanted(sentence: str) -> bool:
+        if sounds_robotic(sentence) or mem.is_unsuitable(sentence):
+            return True
+        if user_text is not None and brings_up_something_new(sentence, user_text):
+            return True
+        return opinion and _is_question(sentence) and bool(_BOUNCE_RE.search(sentence))
+
     sentences = re.split(r"(?<=[.!?…])\s+", str(text or "").strip())
-    kept = (sentence for sentence in sentences if not sounds_robotic(sentence) and not mem.is_unsuitable(sentence))
-    return " ".join(kept).strip()
+    return " ".join(sentence for sentence in sentences if not unwanted(sentence)).strip()
 
 
 # ============================================================
@@ -913,8 +1049,10 @@ def without_conversation(messages) -> list[dict]:
     return [*instructions, *latest]
 
 
-def _reply_reminders(reply, earlier=()) -> list[str]:
-    """What's wrong with a reply, as reminders for asking again (empty when it's fine)."""
+def _reply_reminders(reply, earlier=(), user_text: str | None = None, opinion: bool = False) -> list[str]:
+    """What's wrong with a reply, as reminders for asking again (empty when it's fine). user_text is
+    everything they said in the conversation (None skips the made up topic check); opinion is whether
+    their latest message asked what the duck thinks."""
     reminders = []
     if not is_full_sentence(reply):
         reminders.append(FULL_SENTENCE_REMINDER)
@@ -924,17 +1062,32 @@ def _reply_reminders(reply, earlier=()) -> list[str]:
         reminders.append(FAMILY_FRIENDLY_REMINDER)
     if repeats_earlier_reply(reply, earlier):
         reminders.append(REPEAT_REMINDER)
+    if opinion and dodges_opinion(reply):
+        reminders.append(OPINION_REMINDER)
+    if user_text is not None and brings_up_something_new(reply, user_text):
+        reminders.append(OFF_TOPIC_REMINDER)
     return reminders
 
 
 async def generate_duck_response(messages):
     """Generate DuckGPT's reply: at least one full sentence, no stock chatbot lines, nothing that isn't
-    family friendly, and not a copy of an earlier reply. A reply with any of those problems is asked for
-    again once with a reminder (without the earlier conversation when it was a copy); if the second try
-    still isn't right, the unwanted sentences are dropped and a fragment is turned into a sentence."""
+    family friendly, not a copy of an earlier reply, no topic they never mentioned, and a real answer when
+    they asked what the duck thinks. A reply with any of those problems is asked for again once with a
+    reminder (without the earlier conversation when it was a copy); if the second try still isn't right,
+    the unwanted sentences are dropped and a fragment is turned into a sentence."""
     earlier = earlier_replies(messages)
+    said = [m["content"] for m in messages if m.get("role") == "user" and isinstance(m.get("content"), str)]
+    user_text = " ".join(said)
+    opinion = bool(said) and asks_for_opinion(said[-1])
+
+    def problems(reply):
+        return _reply_reminders(reply, earlier, user_text, opinion)
+
+    def cleaned(reply):
+        return drop_unwanted_sentences(reply, user_text, opinion)
+
     answer = await ask_backends(messages)
-    reminders = _reply_reminders(answer, earlier)
+    reminders = problems(answer)
     if not reminders:
         return answer
     print(f"[DuckGPT] Reply needs another try ({answer!r}), asking again")
@@ -945,18 +1098,18 @@ async def generate_duck_response(messages):
         {"role": "system", "content": " ".join(reminders)},
     ]
     retry = await ask_backends(retry_messages)
-    if not _reply_reminders(retry, earlier):
+    if not problems(retry):
         return retry
     for candidate in (retry, answer):
-        cleaned = drop_unwanted_sentences(candidate)
-        if is_full_sentence(cleaned) and not repeats_earlier_reply(cleaned, earlier):
-            return cleaned
+        kept = cleaned(candidate)
+        if is_full_sentence(kept) and not repeats_earlier_reply(kept, earlier):
+            return kept
     fresh = [reply for reply in (answer, retry) if not repeats_earlier_reply(reply, earlier)] or [answer, retry]
     longest = max(fresh, key=lambda reply: len(_WORD_RE.findall(str(reply or ""))))
-    cleaned = drop_unwanted_sentences(longest)
-    if not cleaned and mem.is_unsuitable(longest):
+    kept = cleaned(longest)
+    if not kept and mem.is_unsuitable(longest):
         return KEEP_IT_CLEAN
-    return ensure_full_sentence(cleaned or longest)
+    return ensure_full_sentence(kept or drop_unwanted_sentences(longest) or longest)
 
 
 # ============================================================
@@ -1102,7 +1255,10 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
     elif looks_like_math(prompt):
         # The calculator couldn't read it: the model mustn't guess a number instead
         system_prompt += UNREADABLE_MATH_NOTE
-    if keep_going:
+    if asks_for_opinion(prompt):
+        system_prompt += OPINION_NOTE
+    last_reply = (earlier_replies(earlier) or [""])[-1]
+    if keep_going and not wants_an_answer(prompt) and not _is_question(last_reply):
         system_prompt += ENGAGE_NOTE
     system = {"role": "system", "content": system_prompt}
     reply = await generate_duck_response([system, *history])
@@ -1116,6 +1272,7 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
         text = confirm_owner(text)
     if text in CANNED_REPLIES:
         return text  # never stored, so the model can't start copying it
+    text = drop_repeated_opener(text, earlier_replies(history))
     if repeats_earlier_reply(text, earlier_replies(history)):
         # Even asking again without the conversation gave the same reply: start this person's immediate
         # memory over, so the next message can't build on the loop.

@@ -176,6 +176,14 @@ stored either, and the duck's own @mention is stripped from the message, so a ba
 model as "Quack!" rather than "@PatosX". If you run your own model, make sure its context window fits the
 whole prompt: a server that silently cuts off the end of a long prompt never sees the newest message.
 
+**Talking like a friend.** When someone asks what the duck thinks ("your thoughts on AI?", "do you like
+rain?", "idk, you tell me"), it's told to give its own opinion, and a reply that dodges ("I don't know much
+about that") or throws the question back ("what do you think?") is asked for again. A reply that brings up
+something they never mentioned (their favourite something, "your game", their plans) is asked for again
+too. The follow-up question that keeps a chat going is skipped right after the duck already asked one and
+when they just asked the duck something, and a short opener the duck just used ("Oh really?") is dropped
+so replies don't all start the same way.
+
 **Family friendly.** The system prompt has the server's rules: no swearing, NSFW content, bullying,
 self-promo, impersonation, sharing personal info, piracy, cheats or anything illegal, no dodging
 punishments, no romance, politics or dangerous stuff, and the duck isn't staff and never claims staff

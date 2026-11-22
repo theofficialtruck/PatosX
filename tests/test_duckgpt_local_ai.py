@@ -728,16 +728,18 @@ def test_quiet_people_are_forgotten_so_the_counter_never_grows_unbounded():
 
 @pytest.mark.asyncio
 async def test_follow_up_note_is_only_added_from_the_third_message(local_ai, gemini, duck_ctx):
-    messages = ["hi", "pretty good thanks", "just got back from a walk", "it was by the lake"]
+    messages = ["hi", "pretty good thanks", "just got back from a walk", "it was by the lake", "saw some ducks too"]
     answers = [
         "Hey, good to see you!",
         "Glad to hear that, sounds like a nice day.",
         "A walk sounds lovely, where did you go?",
-        "The lake must have been pretty, did you see any ducks?",
+        "Lakes are the best spot for a walk.",
+        "Ducks by a lake, now that's my kind of day!",
     ]
     await chat(local_ai, duck_ctx, answers, messages)
     has_note = ["keep the conversation going" in request["prompt"] for request in local_ai.requests]
-    assert has_note == [False, False, True, True]
+    # Not after a reply that already ended with a question: a question every turn reads like an interview
+    assert has_note == [False, False, True, False, True]
     assert "end your reply with a question" in local_ai.requests[2]["prompt"]
 
 
