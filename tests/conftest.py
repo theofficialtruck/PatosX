@@ -65,6 +65,40 @@ def no_local_ai(monkeypatch):
     monkeypatch.setattr(duckgpt, "_recent_messages", {})  # each test starts a fresh conversation
 
 
+class FakeMemoryCollection:
+    """In memory stand in for duck_memories_col, keyed by (guild_id, user_id) like the real one.
+    Supports exactly the calls DuckGPT's long term memory makes."""
+
+    def __init__(self):
+        self.docs: dict[tuple, dict] = {}
+
+    @staticmethod
+    def _key(query):
+        return (query.get("guild_id"), query.get("user_id"))
+
+    async def find_one(self, query, *args, **kwargs):
+        doc = self.docs.get(self._key(query))
+        return dict(doc) if doc else None
+
+    async def replace_one(self, query, doc, upsert=False):
+        if upsert or self._key(query) in self.docs:
+            self.docs[self._key(query)] = dict(doc)
+
+    async def delete_one(self, query):
+        self.docs.pop(self._key(query), None)
+
+
+@pytest.fixture(autouse=True)
+def duck_memories(monkeypatch):
+    """Every test gets an empty, in memory long term memory for DuckGPT (never the real database, even
+    when a local .env holds a MONGO_URI)."""
+    from core import state
+
+    fake = FakeMemoryCollection()
+    monkeypatch.setattr(state, "duck_memories_col", fake)
+    return fake
+
+
 @pytest.fixture
 def bot():
     """A real (never connected) Bot, mirroring main.py's construction closely enough for cogs to

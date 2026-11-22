@@ -361,11 +361,13 @@ async def test_old_format_histories_are_ignored(local_ai, gemini, duck_ctx, monk
 
 @pytest.mark.asyncio
 async def test_current_histories_are_remembered_after_a_restart(local_ai, gemini, duck_ctx, monkeypatch):
+    """A restart in the middle of a chat keeps the last few minutes (the immediate memory)."""
+    two_minutes_ago = duckgpt._wall_clock() - 120
     stored = {
         "version": duckgpt.HISTORY_VERSION,
         "messages": [
-            {"role": "user", "content": "my cat is called Biscuit"},
-            {"role": "assistant", "content": "Biscuit is a great name for a cat!"},
+            {"role": "user", "content": "my cat is called Biscuit", "at": two_minutes_ago},
+            {"role": "assistant", "content": "Biscuit is a great name for a cat!", "at": two_minutes_ago + 2},
         ],
     }
     monkeypatch.setattr(state.duck_conversations_col, "find_one", AsyncMock(return_value=stored))
