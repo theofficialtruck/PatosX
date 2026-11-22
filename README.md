@@ -182,6 +182,9 @@ something they never mentioned (their favourite something, "your game", their pl
 too. The follow-up question that keeps a chat going is skipped right after the duck already asked one and
 when they just asked the duck something, and a short opener the duck just used ("Oh really?") is dropped
 so replies don't all start the same way.
+When someone asks to change the subject ("no more stories", "stop talking about math", "tell me about
+something else"), the conversation so far is cleared so the model can't drag the old topic back in, the
+duck is told to switch right away, and a reply that still mentions the dropped topic is asked for again.
 
 **Family friendly.** The system prompt has the server's rules: no swearing, NSFW content, bullying,
 self-promo, impersonation, sharing personal info, piracy, cheats or anything illegal, no dodging

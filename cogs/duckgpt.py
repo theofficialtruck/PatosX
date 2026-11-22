@@ -91,6 +91,8 @@ SYSTEM_PROMPT = (
     "things only if their latest message is about them, and if they've moved on, don't drag the old one back in.\n"
     "- Don't greet them again, introduce yourself unless asked, or repeat yourself. Vary how you start your "
     "replies. Don't end every reply with a question.\n"
+    "- If they want to stop a topic or talk about something else ('no more stories', 'something else'), drop "
+    "it right away and don't bring it back.\n"
     "- When asked what you think, like or prefer, give a real opinion of your own (an opinion needn't be a "
     "fact); don't dodge or throw the question back.\n"
     "- A quack or duck pun now and then is fine, but don't end every message with 'Quack!'.\n"
@@ -284,6 +286,92 @@ def brings_up_something_new(reply, user_text: str) -> bool:
         if stem not in said:
             return True
     return False
+
+
+# ============================================================
+# Changing the subject the moment they ask
+# ============================================================
+#
+# "no more stories", "no more pipkin", "stop talking about math", "I'm done with this", "tell me about
+# something else": the duck has to let go right away. A model that still sees the old topic in the
+# conversation keeps returning to it, so a message like this clears the immediate memory (the model only
+# sees the new message), the model is told to switch, and a reply that still mentions the dropped topic
+# is asked for again.
+
+_TOPIC_CHANGE_RE = re.compile(
+    r"(?:^|\bi\s+said\s+|\b(?:ok(?:ay)?|please|pls|plz|so|just|now|bro|dude)\s+|[.,!;:]\s*)"
+    r"(?:no\s+more|enough(?:\s+(?:of|about|with))?|stop(?:\s+(?:talking|telling))?(?:\s+(?:about|with))?)"
+    r"\s+(?P<topic>[^.,!?;]{1,60})"
+    r"|\bi\s+(?:don'?t|do\s+not)\s+want\s+(?:any\s*more|to\s+(?:talk|hear)\s+(?:about\s+|any\s*more\s+(?:about\s+)?)?)"
+    r"\s*(?P<topic2>[^.,!?;]{1,60})"
+    r"|\b(?:i'?m|i\s+am)\s+(?:done|bored|sick|tired)\s+(?:with|of)\s+(?P<topic3>[^.,!?;]{1,60})",
+    re.IGNORECASE,
+)
+_SOMETHING_ELSE_RE = re.compile(
+    r"\b(?:(?:talk|tell\s+me|chat)\s+(?:about\s+)?something\s+(?:else|different|new)"
+    r"|change\s+(?:the\s+)?(?:subject|topic)|(?:new|different)\s+(?:topic|subject)|let'?s\s+move\s+on|moving\s+on)\b",
+    re.IGNORECASE,
+)
+# Words that end the dropped topic ("no more stories tell me about something else" -> "stories") ...
+_TOPIC_END_WORDS = {"tell", "please", "pls", "plz", "and", "but", "lol", "lmao", "i", "ok", "okay", "so", "now", "talk"}
+# ... and words that are never the topic itself
+_TOPIC_FILLER_WORDS = {
+    "the", "a", "an", "of", "about", "with", "it", "that", "this", "these", "those", "any", "more", "anymore",
+    "talking", "telling", "me", "you", "your", "ur", "bro", "man", "dude", "already", "stuff", "things", "thing",
+    "just", "something", "else", "being", "to", "hear", "them", "him", "her", "one", "ones", "again", "fr", "rn",
+    "seriously", "pls", "please", "lol", "my", "our", "his", "their", "what", "said", "saying", "same", "doing",
+    "asking", "repeating", "going",
+}  # fmt: skip
+TOPIC_CHANGE_NOTE = (
+    "\nThey want to change the subject{dropped}. Drop the old topic completely and don't mention it again, not "
+    "even to say you'll stop. Switch right away: talk about what they asked for, or if they didn't say, pick "
+    "something fresh and light yourself, like a fun duck fact."
+)
+TOPIC_REMINDER = (
+    "They asked you to drop a topic, but your last reply brought it up again. Reply again without mentioning it "
+    "at all, and talk about something else."
+)
+
+
+def wants_new_topic(message) -> bool:
+    """True when the message asks the duck to stop the current topic or talk about something else."""
+    return isinstance(message, str) and bool(_TOPIC_CHANGE_RE.search(message) or _SOMETHING_ELSE_RE.search(message))
+
+
+def dropped_topic(message) -> list[str]:
+    """The words for what they no longer want to talk about ("no more pipkin" -> ["pipkin"]), at most 3."""
+    match = _TOPIC_CHANGE_RE.search(message) if isinstance(message, str) else None
+    if not match:
+        return []
+    words = []
+    for word in re.findall(r"[\w']+", (match.group("topic") or match.group("topic2") or match.group("topic3")).lower()):
+        word = word.removesuffix("'s")
+        if word in _TOPIC_END_WORDS or len(words) == 3:
+            break
+        if word not in _TOPIC_FILLER_WORDS and len(word) > 2:
+            words.append(word)
+    return words
+
+
+def _topic_stem(word: str) -> str:
+    """ "stories" -> "stor" (matches story / stories), "ducks" -> "duck", "pipkin" -> "pipkin"."""
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3]
+    if word.endswith("s") and len(word) > 3:
+        return word[:-1]
+    return word
+
+
+def mentions_dropped_topic(reply, topic_words) -> bool:
+    """True when a reply still talks about one of the dropped topic words."""
+    text = str(reply or "")
+    return any(re.search(rf"\b{re.escape(_topic_stem(word))}", text, re.IGNORECASE) for word in topic_words)
+
+
+def topic_change_note(message: str) -> str:
+    """The per message note for a request to change the subject."""
+    words = dropped_topic(message)
+    return TOPIC_CHANGE_NOTE.format(dropped=f" and stop talking about {' '.join(words)}" if words else "")
 
 
 # ============================================================
@@ -968,13 +1056,13 @@ def drop_robotic_sentences(text: str) -> str:
     return " ".join(sentence for sentence in sentences if not sounds_robotic(sentence)).strip()
 
 
-def drop_unwanted_sentences(text: str, user_text: str | None = None, opinion: bool = False) -> str:
+def drop_unwanted_sentences(text: str, user_text: str | None = None, opinion: bool = False, dropped=()) -> str:
     """Remove the sentences that contain stock chatbot lines or anything that isn't family friendly, and,
-    when the conversation is known, questions about things they never mentioned and (for an opinion
-    question) questions that throw it back at them."""
+    when the conversation is known, questions about things they never mentioned, sentences about a topic
+    they asked to drop, and (for an opinion question) questions that throw it back at them."""
 
     def unwanted(sentence: str) -> bool:
-        if sounds_robotic(sentence) or mem.is_unsuitable(sentence):
+        if sounds_robotic(sentence) or mem.is_unsuitable(sentence) or mentions_dropped_topic(sentence, dropped):
             return True
         if user_text is not None and brings_up_something_new(sentence, user_text):
             return True
@@ -998,8 +1086,8 @@ def drop_unwanted_sentences(text: str, user_text: str | None = None, opinion: bo
 REPEAT_MIN_WORDS = 5  # short replies like "Haha, nice one!" can come up twice on their own
 REPEAT_SIMILARITY = 0.85
 REPEAT_REMINDER = (
-    "Your last reply repeated something you had already said. Reply again to their latest message with "
-    "something new that actually responds to what they just said."
+    "Don't repeat anything you've already said: reply to their latest message with something new that actually "
+    "responds to what they just said."
 )
 FAMILY_FRIENDLY_REMINDER = (
     "Your last reply had words that aren't family friendly. Reply again to the same message, keeping it clean "
@@ -1017,8 +1105,12 @@ def repeats_earlier_reply(reply, earlier) -> bool:
     new = mem.comparable(reply)
     if len(new.split()) < REPEAT_MIN_WORDS:
         return False
+    # Compared word by word, with autojunk off: by default SequenceMatcher ignores "popular" items in anything
+    # over 200 long, which made two near identical long replies score as only 19% alike.
+    new_words = new.split()
     return any(
-        old and SequenceMatcher(None, old, new).ratio() >= REPEAT_SIMILARITY for old in map(mem.comparable, earlier)
+        old and SequenceMatcher(None, old.split(), new_words, autojunk=False).ratio() >= REPEAT_SIMILARITY
+        for old in map(mem.comparable, earlier)
     )
 
 
@@ -1033,10 +1125,10 @@ def without_conversation(messages) -> list[dict]:
     return [*instructions, *latest]
 
 
-def _reply_reminders(reply, earlier=(), user_text: str | None = None, opinion: bool = False) -> list[str]:
+def _reply_reminders(reply, earlier=(), user_text: str | None = None, opinion: bool = False, dropped=()) -> list[str]:
     """What's wrong with a reply, as reminders for asking again (empty when it's fine). user_text is
     everything they said in the conversation (None skips the made up topic check); opinion is whether
-    their latest message asked what the duck thinks."""
+    their latest message asked what the duck thinks; dropped is the topic they just asked to drop."""
     reminders = []
     if not is_full_sentence(reply):
         reminders.append(FULL_SENTENCE_REMINDER)
@@ -1050,37 +1142,43 @@ def _reply_reminders(reply, earlier=(), user_text: str | None = None, opinion: b
         reminders.append(OPINION_REMINDER)
     if user_text is not None and brings_up_something_new(reply, user_text):
         reminders.append(OFF_TOPIC_REMINDER)
+    if mentions_dropped_topic(reply, dropped):
+        reminders.append(TOPIC_REMINDER)
     return reminders
 
 
 async def generate_duck_response(messages):
     """Generate DuckGPT's reply: at least one full sentence, no stock chatbot lines, nothing that isn't
-    family friendly, not a copy of an earlier reply, no topic they never mentioned, and a real answer when
-    they asked what the duck thinks. A reply with any of those problems is asked for again once with a
-    reminder (without the earlier conversation when it was a copy); if the second try still isn't right,
-    the unwanted sentences are dropped and a fragment is turned into a sentence."""
+    family friendly, not a copy of an earlier reply, no topic they never mentioned or asked to drop, and a
+    real answer when they asked what the duck thinks. A reply with any of those problems is asked for again
+    once with a reminder (without the earlier conversation, and without the bad reply itself, when it was a
+    copy or brought back a dropped topic: there must be nothing left to copy); if the second try still isn't
+    right, the unwanted sentences are dropped and a fragment is turned into a sentence."""
     earlier = earlier_replies(messages)
     said = [m["content"] for m in messages if m.get("role") == "user" and isinstance(m.get("content"), str)]
     user_text = " ".join(said)
     opinion = bool(said) and asks_for_opinion(said[-1])
+    dropped = dropped_topic(said[-1]) if said else []
 
     def problems(reply):
-        return _reply_reminders(reply, earlier, user_text, opinion)
+        return _reply_reminders(reply, earlier, user_text, opinion, dropped)
 
     def cleaned(reply):
-        return drop_unwanted_sentences(reply, user_text, opinion)
+        return drop_unwanted_sentences(reply, user_text, opinion, dropped)
 
     answer = await ask_backends(messages)
     reminders = problems(answer)
     if not reminders:
         return answer
     print(f"[DuckGPT] Reply needs another try ({answer!r}), asking again")
-    base = without_conversation(messages) if REPEAT_REMINDER in reminders else messages
-    retry_messages = [
-        *base,
-        {"role": "assistant", "content": str(answer or "")},
-        {"role": "system", "content": " ".join(reminders)},
-    ]
+    if REPEAT_REMINDER in reminders or TOPIC_REMINDER in reminders:
+        retry_messages = [*without_conversation(messages), {"role": "system", "content": " ".join(reminders)}]
+    else:
+        retry_messages = [
+            *messages,
+            {"role": "assistant", "content": str(answer or "")},
+            {"role": "system", "content": " ".join(reminders)},
+        ]
     retry = await ask_backends(retry_messages)
     if not problems(retry):
         return retry
@@ -1223,6 +1321,10 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
             await save_long_term_memory(guild_id, user_id, ctx.author.display_name, memory)
         if wipe_chat:
             earlier = []
+    new_topic = wants_new_topic(prompt)
+    if new_topic:
+        # They want to move on: the model only sees this message, so it can't drag the old topic back in.
+        earlier = []
     history = trim_history([*earlier, {"role": "user", "content": prompt, "at": now}])
     system_prompt = (
         SYSTEM_PROMPT
@@ -1239,6 +1341,8 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
     elif looks_like_math(prompt):
         # The calculator couldn't read it: the model mustn't guess a number instead
         system_prompt += UNREADABLE_MATH_NOTE
+    if new_topic:
+        system_prompt += topic_change_note(prompt)
     if asks_for_opinion(prompt):
         system_prompt += OPINION_NOTE
     last_reply = (earlier_replies(earlier) or [""])[-1]

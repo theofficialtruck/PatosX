@@ -451,7 +451,7 @@ async def test_a_repeated_reply_is_asked_for_again_without_the_conversation(duck
 async def test_a_duck_that_keeps_repeating_starts_the_conversation_over(duck):
     duck.replies = [STUCK, STUCK_AGAIN, STUCK_AGAIN]
     await say(duck, "hi")
-    await say(duck, "stop saying the same thing")
+    await say(duck, "what's up with you")
     assert duckgpt.duck_conversations["1-2"] == []  # the next message starts fresh
     assert duck.saves.await_args.args[1]["$set"]["messages"] == []
     await say(duck, "hello?")
@@ -660,3 +660,101 @@ def test_system_prompt_asks_for_opinions_and_fewer_questions():
     assert "Don't end every reply with a question" in prompt
     assert "Vary how you start your replies" in prompt
     assert "don't assume what they're doing" in prompt
+
+
+# === changing the subject the moment they ask (the Pipkin story screenshot) =====================
+
+PIPKIN_ENDING = (
+    "Thank you for sharing Pipkin's adventures! I'm glad he found joy and new friends through his silly duckery. "
+    "Let's finish our story by imagining how Pipkin and the ducks celebrated their day together at the pond. "
+    "Maybe they sang songs or played hide-and-seek in the water, and Pipkin even learned to make a little "
+    "homemade treat for everyone as a way to say thank you!"
+)
+PIPKIN_AGAIN = PIPKIN_ENDING.replace("joy and new friends through", "joy in") + " 🏠"
+FRESH_TOPIC = "Sure thing! Fun fact: a duck's feathers are so waterproof that water just rolls right off them."
+
+
+def test_long_near_copies_count_as_repeats():
+    """These two replies are almost word for word the same; the old character based check scored them 19%."""
+    assert duckgpt.repeats_earlier_reply(PIPKIN_AGAIN, [PIPKIN_ENDING])
+    assert not duckgpt.repeats_earlier_reply(FRESH_TOPIC, [PIPKIN_ENDING])
+
+
+@pytest.mark.parametrize(
+    "message,dropped",
+    [
+        ("i dont want anymore stories", ["stories"]),
+        ("i said no more stories tell me about something else", ["stories"]),
+        ("no more pipkin", ["pipkin"]),
+        ("stop talking about math", ["math"]),
+        ("enough about volcanoes lol", ["volcanoes"]),
+        ("I'm done with this", []),
+        ("can we change the subject", []),
+        ("tell me about something else", []),
+        ("stop it", []),
+        ("stop saying the same thing", []),
+    ],
+)
+def test_requests_to_change_the_subject_are_recognised(message, dropped):
+    assert duckgpt.wants_new_topic(message)
+    assert duckgpt.dropped_topic(message) == dropped
+
+
+@pytest.mark.parametrize(
+    "message", ["i can't stop laughing", "there are no more cookies left", "tell me about pipkin", "hi"]
+)
+def test_other_messages_keep_the_topic(message):
+    assert not duckgpt.wants_new_topic(message)
+
+
+async def tell_pipkin_story(duck):
+    duck.replies = [
+        "Once upon a time, a little duck named Pipkin waddled to the big pond.",
+        "Pipkin built tiny houses for the other ducks by the pond.",
+        PIPKIN_ENDING,
+    ]
+    await say(duck, "tell me a story")
+    await say(duck, "keep going")
+    await say(duck, "what happened next")
+
+
+@pytest.mark.asyncio
+async def test_no_more_pipkin_drops_the_story_straight_away(duck):
+    await tell_pipkin_story(duck)
+    duck.replies = [FRESH_TOPIC]
+    assert await say(duck, "no more pipkin") == FRESH_TOPIC
+    prompt = duck.prompts[-1]
+    assert "Once upon a time" not in prompt and "tiny houses" not in prompt  # nothing left to drag back
+    assert "change the subject and stop talking about pipkin" in prompt
+    assert prompt.endswith("Conversation:\nUser: no more pipkin\nPatosX:")
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_brings_the_dropped_topic_back_is_asked_for_again(duck):
+    await tell_pipkin_story(duck)
+    duck.replies = [PIPKIN_AGAIN, FRESH_TOPIC]
+    assert await say(duck, "i said no more stories tell me about something else") == FRESH_TOPIC
+    retry_prompt = duck.prompts[-1]
+    assert duckgpt.TOPIC_REMINDER in retry_prompt
+    assert "Pipkin" not in retry_prompt  # the bad reply itself isn't shown, so there's nothing to copy
+
+
+@pytest.mark.asyncio
+async def test_if_it_comes_back_again_those_sentences_are_dropped(duck):
+    await tell_pipkin_story(duck)
+    duck.replies = ["Okay, no more Pipkin! Did you know ducks can sleep with one eye open?"] * 2
+    assert await say(duck, "no more pipkin") == "Did you know ducks can sleep with one eye open?"
+
+
+@pytest.mark.asyncio
+async def test_after_changing_the_subject_the_old_topic_stays_gone(duck):
+    await tell_pipkin_story(duck)
+    duck.replies = [FRESH_TOPIC, "Yep, ducks are pretty amazing swimmers too."]
+    await say(duck, "tell me about something else")
+    await say(duck, "cool, tell me more")
+    assert "Pipkin" not in duck.prompts[-1]
+    assert "User: tell me about something else" in duck.prompts[-1]
+
+
+def test_system_prompt_says_to_drop_a_topic_right_away():
+    assert "drop it right away and don't bring it back" in duckgpt.SYSTEM_PROMPT
