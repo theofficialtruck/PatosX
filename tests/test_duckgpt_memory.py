@@ -21,7 +21,7 @@ conversation fixes from a real chat (opinions, made up topics, a question every 
 from datetime import UTC, datetime, timedelta
 from itertools import count
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -422,51 +422,6 @@ async def test_cleanup_forgets_memories_older_than_six_months(monkeypatch):
     assert col.delete_many.await_args.args[0]["preferred_name"] is None
 
 
-# === the duckmemory and duckforget commands =====================================================
-
-
-@pytest.fixture
-def no_barrier(monkeypatch):
-    monkeypatch.setattr(perms, "is_blacklisted", AsyncMock(return_value=False))
-    monkeypatch.setattr(perms, "check_maintenance_access", AsyncMock(return_value=True))
-
-
-@pytest.mark.asyncio
-async def test_duckmemory_shows_what_is_remembered(duck, duck_memories, duckgpt_cog, no_barrier):
-    await say(duck, "call me Bob")
-    await say(duck, "remember that I like cats")
-    ctx = make_ctx()
-    await duckgpt_cog.duckmemory.callback(duckgpt_cog, ctx)
-    embed = ctx.send.await_args.kwargs["embed"]
-    assert "**Calls you:** Bob" in embed.description
-    assert "• I like cats" in embed.description
-    assert "?duckforget" in embed.footer.text
-
-
-@pytest.mark.asyncio
-async def test_duckmemory_with_nothing_saved(duck, duckgpt_cog, no_barrier):
-    ctx = make_ctx()
-    await duckgpt_cog.duckmemory.callback(duckgpt_cog, ctx)
-    assert ctx.send.await_args.kwargs["embed"].description.startswith("Nothing yet!")
-
-
-@pytest.mark.asyncio
-async def test_duckforget_erases_both_kinds_of_memory(duck, duck_memories, duckgpt_cog, no_barrier):
-    await say(duck, "call me Bob")
-    ctx = make_ctx()
-    await duckgpt_cog.duckforget.callback(duckgpt_cog, ctx)
-    assert duck_memories.docs == {}
-    assert "1-2" not in duckgpt.duck_conversations
-    state.duck_conversations_col.delete_one.assert_awaited_once_with({"user_id": "2", "guild_id": "1"})
-    assert "forgotten everything" in ctx.send.await_args.args[0]
-
-
-def test_memory_commands_are_prefix_only():
-    """The bot is at Discord's limit of 100 global slash commands, so these can't be hybrid commands."""
-    cog = duckgpt.DuckGPT(bot=None)
-    assert not cog.get_app_commands()
-
-
 # === never stuck repeating the same reply =======================================================
 
 
@@ -531,7 +486,7 @@ def ping(monkeypatch, bot):
             guild=guild,
             mentions=[bot_user],
             clean_content=clean_content,
-            channel=SimpleNamespace(typing=AsyncMock()),
+            channel=SimpleNamespace(typing=MagicMock()),
             reply=AsyncMock(),
         )
 

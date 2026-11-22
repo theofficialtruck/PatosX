@@ -163,8 +163,7 @@ are remembered, so old mistakes fade out instead of being built on.
   duck is told to bring them up only when they matter for what's being said. Personal info (emails,
   phone numbers, addresses, passwords, links) and anything that isn't family friendly is never saved;
   the duck kindly says no instead. People can ask the duck to forget ("forget my nickname", "forget that
-  I like cats", "forget everything about me"), see what it remembers with `duckmemory`, and erase it all
-  with `duckforget`. What counts as a request is decided with fixed patterns in
+  I like cats", "forget everything about me"). What counts as a request is decided with fixed patterns in
   `core/duckMemoryHelperFuncs.py`, never by the model.
 
 **Never stuck on one reply.** Small models like to copy a reply that is already in the conversation,
@@ -359,7 +358,7 @@ and (where it owns background loops) an `on_ready` listener that starts them onc
 | `jobs_gathering.py` (`JobsGathering`) | `choosejob`, `work`, `jobstatus`, `fish`, `swim`, `hunt`, `mine`, `dig`, `bugcatch`, `crime`, `attack`/`rob`/`steal`. |
 | `games_gambling.py` (`GamesGambling`) | `coinflip`, `duckroll`, `lottery`, `doorgame`, `mines`, `ducktowers`, `riddle`, `duckquiz` (+ all game views). |
 | `fun.py` (`Fun`) | `slap`, `duckfact`, `duck`, `quote`, `afk`, `quackcount`, `quacktop`; AFK detection/removal and quack counting in `on_message`. |
-| `duckgpt.py` (`DuckGPT`) | Local AI model calls with Gemini fallback (client rotation and generation), the @mention trigger in `on_message`, immediate and long term memory, `duckmemory` / `duckforget`, the memory cleanup loops (every 10 minutes and daily). |
+| `duckgpt.py` (`DuckGPT`) | Local AI model calls with Gemini fallback (client rotation and generation), the @mention trigger in `on_message`, immediate and long term memory, the memory cleanup loops (every 10 minutes and daily). |
 | `stickynotes.py` (`StickyNotes`) | `stickynote`, `unstickynote`, repost-on-new-message, initial repost on `on_ready`, the repost-if-deleted loop. |
 | `info.py` (`Info`) | `serverinfo`, `tutorial`, `help`. |
 | `admin.py` (`Admin`) | `stop`, `override`, `onetime`, `restore`, `disableonetime`, `debug`; one-time channel enforcement in `on_message` (no public announcement in the channel: each used one time message is logged to the log channel instead); the watchdog `write_heartbeat` loop. |

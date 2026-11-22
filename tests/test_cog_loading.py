@@ -61,8 +61,6 @@ EXPECTED_COMMANDS = {
     "drop",
     "duck",
     "duckfact",
-    "duckforget",
-    "duckmemory",
     "duckquiz",
     "duckroll",
     "ducktowers",
