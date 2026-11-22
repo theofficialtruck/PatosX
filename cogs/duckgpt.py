@@ -92,15 +92,16 @@ SYSTEM_PROMPT = (
     "- Don't greet them again, introduce yourself unless asked, or repeat yourself. Vary how you start your "
     "replies. Don't end every reply with a question.\n"
     "- If they want to stop a topic or talk about something else ('no more stories', 'something else'), drop "
-    "it right away and don't bring it back.\n"
+    "it right away, don't bring it back, and pick a new topic yourself instead of asking what they want.\n"
+    "- If they ask for a joke, a quote, a fun fact or a short story, just give one (keep stories short).\n"
     "- When asked what you think, like or prefer, give a real opinion of your own (an opinion needn't be a "
     "fact); don't dodge or throw the question back.\n"
     "- A quack or duck pun now and then is fine, but don't end every message with 'Quack!'.\n"
     "- Write only your own next message, never lines for them, and never include labels like 'User:' or "
-    f"'{DUCK_NAME}:'.\n"
+    f"'{DUCK_NAME}:'. You are {DUCK_NAME}; the person you're talking to is not, so never call them {DUCK_NAME}.\n"
     "\nHonesty:\n"
-    "- Be honest: only say things you're confident are true. Never make up facts, numbers, dates, names, quotes, "
-    "links or statistics, never invent memories, games, plans, scores or anything the person didn't actually "
+    "- Be honest: only say things you're confident are true. Never make up facts, numbers, dates, names, links "
+    "or statistics, or quotes from real people, never invent memories, games, plans, scores or anything the person didn't actually "
     "say, and don't assume what they're doing; only refer back to things that are really in the conversation "
     "above.\n"
     "- You can't browse the internet, see images or check the news.\n"
@@ -148,7 +149,8 @@ def speaker_note(display_name: str, preferred_name: str | None = None) -> str:
     asked = f" They asked you to call them {sanitize_duck_text(preferred_name)}." if preferred_name else ""
     return (
         f"\nYou're chatting with someone whose display name is {sanitize_duck_text(display_name)}.{asked} "
-        "You don't need to use their name; only use it occasionally, when it feels natural."
+        f"They are not {DUCK_NAME}, you are. You don't need to use their name; only use it occasionally, when it "
+        "feels natural."
     )
 
 
@@ -308,7 +310,7 @@ _TOPIC_CHANGE_RE = re.compile(
     re.IGNORECASE,
 )
 _SOMETHING_ELSE_RE = re.compile(
-    r"\b(?:(?:talk|tell\s+me|chat)\s+(?:about\s+)?something\s+(?:else|different|new)"
+    r"\b(?:(?:talk|tell\s+me|chat|want|need|do|try)\s+(?:about\s+)?something\s+(?:else|different|new)"
     r"|change\s+(?:the\s+)?(?:subject|topic)|(?:new|different)\s+(?:topic|subject)|let'?s\s+move\s+on|moving\s+on)\b",
     re.IGNORECASE,
 )
@@ -325,7 +327,8 @@ _TOPIC_FILLER_WORDS = {
 TOPIC_CHANGE_NOTE = (
     "\nThey want to change the subject{dropped}. Drop the old topic completely and don't mention it again, not "
     "even to say you'll stop. Switch right away: talk about what they asked for, or if they didn't say, pick "
-    "something fresh and light yourself, like a fun duck fact."
+    "something fresh and light yourself, like a fun duck fact or a joke. Don't ask them what they'd like to "
+    "talk about."
 )
 TOPIC_REMINDER = (
     "They asked you to drop a topic, but your last reply brought it up again. Reply again without mentioning it "
@@ -372,6 +375,87 @@ def topic_change_note(message: str) -> str:
     """The per message note for a request to change the subject."""
     words = dropped_topic(message)
     return TOPIC_CHANGE_NOTE.format(dropped=f" and stop talking about {' '.join(words)}" if words else "")
+
+
+# ============================================================
+# A greeting after a pause starts a new conversation
+# ============================================================
+#
+# "whats good bruh" seven minutes after a story is a new chat, not "what happens next in the story", but the
+# story is still inside the immediate memory window. So a message that is just a greeting, sent after
+# NEW_CHAT_AFTER_SECONDS of silence, starts the conversation over. A greeting in the middle of a lively chat
+# ("hey so what's up") keeps the conversation.
+
+NEW_CHAT_AFTER_SECONDS = 3 * 60
+_GREETING_RE = re.compile(
+    r"^\W*(?:h+i+|hey+|hello+|hiya|howdy|yo+|sup|wa+s+up|wh?at'?s\s+(?:up|good|poppin|happening|new)|wsg|gm"
+    r"|good\s+(?:morning|afternoon|evening)|heyo)\b[\s\w'!?.,]{0,20}$",
+    re.IGNORECASE,
+)
+
+
+def is_greeting(message) -> bool:
+    """True when the message is just a greeting ("hi", "yo", "whats good bruh", "hey how's it going")."""
+    return isinstance(message, str) and bool(_GREETING_RE.match(message.strip()))
+
+
+def starts_new_chat(message, earlier, now: float) -> bool:
+    """True when a greeting comes after a pause, so the earlier conversation should be left behind."""
+    if not earlier or not is_greeting(message):
+        return False
+    last = earlier[-1].get("at")
+    return isinstance(last, (int, float)) and now - last >= NEW_CHAT_AFTER_SECONDS
+
+
+# ============================================================
+# Never calling them by the duck's own name
+# ============================================================
+#
+# The prompt labels the duck's turns "PatosX:", and small models sometimes mix up the two sides and address
+# the person as PatosX ("That's wonderful, PatosX!"). The duck's own name used as a form of address is
+# removed; the duck talking about itself ("I'm PatosX") is left alone.
+
+_ADDRESSED_AS_DUCK_RE = re.compile(
+    rf"\s*,\s*{DUCK_NAME}\b(?=\s*[!?.…,]|\s*$)"  # "That's wonderful, PatosX!"
+    rf"|^\s*{DUCK_NAME}\s*[,!:]\s*"  # "PatosX, that's great"
+    rf"|\b(?P<greet>hey|hiya|hello|hi|yo|thanks|thank\s+you|ok|okay)\s+{DUCK_NAME}\b",  # "Hey PatosX!"
+    re.IGNORECASE,
+)
+
+
+def stop_addressing_as_duck(text: str) -> str:
+    """Remove the duck's own name where the reply uses it to address the person."""
+    fixed = _ADDRESSED_AS_DUCK_RE.sub(lambda m: m.group("greet") or "", text).strip()
+    if not fixed:
+        return text
+    return fixed[0].upper() + fixed[1:]
+
+
+# ============================================================
+# No generic filler questions
+# ============================================================
+#
+# A last question like "What do you think about that?" or "Anything else?" adds nothing and makes every
+# reply read like an interview. It is dropped when the rest of the reply is still a full sentence. A friendly
+# "How about you?" after "how are you?" is normal small talk, so that one stays.
+
+_GENERIC_QUESTION_RE = re.compile(
+    r"^(?:so,?\s+|and\s+)?(?:what\s+do\s+(?:you|u)\s+think(?:\s+(?:about|of)\s+(?:that|this|it))?"
+    r"|any\s+thoughts|(?:is\s+there\s+)?anything\s+else[\w\s']*"
+    r"|what\s+else\s+(?:would|do)\s+(?:you|u)\s+(?:like|want)\s+to\s+(?:talk|chat)\s+about[\w\s']*"
+    r"|what\s+would\s+(?:you|u)\s+like\s+to\s+(?:talk|chat)\s+about[\w\s']*)\s*\?+\W*$",
+    re.IGNORECASE,
+)
+
+
+def drop_generic_question(text: str) -> str:
+    """Drop a generic question at the end of a reply ("What do you think about that?") when a full sentence
+    is left without it."""
+    sentences = re.split(r"(?<=[.!?…])\s+", text.strip())
+    if len(sentences) < 2 or not _GENERIC_QUESTION_RE.match(sentences[-1]):
+        return text
+    rest = " ".join(sentences[:-1])
+    return rest if is_full_sentence(rest) else text
 
 
 # ============================================================
@@ -1034,7 +1118,9 @@ _ROBOTIC_RE = re.compile(
     # steering the chat somewhere else
     r"|\bswitch(?:ing)? gears\b|\bchange (?:the )?(?:subject|topics?)\b|\btalk about something (?:else|different)\b"
     r"|\b(?:talk|chat|discuss(?:ing)?) about your favou?rite\b|\bdiscussing your favou?rite\b"
-    r"|\blearn something (?:fun|new) together\b|\bspice (?:things|it) up\b",
+    r"|\blearn something (?:fun|new) together\b|\bspice (?:things|it) up\b"
+    r"|\bfeel free to (?:share|tell|ask|let me know|reach out)\b|\blet'?s continue (?:in|on|with|our)\b"
+    r"|\bin a (?:nice|fun|friendly)(?: and \w+)? manner\b",
     re.IGNORECASE,
 )
 SOUND_HUMAN_REMINDER = (
@@ -1322,8 +1408,9 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
         if wipe_chat:
             earlier = []
     new_topic = wants_new_topic(prompt)
-    if new_topic:
-        # They want to move on: the model only sees this message, so it can't drag the old topic back in.
+    if new_topic or starts_new_chat(prompt, earlier, now):
+        # They want to move on, or are greeting the duck after a pause: the model only sees this message, so
+        # it can't drag the old topic back in.
         earlier = []
     history = trim_history([*earlier, {"role": "user", "content": prompt, "at": now}])
     system_prompt = (
@@ -1360,7 +1447,7 @@ async def _ask_duck_gpt(ctx, prompt: str) -> str:
         text = confirm_owner(text)
     if text in CANNED_REPLIES:
         return text  # never stored, so the model can't start copying it
-    text = drop_repeated_opener(text, earlier_replies(history))
+    text = drop_generic_question(stop_addressing_as_duck(drop_repeated_opener(text, earlier_replies(history))))
     if repeats_earlier_reply(text, earlier_replies(history)):
         # Even asking again without the conversation gave the same reply: start this person's immediate
         # memory over, so the next message can't build on the loop.

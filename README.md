@@ -185,6 +185,10 @@ so replies don't all start the same way.
 When someone asks to change the subject ("no more stories", "stop talking about math", "tell me about
 something else"), the conversation so far is cleared so the model can't drag the old topic back in, the
 duck is told to switch right away, and a reply that still mentions the dropped topic is asked for again.
+A message that is just a greeting ("hi", "whats good") after 3 quiet minutes starts a new conversation.
+If the model mixes up who's who and calls the person by the duck's own name ("That's great, PatosX!"),
+the name is removed, and a generic last question like "What do you think about that?" or "Anything
+else?" is dropped. Asked for a joke, a quote, a fun fact or a short story, the duck just gives one.
 
 **Family friendly.** The system prompt has the server's rules: no swearing, NSFW content, bullying,
 self-promo, impersonation, sharing personal info, piracy, cheats or anything illegal, no dodging

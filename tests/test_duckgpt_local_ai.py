@@ -898,7 +898,7 @@ def test_system_prompt_explains_how_to_not_know_something():
 def test_system_prompt_forbids_making_things_up():
     prompt = duckgpt.SYSTEM_PROMPT
     assert "only say things you're confident are true" in prompt
-    assert "Never make up facts, numbers, dates, names, quotes, links or statistics" in prompt
+    assert "Never make up facts, numbers, dates, names, links or statistics, or quotes from real people" in prompt
     assert "never invent memories, games, plans, scores or anything the person didn't actually say" in prompt
     assert "only refer back to things that are really in the conversation above" in prompt
     assert "You can't browse the internet, see images or check the news" in prompt

@@ -290,7 +290,7 @@ async def test_a_nickname_is_remembered_long_term(duck, duck_memories):
     await say(duck, "hi again!", minutes_later=60)  # the chat itself is long forgotten by now
     assert "call me Bob" not in duck.prompts[-1]
     assert 'They asked you to call them "Bob".' in duck.prompts[-1]
-    assert "They asked you to call them Bob. You don't need to use their name" in duck.prompts[-1]
+    assert "They asked you to call them Bob. They are not PatosX, you are." in duck.prompts[-1]
 
 
 @pytest.mark.asyncio
@@ -757,4 +757,98 @@ async def test_after_changing_the_subject_the_old_topic_stays_gone(duck):
 
 
 def test_system_prompt_says_to_drop_a_topic_right_away():
-    assert "drop it right away and don't bring it back" in duckgpt.SYSTEM_PROMPT
+    assert "drop it right away, don't bring it back, and pick a new topic yourself" in duckgpt.SYSTEM_PROMPT
+
+
+# === the "whats good bruh" screenshot: greetings, the duck's own name, quotes, filler questions =====
+
+
+@pytest.mark.asyncio
+async def test_a_greeting_after_a_pause_starts_a_new_conversation(duck):
+    duck.replies = ["Pipkin waddled to the big pond and built tiny houses.", "Hey! Not much, just floating around."]
+    await say(duck, "tell me a story about pipkin")
+    await say(duck, "whats good bruh", minutes_later=7)
+    assert "Pipkin" not in duck.prompts[-1]
+    assert duck.prompts[-1].endswith("Conversation:\nUser: whats good bruh\nPatosX:")
+
+
+@pytest.mark.asyncio
+async def test_a_greeting_in_a_lively_chat_keeps_the_conversation(duck):
+    await say(duck, "my cat just knocked over a plant")
+    await say(duck, "hey so what's up", minutes_later=1)
+    assert "User: my cat just knocked over a plant" in duck.prompts[-1]
+
+
+@pytest.mark.parametrize("message", ["whats good bruh", "yo", "hey how's it going", "hi there!", "good morning"])
+def test_greetings_are_recognised(message):
+    assert duckgpt.is_greeting(message)
+
+
+@pytest.mark.parametrize("message", ["hello can you tell me about ducks and their habitats please", "the hive is big"])
+def test_other_messages_are_not_just_greetings(message):
+    assert not duckgpt.is_greeting(message)
+
+
+@pytest.mark.parametrize(
+    "reply,fixed",
+    [
+        ("That's wonderful, PatosX! Tell me more.", "That's wonderful! Tell me more."),
+        ("Hey PatosX! Nice to see you.", "Hey! Nice to see you."),
+        ("PatosX, that's a great one.", "That's a great one."),
+        ("Thanks, PatosX, you're too kind!", "Thanks, you're too kind!"),
+        ("I'm PatosX, the pond's friendliest duck!", "I'm PatosX, the pond's friendliest duck!"),
+        ("My name is PatosX.", "My name is PatosX."),
+    ],
+)
+def test_the_duck_never_calls_them_by_its_own_name(reply, fixed):
+    assert duckgpt.stop_addressing_as_duck(reply) == fixed
+
+
+@pytest.mark.asyncio
+async def test_screenshot_reply_calling_them_patosx_is_fixed(duck):
+    duck.replies = ["That's wonderful, PatosX! Glad you liked that one."]
+    assert await say(duck, "thats amazing") == "That's wonderful! Glad you liked that one."
+    assert "They are not PatosX, you are." in duck.prompts[-1]
+    assert "never call them PatosX" in duckgpt.SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize(
+    "reply,trimmed",
+    [
+        (
+            "I love how even small things can make someone's day brighter! What do you think about that?",
+            "I love how even small things can make someone's day brighter!",
+        ),
+        ("Ducks sleep with one eye open. Anything else you want to know?", "Ducks sleep with one eye open."),
+        (
+            "Ducks are great swimmers. What's your favourite pond?",
+            "Ducks are great swimmers. What's your favourite pond?",
+        ),
+        ("Sure! What else would you like to talk about?", "Sure! What else would you like to talk about?"),
+    ],
+)
+def test_generic_filler_questions_are_dropped(reply, trimmed):
+    assert duckgpt.drop_generic_question(reply) == trimmed
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "If you have any other quotes or stories to share, feel free to tell me.",
+        "Let's continue in a nice and lighthearted manner.",
+    ],
+)
+def test_stock_sign_offs_are_caught(text):
+    assert duckgpt.sounds_robotic(text)
+
+
+def test_wanting_something_else_changes_the_subject():
+    assert duckgpt.wants_new_topic("enough about pipkin i want something else")
+    assert duckgpt.wants_new_topic("i want something else")
+    assert "Don't ask them what they'd like to talk about" in duckgpt.topic_change_note("i want something else")
+
+
+def test_the_duck_can_give_quotes_and_jokes_when_asked():
+    prompt = duckgpt.SYSTEM_PROMPT
+    assert "If they ask for a joke, a quote, a fun fact or a short story, just give one" in prompt
+    assert "quotes from real people" in prompt  # still never invents what a real person said
